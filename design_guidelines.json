@@ -1,0 +1,160 @@
+{
+  "app_name": "TradingAgents",
+  "personality": "5 Brutalist Mobile",
+  "personality_one_liner": "A sharp, tactical AI command center that prioritizes raw data, algorithmic transparency, and operational clarity over visual softness.",
+  "color": {
+    "surface": "#FFFFFF",
+    "onSurface": "#09090B",
+    "surfaceSecondary": "#F4F4F5",
+    "onSurfaceSecondary": "#09090B",
+    "surfaceTertiary": "#E4E4E7",
+    "onSurfaceTertiary": "#27272A",
+    "surfaceInverse": "#09090B",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#09090B",
+    "brandPrimary": "#09090B",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#27272A",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#E4E4E7",
+    "onBrandTertiary": "#09090B",
+    "success": "#16A34A",
+    "onSuccess": "#FFFFFF",
+    "warning": "#F59E0B",
+    "onWarning": "#000000",
+    "error": "#DC2626",
+    "onError": "#FFFFFF",
+    "info": "#2563EB",
+    "onInfo": "#FFFFFF",
+    "border": "#E4E4E7",
+    "borderStrong": "#09090B",
+    "divider": "#E4E4E7"
+  },
+  "typography": {
+    "displayFontFamily": "Space Grotesk",
+    "textFontFamily": "JetBrains Mono",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Use visible spacing systems and rigid grids. Treat padding as structural.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 0,
+    "md": 0,
+    "lg": 0,
+    "pill": 0
+  },
+  "shadow_tier": 0,
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": false,
+    "do's": [
+      "Use solid black or white surfaces instead of blur.",
+      "Use explicit 2pt borders for separation instead of elevation."
+    ],
+    "dont's": [
+      "Never use blur or translucent glassmorphism.",
+      "Never use drop shadows."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-blur",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Analyze",
+      "purpose": "Search/entry screen to pick or type a stock/crypto ticker and kick off analysis.",
+      "states": {
+        "loading": "Centered oversized mono counter",
+        "empty": "N/A (Initial state is search)",
+        "error": "Hard red block with mono error text and a 'RETRY' flat button"
+      },
+      "layout": "Top area: fixed prominent search bar labeled with 2pt black border. Underneath: grid of trending/recent tickers wrapped in sharp borders. A sticky primary CTA at bottom ('EXECUTE ANALYSIS') anchored outside scrolling content."
+    },
+    {
+      "name": "Live Debate",
+      "purpose": "Real-time streaming view showing agents producing reports and bull-vs-bear debating.",
+      "states": {
+        "loading": "Blinking mono text '[ A W A I T I N G _ I N P U T ]'",
+        "empty": "No data",
+        "error": "Inline red alert cards with agent failure logs"
+      },
+      "layout": "Two-layer layout. Top area pinned with debate title (ticker) and active mode. Main vertically scrolling thread of chunked agent messages. Messages have sharp 2pt borders, labeled clearly with Agent Role tags in JetBrains Mono. Use structural dividers between turns."
+    },
+    {
+      "name": "Report",
+      "purpose": "Detailed report screen with final BUY/SELL/HOLD verdict and expandable agent reports.",
+      "states": {
+        "loading": "System analyzing overlay with structural borders",
+        "empty": "No report found",
+        "error": "Failed to generate verdict"
+      },
+      "layout": "Huge typography (Space Grotesk) for the verdict inside a massive solid color block (Green/Red/Yellow). Followed by rigid, edge-to-edge expandable accordion sections for each individual agent's report (Bull, Bear, Risk, Portfolio Manager)."
+    },
+    {
+      "name": "History",
+      "purpose": "List of past analyses with ticker, date, verdict, and outcome.",
+      "states": {
+        "loading": "Skeleton grid with sharp blocks",
+        "empty": "Illustration of empty folder/files with hard typography: 'NO LOGS FOUND'",
+        "error": "Error fetching history"
+      },
+      "layout": "Table-like brutalist list rows. Columns for Ticker (mono), Date, and Verdict (sharp solid badges). Exposed 2pt structural dividers between rows."
+    }
+  ],
+  "images": {
+    "hero_chart": {
+      "url": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzl8MHwxfHNlYXJjaHwxfHxzdG9jayUyMG1hcmtldCUyMHRyYWRpbmclMjBjaGFydCUyMGFic3RyYWN0fGVufDB8fHx8MTc4Njg5NDIzMHww&ixlib=rb-4.1.0&q=85",
+      "alt": "Stock market candlestick chart"
+    },
+    "agent_ai_abstract": {
+      "url": "https://images.unsplash.com/photo-1695144244472-a4543101ef35?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzl8MHwxfHNlYXJjaHwxfHxBSSUyMGFnZW50JTIwcm9ib3QlMjBnbG93aW5nJTIwYWJzdHJhY3R8ZW58MHx8fHwxNzg2ODk0MjQ2fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Neon AI sign glowing abstract"
+    },
+    "empty_history": {
+      "url": "https://images.unsplash.com/photo-1576675047450-dcb18bb19131?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NjZ8MHwxfHNlYXJjaHwxfHxlbXB0eSUyMGZvbGRlciUyMGZpbGVzJTIwYWJzdHJhY3R8ZW58MHx8fHwxNzg2ODk0MjQ2fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Empty file folder abstract"
+    }
+  },
+  "haptics": {
+    "events": {
+      "button_press": "light",
+      "tab_change": "light",
+      "agent_message_received": "medium",
+      "verdict_generated": "heavy",
+      "expand_accordion": "light"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Strictly enforce 0 radius everywhere. This is a Brutalist app. All corners must be sharp.",
+    "Use JetBrains Mono for ALL body text, data points, agent tags, and timestamps. Use Space Grotesk ONLY for massive headlines and verdicts.",
+    "Use 2pt 'borderStrong' (#09090B) for active input rings, primary cards, and structural dividers.",
+    "For the 'Live Debate' screen, implement agent tags distinctly (e.g. '[ BEAR ANALYST ]') with a terminal/coding aesthetic.",
+    "No shadows, no blur, no glassmorphism. Use color flips for interactive states (e.g. white background turns black on press).",
+    "Never use generic AI icons (sparkles, brains). Rely on typography, sharp colored badges, and structured borders to organize information.",
+    "For the verdict badge on the Report screen, ensure it's a massive edge-to-edge block in the corresponding status color (success/warning/error)."
+  ]
+}
