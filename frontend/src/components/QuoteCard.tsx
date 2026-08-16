@@ -1,17 +1,56 @@
-import React from "react";
-import { View, Text, StyleSheet } from "react-native";
+import React, { useEffect, useState } from "react";
+import { View, Text, Pressable, ActivityIndicator, StyleSheet } from "react-native";
+import * as Haptics from "expo-haptics";
 import { colors, fonts, spacing, BORDER, changeColor } from "@/src/theme";
 import { Sparkline } from "@/src/components/Sparkline";
-import { Quote } from "@/src/api";
+import { Quote, ChartData, api } from "@/src/api";
+
+const RANGES = ["1D", "1W", "1M", "1Y"];
 
 function fmt(n?: number | null, dp = 2): string {
   if (n == null || Number.isNaN(n)) return "—";
   return n.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
 }
 
-export function QuoteCard({ quote }: { quote: Quote }) {
-  const up = (quote.changePercent ?? 0) >= 0;
-  const cColor = changeColor(quote.changePercent);
+export function QuoteCard({ quote, showRanges = false }: { quote: Quote; showRanges?: boolean }) {
+  const [range, setRange] = useState<string>("1M");
+  const [chart, setChart] = useState<ChartData | null>(null);
+  const [loadingChart, setLoadingChart] = useState(false);
+
+  useEffect(() => {
+    setRange("1M");
+    setChart(null);
+  }, [quote.symbol]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!showRanges || range === "1M") {
+      setChart(null);
+      return;
+    }
+    setLoadingChart(true);
+    api
+      .chart(quote.symbol, range)
+      .then((d) => {
+        if (!cancelled) setChart(d);
+      })
+      .catch(() => {
+        if (!cancelled) setChart(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingChart(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [range, showRanges, quote.symbol]);
+
+  const usingChart = showRanges && range !== "1M" && !!chart && chart.points.length > 1;
+  const points = usingChart ? chart!.points : quote.sparkline;
+  const dispPct = usingChart ? chart!.changePercent : quote.changePercent;
+  const dispChange = usingChart ? chart!.change : quote.change;
+  const up = (dispPct ?? 0) >= 0;
+  const cColor = changeColor(dispPct);
 
   return (
     <View testID="quote-card" style={styles.card}>
@@ -23,7 +62,11 @@ export function QuoteCard({ quote }: { quote: Quote }) {
           </Text>
         </View>
         <View style={styles.sparkWrap}>
-          <Sparkline data={quote.sparkline} color={cColor} width={110} height={44} />
+          {loadingChart ? (
+            <ActivityIndicator color={colors.onSurface} />
+          ) : (
+            <Sparkline data={points} color={cColor} width={110} height={44} />
+          )}
         </View>
       </View>
 
@@ -34,10 +77,31 @@ export function QuoteCard({ quote }: { quote: Quote }) {
         </Text>
         <View style={[styles.changeBox, { backgroundColor: cColor }]}>
           <Text style={styles.changeText}>
-            {up ? "▲" : "▼"} {fmt(Math.abs(quote.change ?? 0))} ({fmt(quote.changePercent)}%)
+            {up ? "▲" : "▼"} {fmt(Math.abs(dispChange ?? 0))} ({fmt(dispPct)}%)
           </Text>
         </View>
       </View>
+
+      {showRanges ? (
+        <View style={styles.rangeRow}>
+          {RANGES.map((r, i) => {
+            const active = range === r;
+            return (
+              <Pressable
+                key={r}
+                testID={`chart-range-${r}`}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setRange(r);
+                }}
+                style={[styles.rangeChip, i < RANGES.length - 1 && styles.rangeDivider, active && styles.rangeActive]}
+              >
+                <Text style={[styles.rangeText, { color: active ? colors.onSurfaceInverse : colors.onSurface }]}>{r}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
 
       <View style={styles.statsRow}>
         <View style={styles.stat}>
@@ -84,6 +148,17 @@ const styles = StyleSheet.create({
   price: { fontFamily: fonts.monoBold, fontSize: 24, color: colors.onSurface },
   changeBox: { paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
   changeText: { fontFamily: fonts.monoBold, fontSize: 12, color: "#FFFFFF" },
+  rangeRow: {
+    flexDirection: "row",
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.lg,
+    borderWidth: BORDER,
+    borderColor: colors.borderStrong,
+  },
+  rangeChip: { flex: 1, paddingVertical: spacing.sm, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
+  rangeDivider: { borderRightWidth: 1.5, borderRightColor: colors.borderStrong },
+  rangeActive: { backgroundColor: colors.surfaceInverse },
+  rangeText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1 },
   statsRow: {
     flexDirection: "row",
     borderTopWidth: BORDER,

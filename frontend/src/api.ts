@@ -45,6 +45,25 @@ export type Verdict = {
   key_risks: string[];
 };
 
+export type Debate = {
+  bull: string;
+  bear: string;
+  fundamentals: string;
+  agreements: string[];
+  disagreements: string[];
+  recommendation: string;
+};
+
+export type ChartData = {
+  symbol: string;
+  range: string;
+  points: number[];
+  last: number | null;
+  change: number | null;
+  changePercent: number | null;
+  currency?: string;
+};
+
 export type Analysis = {
   id: string;
   symbol: string;
@@ -53,6 +72,7 @@ export type Analysis = {
   messages: AgentMessageT[];
   quote: Quote | null;
   verdict: Verdict | null;
+  debate: Debate | null;
   current_step: number;
   total_steps: number;
   error: string | null;
@@ -79,6 +99,8 @@ async function j<T>(path: string, opts?: RequestInit): Promise<T> {
 export const api = {
   search: (q: string) => j<{ results: SearchResult[] }>(`/search?q=${encodeURIComponent(q)}`),
   quote: (symbol: string) => j<Quote>(`/quote/${encodeURIComponent(symbol)}`),
+  chart: (symbol: string, range: string) =>
+    j<ChartData>(`/chart/${encodeURIComponent(symbol)}?range=${encodeURIComponent(range)}`),
   trending: () => j<{ results: Quote[] }>(`/trending`),
   markets: (category: string) => j<{ results: Quote[] }>(`/markets/${category}`),
   analyze: (symbol: string, name?: string) =>

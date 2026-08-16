@@ -41,6 +41,13 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
 - **Analyze screen category chip row** (horizontal, brutalist, no-wrap) switching the browse grid between the four categories; verified commodity analysis completes end-to-end (asset-class-aware agent context).
 - User asked for "live rates from Google"; after a feasibility check the user chose to keep the existing reliable live feed (Google request dropped).
 
+## Added (2026-06-16, session 3)
+- **Watchlist**: local (storage-backed) watchlist with star toggle on the Analyze preview + analysis header; a "WATCHLIST · TAP TO RE-RUN" row for one-tap re-analysis; persists across reloads (`src/watchlist.tsx`).
+- **Compare**: `app/compare.tsx` — pick two tickers, run both analyses in parallel, side-by-side verdict columns + a "DESK LEANS" conviction callout. Entry via COMPARE button in the Analyze header.
+- **Chart ranges**: `GET /api/chart/{symbol}?range=1D|1W|1M|1Y` (fallback 1M) + range chips on `QuoteCard` (used in Analyze preview and analysis detail).
+- **Round-Table Debate**: extra step in the pipeline generates a structured `debate` (Bull/Bear/Fundamentals arguments + agreements/disagreements + recommendation), shown as a "ROUND TABLE DEBATE" section in the VERDICT view BELOW the existing single-verdict flow (kept intact). Backend stores `analysis.debate`.
+- Verified: 13/13 new backend pytest pass; all four features validated by the testing agent + screenshots.
+
 ## Backlog / Remaining
 - **P1**: Kotak Neo integration for live India-broker quotes + (optional) order placement — needs user credentials; complex session auth.
 - **P1**: Price chart range toggle (1D/1W/1M/1Y) on the quote card.

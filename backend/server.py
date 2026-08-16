@@ -102,6 +102,43 @@ def fetch_quote_sync(symbol: str) -> dict:
     }
 
 
+RANGE_MAP = {
+    "1D": ("1d", "5m"),
+    "1W": ("5d", "30m"),
+    "1M": ("1mo", "1d"),
+    "1Y": ("1y", "1wk"),
+}
+
+
+def fetch_chart_sync(symbol: str, rng: str) -> dict:
+    range_, interval = RANGE_MAP.get(rng, ("1mo", "1d"))
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    r = _yf_get(url, {"range": range_, "interval": interval})
+    r.raise_for_status()
+    result = r.json()["chart"]["result"][0]
+    try:
+        closes = result["indicators"]["quote"][0].get("close", []) or []
+    except Exception:
+        closes = []
+    points = [round(float(c), 4) for c in closes if c is not None]
+    meta = result.get("meta", {})
+    base = meta.get("chartPreviousClose") or meta.get("previousClose")
+    if rng != "1D" and len(points) >= 1:
+        base = points[0]
+    last = points[-1] if points else meta.get("regularMarketPrice")
+    change = (last - base) if (last is not None and base is not None) else None
+    change_pct = (change / base * 100) if (change is not None and base) else None
+    return {
+        "symbol": meta.get("symbol", symbol),
+        "range": rng,
+        "points": points[-120:],
+        "last": round(float(last), 2) if last is not None else None,
+        "change": round(float(change), 2) if change is not None else None,
+        "changePercent": round(float(change_pct), 2) if change_pct is not None else None,
+        "currency": meta.get("currency"),
+    }
+
+
 def search_sync(q: str) -> list:
     url = "https://query1.finance.yahoo.com/v1/finance/search"
     r = _yf_get(url, {"q": q, "quotesCount": 10, "newsCount": 0})
@@ -146,6 +183,16 @@ PM_SYS = (
     '"target_price": <number or null>, "stop_loss": <number or null>, '
     '"time_horizon": "<short string e.g. 3-6 months>", '
     '"summary": "<2-3 sentence rationale>", "key_risks": ["<risk>", "<risk>", "<risk>"]}'
+)
+
+DEBATE_SYS = (
+    "You run a concise 3-analyst round table on a single asset. Using the desk's analysis, write SHORT, punchy arguments. "
+    "Output ONLY a raw JSON object (no markdown, no prose) with EXACTLY these keys: "
+    '{"bull": "<=45 word bullish argument>", "bear": "<=45 word bearish argument>", '
+    '"fundamentals": "<=45 word valuation/financials argument>", '
+    '"agreements": ["<short point>", "<short point>"], '
+    '"disagreements": ["<short point>", "<short point>"], '
+    '"recommendation": "<=40 word final call consistent with the verdict>"}'
 )
 
 TOTAL_STEPS = 12
@@ -229,6 +276,32 @@ def parse_verdict(text: str) -> dict:
     }
 
 
+def parse_debate(text: str):
+    d = extract_json(text) or {}
+
+    def s(k: str) -> str:
+        v = d.get(k)
+        return str(v).strip() if v else ""
+
+    def lst(k: str) -> list:
+        v = d.get(k) or []
+        if not isinstance(v, list):
+            v = [str(v)]
+        return [str(x).strip() for x in v if str(x).strip()][:4]
+
+    bull, bear, fund = s("bull"), s("bear"), s("fundamentals")
+    if not (bull and bear and fund):
+        return None
+    return {
+        "bull": bull,
+        "bear": bear,
+        "fundamentals": fund,
+        "agreements": lst("agreements"),
+        "disagreements": lst("disagreements"),
+        "recommendation": s("recommendation") or "See the desk verdict above.",
+    }
+
+
 def build_context(symbol: str, quote: Optional[dict]) -> str:
     if symbol.endswith("=F"):
         asset_class = "Commodity / futures contract"
@@ -309,8 +382,11 @@ async def run_analysis(analysis_id: str, symbol: str):
         analyst_results = await asyncio.gather(*analyst_tasks)
 
         transcript_parts = []
+        fund_content = ""
         for (name, tag, _s), raw in zip(analyst_specs, analyst_results):
             content, sig = split_signal(raw)
+            if tag == "FUNDAMENTALS_ANALYST":
+                fund_content = content
             step += 1
             await append_message(analysis_id, make_message(name, tag, "analysis", content, sig), step)
             transcript_parts.append(f"### {name}\n{content}")
@@ -387,9 +463,28 @@ async def run_analysis(analysis_id: str, symbol: str):
         decision_msg = f"FINAL VERDICT: {verdict['decision']} — CONFIDENCE {verdict['confidence']}%\n\n{verdict['summary']}"
         await append_message(analysis_id, make_message("Portfolio Manager", "PORTFOLIO_MANAGER", "decision", decision_msg, sentiment), step)
 
+        # PHASE 7 — Round-table debate (Bull vs Bear vs Fundamentals) + synthesis
+        debate_raw = await safe_agent(
+            DEBATE_SYS,
+            f"{ctx}\n\nDESK TRANSCRIPT:\n{full_transcript}\n\n"
+            f"FINAL VERDICT: {verdict['decision']} ({verdict['confidence']}%). {verdict['summary']}\n\n"
+            f"Produce the round-table JSON for {symbol}.",
+            fallback="{}",
+        )
+        debate = parse_debate(debate_raw)
+        if not debate:
+            debate = {
+                "bull": bull_prev or "Upside catalysts and momentum support taking a long position here.",
+                "bear": bear_prev or "Weak momentum and downside risks argue for caution or an exit.",
+                "fundamentals": fund_content or "Valuation is the swing factor and looks fairly balanced at current levels.",
+                "agreements": ["Volatility is elevated", "The current setup is not clean"],
+                "disagreements": ["The direction of the next major move", "Whether the current valuation is justified"],
+                "recommendation": verdict["summary"],
+            }
+
         await db.analyses.update_one(
             {"id": analysis_id},
-            {"$set": {"status": "completed", "verdict": verdict, "current_step": TOTAL_STEPS, "updated_at": now_iso()}},
+            {"$set": {"status": "completed", "verdict": verdict, "debate": debate, "current_step": TOTAL_STEPS, "updated_at": now_iso()}},
         )
         logger.info(f"analysis {analysis_id} for {symbol} completed: {verdict['decision']}")
     except Exception as e:
@@ -439,6 +534,19 @@ async def quote(symbol: str):
         raise HTTPException(status_code=404, detail="Quote unavailable for this ticker")
 
 
+@api_router.get("/chart/{symbol}")
+async def chart(symbol: str, range: str = "1M"):
+    rng = range.upper()
+    if rng not in RANGE_MAP:
+        rng = "1M"
+    try:
+        data = await asyncio.to_thread(fetch_chart_sync, symbol, rng)
+        return data
+    except Exception as e:
+        logger.warning(f"chart failed for {symbol}: {e}")
+        raise HTTPException(status_code=404, detail="Chart unavailable for this ticker")
+
+
 async def get_market(category: str) -> list:
     now = time.time()
     entry = _market_cache.get(category)
@@ -482,6 +590,7 @@ async def analyze(body: AnalyzeRequest):
         "messages": [],
         "quote": None,
         "verdict": None,
+        "debate": None,
         "current_step": 0,
         "total_steps": TOTAL_STEPS,
         "error": None,

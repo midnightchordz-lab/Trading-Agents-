@@ -13,12 +13,13 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import * as Haptics from "expo-haptics";
-import { MagnifyingGlass, X, ArrowRight, CaretRight } from "phosphor-react-native";
+import { MagnifyingGlass, X, ArrowRight, CaretRight, Star, ArrowsLeftRight } from "phosphor-react-native";
 
 import { colors, fonts, spacing, BORDER, changeColor } from "@/src/theme";
 import { api, Quote, SearchResult } from "@/src/api";
 import { QuoteCard } from "@/src/components/QuoteCard";
 import { Sparkline } from "@/src/components/Sparkline";
+import { useWatchlist } from "@/src/watchlist";
 
 const CATEGORIES = [
   { key: "trending", label: "TRENDING" },
@@ -30,6 +31,7 @@ const CATEGORIES = [
 export default function AnalyzeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { items: watchItems, isSaved, toggle: toggleWatch, remove: removeWatch } = useWatchlist();
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -136,28 +138,43 @@ export default function AnalyzeScreen() {
     setResults([]);
   }, []);
 
-  const onExecute = useCallback(async () => {
-    if (!selected || submitting) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setSubmitting(true);
-    try {
-      const res = await api.analyze(selected.symbol, selected.name);
-      router.push(`/analysis/${res.id}`);
-    } catch {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    } finally {
-      setSubmitting(false);
-    }
-  }, [selected, submitting, router]);
+  const startAnalysis = useCallback(
+    async (sym: string, nm?: string) => {
+      if (submitting) return;
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      setSubmitting(true);
+      try {
+        const res = await api.analyze(sym, nm);
+        router.push(`/analysis/${res.id}`);
+      } catch {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [submitting, router]
+  );
 
-  const showResults = query.trim().length > 0 && (results.length > 0 || searching);
+  const onExecute = useCallback(() => {
+    if (selected) startAnalysis(selected.symbol, selected.name);
+  }, [selected, startAnalysis]);
+
+  const showResults = !selected && query.trim().length > 0 && (results.length > 0 || searching);
 
   return (
     <View style={styles.root}>
       {/* Sticky header */}
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Text style={styles.brand}>TRADINGAGENTS</Text>
-        <Text style={styles.tagline}>{"// MULTI-AGENT EQUITY DESK"}</Text>
+        <View style={styles.headerRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.brand}>TRADINGAGENTS</Text>
+            <Text style={styles.tagline}>{"// MULTI-AGENT EQUITY DESK"}</Text>
+          </View>
+          <Pressable testID="compare-button" onPress={() => router.push("/compare")} style={styles.compareBtn}>
+            <ArrowsLeftRight size={16} color={colors.onSurfaceInverse} weight="bold" />
+            <Text style={styles.compareText}>COMPARE</Text>
+          </Pressable>
+        </View>
       </View>
 
       <ScrollView
@@ -222,13 +239,30 @@ export default function AnalyzeScreen() {
             {/* Selected ticker preview */}
             {selected ? (
               <View style={styles.section}>
-                <Text style={styles.sectionLabel}>SELECTED TARGET</Text>
+                <View style={styles.sectionHeadRow}>
+                  <Text style={[styles.sectionLabel, { marginBottom: 0 }]}>SELECTED TARGET</Text>
+                  <Pressable
+                    testID="watchlist-toggle"
+                    onPress={() => selected && toggleWatch({ symbol: selected.symbol, name: selected.name })}
+                    hitSlop={8}
+                    style={[styles.starBtn, isSaved(selected.symbol) && styles.starBtnActive]}
+                  >
+                    <Star
+                      size={16}
+                      color={isSaved(selected.symbol) ? colors.onSurfaceInverse : colors.onSurface}
+                      weight={isSaved(selected.symbol) ? "fill" : "regular"}
+                    />
+                    <Text style={[styles.starText, isSaved(selected.symbol) && { color: colors.onSurfaceInverse }]}>
+                      {isSaved(selected.symbol) ? "SAVED" : "WATCH"}
+                    </Text>
+                  </Pressable>
+                </View>
                 {loadingQuote ? (
                   <View style={styles.previewLoading}>
                     <ActivityIndicator color={colors.onSurface} />
                   </View>
                 ) : selectedQuote ? (
-                  <QuoteCard quote={selectedQuote} />
+                  <QuoteCard quote={selectedQuote} showRanges />
                 ) : (
                   <View style={styles.noQuoteBox}>
                     <Text style={styles.selectedSymbol}>{selected.symbol}</Text>
@@ -237,6 +271,44 @@ export default function AnalyzeScreen() {
                     </Text>
                   </View>
                 )}
+              </View>
+            ) : null}
+
+            {/* Watchlist */}
+            {watchItems.length > 0 ? (
+              <View style={styles.section}>
+                <Text style={styles.sectionLabel}>WATCHLIST · TAP TO RE-RUN</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.chipRowContent}
+                  style={styles.chipRow}
+                >
+                  {watchItems.map((w) => (
+                    <View key={w.symbol} style={styles.watchCard}>
+                      <Pressable
+                        testID={`watchlist-item-${w.symbol}`}
+                        onPress={() => startAnalysis(w.symbol, w.name)}
+                        style={styles.watchMain}
+                      >
+                        <Text style={styles.watchSymbol} numberOfLines={1}>
+                          {w.symbol}
+                        </Text>
+                        <Text style={styles.watchName} numberOfLines={1}>
+                          {w.name}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        testID={`watchlist-remove-${w.symbol}`}
+                        onPress={() => removeWatch(w.symbol)}
+                        hitSlop={8}
+                        style={styles.watchRemove}
+                      >
+                        <X size={14} color={colors.onSurfaceTertiary} weight="bold" />
+                      </Pressable>
+                    </View>
+                  ))}
+                </ScrollView>
               </View>
             ) : null}
 
@@ -350,6 +422,17 @@ const styles = StyleSheet.create({
   },
   brand: { fontFamily: fonts.display, fontSize: 28, color: colors.onSurface, letterSpacing: -1 },
   tagline: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurfaceTertiary, marginTop: 2, letterSpacing: 1 },
+  headerRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: spacing.md },
+  compareBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: colors.surfaceInverse,
+    paddingHorizontal: spacing.md,
+    height: 38,
+    marginTop: 2,
+  },
+  compareText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1, color: colors.onSurfaceInverse },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing.lg, paddingBottom: spacing.xl },
 
@@ -379,6 +462,34 @@ const styles = StyleSheet.create({
   resultExchange: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary },
 
   section: { marginTop: spacing.xl },
+  sectionHeadRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
+  starBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderWidth: 1.5,
+    borderColor: colors.borderStrong,
+    paddingHorizontal: spacing.sm,
+    height: 32,
+  },
+  starBtnActive: { backgroundColor: colors.surfaceInverse },
+  starText: { fontFamily: fonts.monoBold, fontSize: 10, letterSpacing: 0.5, color: colors.onSurface },
+  watchCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    borderWidth: BORDER,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surface,
+    paddingLeft: spacing.md,
+    paddingRight: spacing.sm,
+    height: 54,
+    flexShrink: 0,
+  },
+  watchMain: { justifyContent: "center", maxWidth: 130 },
+  watchSymbol: { fontFamily: fonts.monoBold, fontSize: 13, color: colors.onSurface },
+  watchName: { fontFamily: fonts.mono, fontSize: 9, color: colors.onSurfaceTertiary, marginTop: 2 },
+  watchRemove: { padding: 4 },
   sectionLabel: {
     fontFamily: fonts.monoBold,
     fontSize: 11,

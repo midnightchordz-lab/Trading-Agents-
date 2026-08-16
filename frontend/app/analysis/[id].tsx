@@ -3,7 +3,7 @@ import { View, Text, Pressable, ScrollView, ActivityIndicator, StyleSheet } from
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { CaretLeft, CaretDown, CaretRight, Warning } from "phosphor-react-native";
+import { CaretLeft, CaretDown, CaretRight, Warning, Star } from "phosphor-react-native";
 
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
 import { api, Analysis, AgentMessageT } from "@/src/api";
@@ -11,6 +11,7 @@ import { QuoteCard } from "@/src/components/QuoteCard";
 import { AgentMessage } from "@/src/components/AgentMessage";
 import { VerdictBlock } from "@/src/components/VerdictBadge";
 import { PHASE_LABEL, PHASE_ORDER, PhaseKey } from "@/src/agents";
+import { useWatchlist } from "@/src/watchlist";
 
 type Tab = "debate" | "verdict";
 
@@ -24,6 +25,7 @@ export default function AnalysisScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { isSaved, toggle: toggleWatch } = useWatchlist();
 
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [tab, setTab] = useState<Tab>("debate");
@@ -128,6 +130,18 @@ export default function AnalysisScreen() {
               {analysis.name}
             </Text>
           </View>
+          <Pressable
+            testID="analysis-watch-toggle"
+            onPress={() => toggleWatch({ symbol: analysis.symbol, name: analysis.name })}
+            hitSlop={8}
+            style={[styles.watchStar, isSaved(analysis.symbol) && styles.watchStarActive]}
+          >
+            <Star
+              size={18}
+              color={isSaved(analysis.symbol) ? colors.onSurfaceInverse : colors.onSurface}
+              weight={isSaved(analysis.symbol) ? "fill" : "regular"}
+            />
+          </Pressable>
           <View style={[styles.statusPill, running ? styles.statusRunning : analysis.status === "error" ? styles.statusError : styles.statusDone]}>
             <Text style={[styles.statusText, { color: running || analysis.status === "error" ? colors.onSurface : colors.onSurfaceInverse }]}>
               {running ? `${analysis.current_step}/${analysis.total_steps}` : analysis.status === "error" ? "FAILED" : "DONE"}
@@ -163,7 +177,7 @@ export default function AnalysisScreen() {
       >
         {analysis.quote ? (
           <View style={{ marginBottom: spacing.lg }}>
-            <QuoteCard quote={analysis.quote} />
+            <QuoteCard quote={analysis.quote} showRanges />
           </View>
         ) : null}
 
@@ -298,6 +312,45 @@ function VerdictView({
         </View>
       ) : null}
 
+      {analysis.debate ? (
+        <View>
+          <Text style={styles.transcriptLabel}>ROUND TABLE DEBATE</Text>
+          <DebateArg tag="BULL" color={colors.success} text={analysis.debate.bull} />
+          <DebateArg tag="BEAR" color={colors.error} text={analysis.debate.bear} />
+          <DebateArg tag="FUNDAMENTALS" color={colors.info} text={analysis.debate.fundamentals} />
+
+          <View style={styles.debateVerdict}>
+            <Text style={styles.debateVerdictLabel}>DEBATE VERDICT</Text>
+            {analysis.debate.agreements.length ? (
+              <>
+                <Text style={styles.debateSub}>WHERE THEY AGREE</Text>
+                {analysis.debate.agreements.map((a, i) => (
+                  <View key={`ag-${i}`} style={styles.debateBulletRow}>
+                    <Text style={[styles.debateBullet, { color: colors.success }]}>+</Text>
+                    <Text style={styles.debateBulletText}>{a}</Text>
+                  </View>
+                ))}
+              </>
+            ) : null}
+            {analysis.debate.disagreements.length ? (
+              <>
+                <Text style={[styles.debateSub, { marginTop: spacing.md }]}>WHERE THEY CLASH</Text>
+                {analysis.debate.disagreements.map((a, i) => (
+                  <View key={`dis-${i}`} style={styles.debateBulletRow}>
+                    <Text style={[styles.debateBullet, { color: colors.error }]}>×</Text>
+                    <Text style={styles.debateBulletText}>{a}</Text>
+                  </View>
+                ))}
+              </>
+            ) : null}
+            <View style={styles.debateRec}>
+              <Text style={styles.debateRecLabel}>FINAL WORD</Text>
+              <Text style={styles.debateRecText}>{analysis.debate.recommendation}</Text>
+            </View>
+          </View>
+        </View>
+      ) : null}
+
       <Text style={styles.transcriptLabel}>FULL TRANSCRIPT</Text>
       {PHASE_ORDER.map((phase) => {
         const msgs = grouped[phase];
@@ -330,6 +383,18 @@ function VerdictView({
   );
 }
 
+function DebateArg({ tag, color, text }: { tag: string; color: string; text: string }) {
+  return (
+    <View style={[styles.debateArg, { borderLeftWidth: 6, borderLeftColor: color }]}>
+      <View style={styles.debateArgHead}>
+        <View style={[styles.debateDot, { backgroundColor: color }]} />
+        <Text style={styles.debateArgTag}>[ {tag} ]</Text>
+      </View>
+      <Text style={styles.debateArgText}>{text}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
   center: { alignItems: "center", justifyContent: "center", gap: spacing.md },
@@ -346,6 +411,8 @@ const styles = StyleSheet.create({
   headerSymbol: { fontFamily: fonts.display, fontSize: 22, color: colors.onSurface, letterSpacing: -0.5 },
   headerName: { fontFamily: fonts.mono, fontSize: 10.5, color: colors.onSurfaceTertiary, marginTop: 1 },
   statusPill: { paddingHorizontal: spacing.sm, paddingVertical: 5, borderWidth: 1.5, borderColor: colors.borderStrong },
+  watchStar: { width: 34, height: 34, borderWidth: BORDER, borderColor: colors.borderStrong, alignItems: "center", justifyContent: "center" },
+  watchStarActive: { backgroundColor: colors.surfaceInverse },
   statusRunning: { backgroundColor: colors.surfaceSecondary },
   statusDone: { backgroundColor: colors.success, borderColor: colors.success },
   statusError: { backgroundColor: colors.warning },
@@ -395,6 +462,21 @@ const styles = StyleSheet.create({
   riskText: { flex: 1, fontFamily: fonts.mono, fontSize: 12.5, lineHeight: 19, color: colors.onSurfaceTertiary },
 
   transcriptLabel: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1.5, color: colors.onSurface, marginTop: spacing.xl, marginBottom: spacing.md },
+
+  debateArg: { borderWidth: BORDER, borderColor: colors.borderStrong, backgroundColor: colors.surface, padding: spacing.md, marginBottom: spacing.md },
+  debateArgHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginBottom: spacing.xs },
+  debateDot: { width: 8, height: 8 },
+  debateArgTag: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 0.5, color: colors.onSurface },
+  debateArgText: { fontFamily: fonts.mono, fontSize: 12.5, lineHeight: 19, color: colors.onSurfaceTertiary },
+  debateVerdict: { borderWidth: BORDER, borderColor: colors.borderStrong, backgroundColor: colors.surfaceSecondary, padding: spacing.lg, marginBottom: spacing.md },
+  debateVerdictLabel: { fontFamily: fonts.display, fontSize: 18, color: colors.onSurface, marginBottom: spacing.sm },
+  debateSub: { fontFamily: fonts.monoBold, fontSize: 10, letterSpacing: 1, color: colors.onSurfaceTertiary, marginBottom: spacing.xs },
+  debateBulletRow: { flexDirection: "row", gap: spacing.sm, marginBottom: 2 },
+  debateBullet: { fontFamily: fonts.monoBold, fontSize: 13 },
+  debateBulletText: { flex: 1, fontFamily: fonts.mono, fontSize: 12, lineHeight: 18, color: colors.onSurface },
+  debateRec: { marginTop: spacing.md, borderTopWidth: 1.5, borderTopColor: colors.border, paddingTop: spacing.md },
+  debateRecLabel: { fontFamily: fonts.monoBold, fontSize: 10, letterSpacing: 1, color: colors.onSurfaceTertiary, marginBottom: spacing.xs },
+  debateRecText: { fontFamily: fonts.mono, fontSize: 13, lineHeight: 20, color: colors.onSurface },
   accordion: { marginBottom: spacing.md, borderWidth: BORDER, borderColor: colors.borderStrong },
   accHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: spacing.md, backgroundColor: colors.surface },
   accHeaderOpen: { backgroundColor: colors.surfaceInverse },
