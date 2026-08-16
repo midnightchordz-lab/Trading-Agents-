@@ -20,6 +20,13 @@ import { api, Quote, SearchResult } from "@/src/api";
 import { QuoteCard } from "@/src/components/QuoteCard";
 import { Sparkline } from "@/src/components/Sparkline";
 
+const CATEGORIES = [
+  { key: "trending", label: "TRENDING" },
+  { key: "stocks", label: "STOCKS" },
+  { key: "crypto", label: "CRYPTO" },
+  { key: "commodities", label: "COMMODITIES" },
+];
+
 export default function AnalyzeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -32,24 +39,37 @@ export default function AnalyzeScreen() {
   const [selectedQuote, setSelectedQuote] = useState<Quote | null>(null);
   const [loadingQuote, setLoadingQuote] = useState(false);
 
-  const [trending, setTrending] = useState<Quote[]>([]);
-  const [loadingTrending, setLoadingTrending] = useState(true);
+  const [category, setCategory] = useState<string>("trending");
+  const [marketData, setMarketData] = useState<Record<string, Quote[]>>({});
+  const [loadingCat, setLoadingCat] = useState(true);
 
   const [submitting, setSubmitting] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await api.trending();
-        setTrending(r.results || []);
-      } catch {
-        setTrending([]);
-      } finally {
-        setLoadingTrending(false);
-      }
-    })();
+  const loadCategory = useCallback(async (cat: string) => {
+    setLoadingCat(true);
+    try {
+      const r = await api.markets(cat);
+      setMarketData((prev) => ({ ...prev, [cat]: r.results || [] }));
+    } catch {
+      setMarketData((prev) => ({ ...prev, [cat]: [] }));
+    } finally {
+      setLoadingCat(false);
+    }
   }, []);
+
+  useEffect(() => {
+    loadCategory("trending");
+  }, [loadCategory]);
+
+  const onSelectCategory = useCallback(
+    (cat: string) => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      setCategory(cat);
+      if (!marketData[cat]) loadCategory(cat);
+    },
+    [marketData, loadCategory]
+  );
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -220,16 +240,38 @@ export default function AnalyzeScreen() {
               </View>
             ) : null}
 
-            {/* Trending grid */}
+            {/* Browse markets */}
             <View style={styles.section}>
-              <Text style={styles.sectionLabel}>{selected ? "OR PICK ANOTHER" : "TRENDING TARGETS"}</Text>
-              {loadingTrending ? (
+              <Text style={styles.sectionLabel}>{selected ? "OR PICK ANOTHER" : "BROWSE MARKETS"}</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.chipRowContent}
+                style={styles.chipRow}
+              >
+                {CATEGORIES.map((c) => {
+                  const active = category === c.key;
+                  return (
+                    <Pressable
+                      key={c.key}
+                      testID={`category-chip-${c.key}`}
+                      onPress={() => onSelectCategory(c.key)}
+                      style={[styles.chip, active && styles.chipActive]}
+                    >
+                      <Text style={[styles.chipText, { color: active ? colors.onSurfaceInverse : colors.onSurface }]}>
+                        {c.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+              {loadingCat && !marketData[category] ? (
                 <View style={styles.previewLoading}>
                   <ActivityIndicator color={colors.onSurface} />
                 </View>
               ) : (
                 <View style={styles.grid}>
-                  {trending.map((q) => {
+                  {(marketData[category] || []).map((q) => {
                     const cColor = changeColor(q.changePercent);
                     const active = selected?.symbol === q.symbol;
                     return (
@@ -348,6 +390,21 @@ const styles = StyleSheet.create({
   mutedMono: { fontFamily: fonts.mono, fontSize: 12, color: colors.onSurfaceTertiary },
   noQuoteBox: { borderWidth: BORDER, borderColor: colors.borderStrong, padding: spacing.lg, gap: spacing.sm },
   selectedSymbol: { fontFamily: fonts.display, fontSize: 24, color: colors.onSurface },
+
+  chipRow: { marginBottom: spacing.md, marginHorizontal: -spacing.lg },
+  chipRowContent: { gap: spacing.sm, paddingHorizontal: spacing.lg },
+  chip: {
+    height: 36,
+    paddingHorizontal: spacing.md,
+    borderWidth: BORDER,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  chipActive: { backgroundColor: colors.surfaceInverse },
+  chipText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1 },
 
   grid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between" },
   gridCard: {

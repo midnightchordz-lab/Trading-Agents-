@@ -47,7 +47,18 @@ def now_iso() -> str:
 # Market data (Yahoo Finance public endpoints — no key required)
 # ----------------------------------------------------------------------------
 YF_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-_trending_cache = {"ts": 0.0, "data": None}
+
+MARKET_CATEGORIES = {
+    "trending": ["AAPL", "NVDA", "TSLA", "BTC-USD", "ETH-USD", "GC=F", "CL=F", "RELIANCE.NS"],
+    "stocks": ["AAPL", "NVDA", "TSLA", "MSFT", "AMZN", "GOOGL", "META", "JPM"],
+    "crypto": ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD", "BNB-USD", "ADA-USD", "LTC-USD"],
+    "commodities": ["GC=F", "SI=F", "CL=F", "BZ=F", "NG=F", "HG=F", "PL=F", "ZW=F"],
+}
+COMMODITY_NAMES = {
+    "GC=F": "Gold", "SI=F": "Silver", "CL=F": "Crude Oil (WTI)", "BZ=F": "Brent Crude",
+    "NG=F": "Natural Gas", "HG=F": "Copper", "PL=F": "Platinum", "ZW=F": "Wheat",
+}
+_market_cache: dict = {}
 
 
 def _yf_get(url: str, params: dict):
@@ -219,7 +230,13 @@ def parse_verdict(text: str) -> dict:
 
 
 def build_context(symbol: str, quote: Optional[dict]) -> str:
-    lines = [f"TICKER: {symbol}", f"ANALYSIS DATE: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}"]
+    if symbol.endswith("=F"):
+        asset_class = "Commodity / futures contract"
+    elif symbol.endswith("-USD") or symbol.endswith("=X"):
+        asset_class = "Cryptocurrency / FX"
+    else:
+        asset_class = "Equity / stock"
+    lines = [f"TICKER: {symbol}", f"ASSET CLASS: {asset_class}", f"ANALYSIS DATE: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}"]
     if quote and quote.get("price") is not None:
         lines.append(f"Name: {quote.get('name')}")
         lines.append(f"Current Price: {quote.get('price')} {quote.get('currency') or ''}")
@@ -422,18 +439,33 @@ async def quote(symbol: str):
         raise HTTPException(status_code=404, detail="Quote unavailable for this ticker")
 
 
+async def get_market(category: str) -> list:
+    now = time.time()
+    entry = _market_cache.get(category)
+    if entry and entry.get("data") is not None and now - entry["ts"] < 90:
+        return entry["data"]
+    symbols = MARKET_CATEGORIES.get(category)
+    if not symbols:
+        raise HTTPException(status_code=404, detail="Unknown market category")
+    results = await asyncio.gather(*[asyncio.to_thread(fetch_quote_sync, s) for s in symbols], return_exceptions=True)
+    clean = []
+    for sym, r in zip(symbols, results):
+        if isinstance(r, dict):
+            if category == "commodities":
+                r["name"] = COMMODITY_NAMES.get(sym, r.get("name"))
+            clean.append(r)
+    _market_cache[category] = {"ts": now, "data": clean}
+    return clean
+
+
 @api_router.get("/trending")
 async def trending():
-    now = time.time()
-    if _trending_cache["data"] is not None and now - _trending_cache["ts"] < 90:
-        return {"results": _trending_cache["data"]}
+    return {"results": await get_market("trending")}
 
-    symbols = ["AAPL", "NVDA", "TSLA", "BTC-USD", "ETH-USD", "MSFT", "AMZN", "RELIANCE.NS"]
-    results = await asyncio.gather(*[asyncio.to_thread(fetch_quote_sync, s) for s in symbols], return_exceptions=True)
-    clean = [r for r in results if isinstance(r, dict)]
-    _trending_cache["data"] = clean
-    _trending_cache["ts"] = now
-    return {"results": clean}
+
+@api_router.get("/markets/{category}")
+async def markets(category: str):
+    return {"results": await get_market(category)}
 
 
 @api_router.post("/analyze")

@@ -80,6 +80,7 @@ export const api = {
   search: (q: string) => j<{ results: SearchResult[] }>(`/search?q=${encodeURIComponent(q)}`),
   quote: (symbol: string) => j<Quote>(`/quote/${encodeURIComponent(symbol)}`),
   trending: () => j<{ results: Quote[] }>(`/trending`),
+  markets: (category: string) => j<{ results: Quote[] }>(`/markets/${category}`),
   analyze: (symbol: string, name?: string) =>
     j<Analysis>(`/analyze`, { method: "POST", body: JSON.stringify({ symbol, name }) }),
   getAnalysis: (id: string) => j<Analysis>(`/analysis/${id}`),

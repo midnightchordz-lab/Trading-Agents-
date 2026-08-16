@@ -35,6 +35,12 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
 - History tab (list, pills, delete, empty state) and Agents tab (pipeline + 10-agent roster + disclaimer).
 - Verified: 12/12 backend pytest pass (incl. full async analysis to completion); Analyze/Debate/Verdict/History/Agents screens verified via screenshots.
 
+## Added (2026-06-16, session 2)
+- **Market categories**: `GET /api/markets/{category}` for `trending | stocks | crypto | commodities` (90s cache, 404 on unknown). Kept `/api/trending`.
+- **Commodities**: Gold, Silver, Crude (WTI), Brent, Natural Gas, Copper, Platinum, Wheat via Yahoo futures tickers (`GC=F` etc.) with friendly display names.
+- **Analyze screen category chip row** (horizontal, brutalist, no-wrap) switching the browse grid between the four categories; verified commodity analysis completes end-to-end (asset-class-aware agent context).
+- User asked for "live rates from Google"; after a feasibility check the user chose to keep the existing reliable live feed (Google request dropped).
+
 ## Backlog / Remaining
 - **P1**: Kotak Neo integration for live India-broker quotes + (optional) order placement — needs user credentials; complex session auth.
 - **P1**: Price chart range toggle (1D/1W/1M/1Y) on the quote card.
