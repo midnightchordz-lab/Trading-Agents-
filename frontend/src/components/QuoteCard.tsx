@@ -157,7 +157,7 @@ const styles = StyleSheet.create({
   },
   rangeChip: { flex: 1, paddingVertical: spacing.sm, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
   rangeDivider: { borderRightWidth: 1.5, borderRightColor: colors.borderStrong },
-  rangeActive: { backgroundColor: colors.surfaceInverse },
+  rangeActive: { backgroundColor: colors.brand },
   rangeText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1 },
   statsRow: {
     flexDirection: "row",

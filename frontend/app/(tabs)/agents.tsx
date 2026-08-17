@@ -14,8 +14,9 @@ import {
   Briefcase,
 } from "phosphor-react-native";
 
-import { colors, fonts, spacing, BORDER } from "@/src/theme";
+import { colors, fonts, spacing, BORDER, accents } from "@/src/theme";
 import { AGENT_ROSTER, PIPELINE_STEPS } from "@/src/agents";
+import { ScreenHeader } from "@/src/components/ScreenHeader";
 
 const ICONS: Record<string, any> = {
   ChartLineUp,
@@ -32,15 +33,18 @@ const ICONS: Record<string, any> = {
 
 const TEAMS = ["ANALYST TEAM", "RESEARCH TEAM", "EXECUTION"];
 
+const TEAM_COLORS: Record<string, string> = {
+  "ANALYST TEAM": accents.blue,
+  "RESEARCH TEAM": accents.violet,
+  EXECUTION: accents.teal,
+};
+
 export default function AgentsScreen() {
   const insets = useSafeAreaInsets();
 
   return (
     <View style={styles.root}>
-      <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Text style={styles.brand}>THE DESK</Text>
-        <Text style={styles.tagline}>{"// 10 AI AGENTS · 1 VERDICT"}</Text>
-      </View>
+      <ScreenHeader title="THE DESK" subtitle="// 10 AI AGENTS · 1 VERDICT" insetsTop={insets.top} />
 
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing.xxl }}
@@ -68,7 +72,7 @@ export default function AgentsScreen() {
                 const Icon = ICONS[a.icon] || Briefcase;
                 return (
                   <View key={a.tag} testID={`agent-card-${a.tag}`} style={styles.agentCard}>
-                    <View style={styles.agentIcon}>
+                    <View style={[styles.agentIcon, { backgroundColor: TEAM_COLORS[team] || accents.blue }]}>
                       <Icon size={22} color={colors.onSurfaceInverse} weight="bold" />
                     </View>
                     <View style={{ flex: 1 }}>

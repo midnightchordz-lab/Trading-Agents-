@@ -3,11 +3,13 @@ import { View, Text, TextInput, Pressable, ActivityIndicator, StyleSheet } from 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import { CaretLeft, MagnifyingGlass, X, ArrowsLeftRight } from "phosphor-react-native";
+import { MagnifyingGlass, X, ArrowsLeftRight } from "phosphor-react-native";
 
-import { colors, fonts, spacing, BORDER, verdictColors, changeColor } from "@/src/theme";
+import { colors, fonts, spacing, BORDER, verdictColors, changeColor, CTA_GRADIENT } from "@/src/theme";
 import { api, Analysis, SearchResult } from "@/src/api";
+import { ScreenHeader } from "@/src/components/ScreenHeader";
 
 type Sel = { symbol: string; name: string };
 
@@ -261,17 +263,7 @@ export default function CompareScreen() {
 
   return (
     <View style={styles.root}>
-      <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <View style={styles.headerRow}>
-          <Pressable testID="compare-back" onPress={() => router.back()} hitSlop={12} style={styles.backBtn}>
-            <CaretLeft size={22} color={colors.onSurface} weight="bold" />
-          </Pressable>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.brand}>COMPARE</Text>
-            <Text style={styles.tagline}>{"// TWO TICKERS · ONE DESK"}</Text>
-          </View>
-        </View>
-      </View>
+      <ScreenHeader title="COMPARE" subtitle="// TWO TICKERS · ONE DESK" insetsTop={insets.top} onBack={() => router.back()} />
 
       <KeyboardAwareScrollView
         style={styles.scroll}
@@ -295,11 +287,18 @@ export default function CompareScreen() {
               testID="run-comparison-button"
               onPress={run}
               disabled={!slotA || !slotB || comparing}
-              style={[styles.runBtn, (!slotA || !slotB) && styles.runBtnDisabled]}
+              style={styles.runBtn}
             >
-              <Text style={[styles.runText, (!slotA || !slotB) && { color: colors.onSurfaceTertiary }]}>
-                {slotA && slotB ? "RUN COMPARISON" : "PICK TWO TICKERS"}
-              </Text>
+              <LinearGradient
+                colors={!slotA || !slotB ? ["#D4D4D8", "#D4D4D8"] : (CTA_GRADIENT as unknown as string[])}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.runGrad}
+              >
+                <Text style={[styles.runText, (!slotA || !slotB) && { color: colors.onSurfaceTertiary }]}>
+                  {slotA && slotB ? "RUN COMPARISON" : "PICK TWO TICKERS"}
+                </Text>
+              </LinearGradient>
             </Pressable>
           </>
         ) : (
@@ -374,14 +373,8 @@ const styles = StyleSheet.create({
   vsBox: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.surfaceInverse, paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
   vsText: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1, color: colors.onSurfaceInverse },
 
-  runBtn: {
-    height: 56,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.surfaceInverse,
-    marginTop: spacing.lg,
-  },
-  runBtnDisabled: { backgroundColor: colors.surfaceTertiary },
+  runBtn: { height: 56, marginTop: spacing.lg, overflow: "hidden" },
+  runGrad: { flex: 1, alignItems: "center", justifyContent: "center" },
   runText: { fontFamily: fonts.monoBold, fontSize: 14, letterSpacing: 1, color: colors.onSurfaceInverse },
 
   leanBox: { borderWidth: BORDER, borderColor: colors.borderStrong, backgroundColor: colors.surfaceInverse, padding: spacing.lg, marginBottom: spacing.lg },

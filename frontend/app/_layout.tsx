@@ -49,7 +49,7 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <KeyboardProvider>
           <WatchlistProvider>
-            <StatusBar style="dark" />
+            <StatusBar style="light" />
             <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#FFFFFF" } }}>
               <Stack.Screen name="(tabs)" />
               <Stack.Screen name="analysis/[id]" />

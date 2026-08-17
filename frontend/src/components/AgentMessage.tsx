@@ -1,7 +1,7 @@
 import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
-import { colors, fonts, spacing, BORDER, sentimentColor } from "@/src/theme";
+import { colors, fonts, spacing, BORDER, sentimentColor, PHASE_COLORS } from "@/src/theme";
 import { AgentMessageT } from "@/src/api";
 import { tagLabel } from "@/src/agents";
 
@@ -24,11 +24,12 @@ export function AgentMessage({
   const sColor = sentimentColor(message.sentiment as any);
   const sLabel = sentimentLabel(message.sentiment);
   const isDecision = message.phase === "decision";
+  const accent = message.sentiment ? sColor : PHASE_COLORS[message.phase] || colors.borderStrong;
 
   const body = (
     <View
       testID={`agent-message-${message.tag}`}
-      style={[styles.card, isDecision && styles.decisionCard]}
+      style={[styles.card, { borderLeftWidth: 5, borderLeftColor: accent }, isDecision && styles.decisionCard]}
     >
       <View style={styles.headerRow}>
         <View style={styles.tagBox}>

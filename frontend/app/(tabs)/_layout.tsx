@@ -5,12 +5,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { ChartLineUp, ClockCounterClockwise, UsersThree } from "phosphor-react-native";
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
-import { colors, fonts, BORDER } from "@/src/theme";
+import { colors, fonts, BORDER, accents } from "@/src/theme";
 
-const TABS: Record<string, { label: string; Icon: any }> = {
-  index: { label: "ANALYZE", Icon: ChartLineUp },
-  history: { label: "HISTORY", Icon: ClockCounterClockwise },
-  agents: { label: "AGENTS", Icon: UsersThree },
+const TABS: Record<string, { label: string; Icon: any; color: string }> = {
+  index: { label: "ANALYZE", Icon: ChartLineUp, color: accents.blue },
+  history: { label: "HISTORY", Icon: ClockCounterClockwise, color: accents.pink },
+  agents: { label: "AGENTS", Icon: UsersThree, color: accents.teal },
 };
 
 function BrutalTabBar({ state, navigation }: BottomTabBarProps) {
@@ -37,7 +37,7 @@ function BrutalTabBar({ state, navigation }: BottomTabBarProps) {
               style={[
                 styles.tab,
                 index < state.routes.length - 1 && styles.tabDivider,
-                focused && styles.tabActive,
+                focused && { backgroundColor: conf.color },
               ]}
             >
               <Icon size={22} color={color} weight={focused ? "fill" : "regular"} />

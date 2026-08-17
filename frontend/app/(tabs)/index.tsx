@@ -12,13 +12,15 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import { MagnifyingGlass, X, ArrowRight, CaretRight, Star, ArrowsLeftRight } from "phosphor-react-native";
 
-import { colors, fonts, spacing, BORDER, changeColor } from "@/src/theme";
+import { colors, fonts, spacing, BORDER, changeColor, accentAt, CATEGORY_COLORS, accents, CTA_GRADIENT } from "@/src/theme";
 import { api, Quote, SearchResult } from "@/src/api";
 import { QuoteCard } from "@/src/components/QuoteCard";
 import { Sparkline } from "@/src/components/Sparkline";
+import { ScreenHeader } from "@/src/components/ScreenHeader";
 import { useWatchlist } from "@/src/watchlist";
 
 const CATEGORIES = [
@@ -164,18 +166,17 @@ export default function AnalyzeScreen() {
   return (
     <View style={styles.root}>
       {/* Sticky header */}
-      <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <View style={styles.headerRow}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.brand}>TRADINGAGENTS</Text>
-            <Text style={styles.tagline}>{"// MULTI-AGENT EQUITY DESK"}</Text>
-          </View>
+      <ScreenHeader
+        title="TRADINGAGENTS"
+        subtitle="// MULTI-AGENT EQUITY DESK"
+        insetsTop={insets.top}
+        right={
           <Pressable testID="compare-button" onPress={() => router.push("/compare")} style={styles.compareBtn}>
-            <ArrowsLeftRight size={16} color={colors.onSurfaceInverse} weight="bold" />
+            <ArrowsLeftRight size={16} color={colors.onSurface} weight="bold" />
             <Text style={styles.compareText}>COMPARE</Text>
           </Pressable>
-        </View>
-      </View>
+        }
+      />
 
       <ScrollView
         style={styles.scroll}
@@ -323,16 +324,16 @@ export default function AnalyzeScreen() {
               >
                 {CATEGORIES.map((c) => {
                   const active = category === c.key;
+                  const catColor = CATEGORY_COLORS[c.key] || accents.blue;
                   return (
                     <Pressable
                       key={c.key}
                       testID={`category-chip-${c.key}`}
                       onPress={() => onSelectCategory(c.key)}
-                      style={[styles.chip, active && styles.chipActive]}
+                      style={[styles.chip, active && { backgroundColor: catColor, borderColor: catColor }]}
                     >
-                      <Text style={[styles.chipText, { color: active ? colors.onSurfaceInverse : colors.onSurface }]}>
-                        {c.label}
-                      </Text>
+                      <View style={[styles.chipDot, { backgroundColor: active ? "#FFFFFF" : catColor }]} />
+                      <Text style={[styles.chipText, { color: active ? "#FFFFFF" : colors.onSurface }]}>{c.label}</Text>
                     </Pressable>
                   );
                 })}
@@ -343,7 +344,7 @@ export default function AnalyzeScreen() {
                 </View>
               ) : (
                 <View style={styles.grid}>
-                  {(marketData[category] || []).map((q) => {
+                  {(marketData[category] || []).map((q, idx) => {
                     const cColor = changeColor(q.changePercent);
                     const active = selected?.symbol === q.symbol;
                     return (
@@ -353,6 +354,7 @@ export default function AnalyzeScreen() {
                         onPress={() => onSelectTrending(q)}
                         style={[styles.gridCard, active && styles.gridCardActive]}
                       >
+                        <View style={[styles.gridAccent, { backgroundColor: accentAt(idx) }]} />
                         <View style={styles.gridTop}>
                           <Text style={[styles.gridSymbol, active && { color: colors.onSurfaceInverse }]}>
                             {q.symbol}
@@ -392,18 +394,25 @@ export default function AnalyzeScreen() {
             testID="execute-analysis-button"
             onPress={onExecute}
             disabled={!selected || submitting}
-            style={[styles.cta, (!selected || submitting) && styles.ctaDisabled]}
+            style={styles.cta}
           >
-            {submitting ? (
-              <ActivityIndicator color={colors.onSurfaceInverse} />
-            ) : (
-              <>
-                <Text style={[styles.ctaText, !selected && styles.ctaTextDisabled]}>
-                  {selected ? `EXECUTE ANALYSIS · ${selected.symbol}` : "SELECT A TICKER"}
-                </Text>
-                {selected ? <ArrowRight size={20} color={colors.onSurfaceInverse} weight="bold" /> : null}
-              </>
-            )}
+            <LinearGradient
+              colors={!selected || submitting ? ["#D4D4D8", "#D4D4D8"] : (CTA_GRADIENT as unknown as string[])}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.ctaGrad}
+            >
+              {submitting ? (
+                <ActivityIndicator color={colors.onSurfaceInverse} />
+              ) : (
+                <>
+                  <Text style={[styles.ctaText, !selected && styles.ctaTextDisabled]}>
+                    {selected ? `EXECUTE ANALYSIS · ${selected.symbol}` : "SELECT A TICKER"}
+                  </Text>
+                  {selected ? <ArrowRight size={20} color={colors.onSurfaceInverse} weight="bold" /> : null}
+                </>
+              )}
+            </LinearGradient>
           </Pressable>
         </View>
       </KeyboardStickyView>
@@ -427,12 +436,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: colors.surfaceInverse,
+    backgroundColor: colors.surface,
     paddingHorizontal: spacing.md,
     height: 38,
-    marginTop: 2,
   },
-  compareText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1, color: colors.onSurfaceInverse },
+  compareText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1, color: colors.onSurface },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing.lg, paddingBottom: spacing.xl },
 
@@ -506,15 +514,17 @@ const styles = StyleSheet.create({
   chipRowContent: { gap: spacing.sm, paddingHorizontal: spacing.lg },
   chip: {
     height: 36,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
     paddingHorizontal: spacing.md,
     borderWidth: BORDER,
     borderColor: colors.borderStrong,
     backgroundColor: colors.surface,
-    alignItems: "center",
-    justifyContent: "center",
     flexShrink: 0,
   },
-  chipActive: { backgroundColor: colors.surfaceInverse },
+  chipDot: { width: 8, height: 8 },
   chipText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1 },
 
   grid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between" },
@@ -524,8 +534,11 @@ const styles = StyleSheet.create({
     borderColor: colors.borderStrong,
     backgroundColor: colors.surface,
     padding: spacing.md,
+    paddingTop: spacing.md + 4,
     marginBottom: spacing.md,
+    overflow: "hidden",
   },
+  gridAccent: { position: "absolute", top: 0, left: 0, right: 0, height: 5 },
   gridCardActive: { backgroundColor: colors.surfaceInverse },
   gridTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   gridSymbol: { fontFamily: fonts.displayMed, fontSize: 15, color: colors.onSurface },
@@ -542,14 +555,16 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   cta: {
+    height: 56,
+    overflow: "hidden",
+  },
+  ctaGrad: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.sm,
-    backgroundColor: colors.surfaceInverse,
-    height: 56,
   },
-  ctaDisabled: { backgroundColor: colors.surfaceTertiary },
   ctaText: { fontFamily: fonts.monoBold, fontSize: 14, letterSpacing: 1, color: colors.onSurfaceInverse },
   ctaTextDisabled: { color: colors.onSurfaceTertiary },
 });

@@ -5,7 +5,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import * as Sharing from "expo-sharing";
 import ViewShot from "react-native-view-shot";
-import { CaretLeft, CaretDown, CaretRight, Warning, Star, ShareNetwork } from "phosphor-react-native";
+import { CaretDown, CaretRight, Warning, Star, ShareNetwork } from "phosphor-react-native";
 
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
 import { api, Analysis, AgentMessageT } from "@/src/api";
@@ -13,6 +13,7 @@ import { QuoteCard } from "@/src/components/QuoteCard";
 import { AgentMessage } from "@/src/components/AgentMessage";
 import { VerdictBlock } from "@/src/components/VerdictBadge";
 import { ShareCard } from "@/src/components/ShareCard";
+import { ScreenHeader } from "@/src/components/ScreenHeader";
 import { PHASE_LABEL, PHASE_ORDER, PhaseKey } from "@/src/agents";
 import { useWatchlist } from "@/src/watchlist";
 
@@ -151,36 +152,33 @@ export default function AnalysisScreen() {
   return (
     <View style={styles.root}>
       {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <View style={styles.headerRow}>
-          <Pressable testID="back-button" onPress={() => router.back()} hitSlop={12} style={styles.backBtn}>
-            <CaretLeft size={22} color={colors.onSurface} weight="bold" />
-          </Pressable>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.headerSymbol}>{analysis.symbol}</Text>
-            <Text style={styles.headerName} numberOfLines={1}>
-              {analysis.name}
-            </Text>
+      <ScreenHeader
+        title={analysis.symbol}
+        subtitle={analysis.name}
+        insetsTop={insets.top}
+        onBack={() => router.back()}
+        right={
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+            <Pressable
+              testID="analysis-watch-toggle"
+              onPress={() => toggleWatch({ symbol: analysis.symbol, name: analysis.name })}
+              hitSlop={8}
+              style={[styles.watchStar, isSaved(analysis.symbol) && styles.watchStarActive]}
+            >
+              <Star
+                size={18}
+                color={isSaved(analysis.symbol) ? colors.onSurface : "#FFFFFF"}
+                weight={isSaved(analysis.symbol) ? "fill" : "regular"}
+              />
+            </Pressable>
+            <View style={[styles.statusPill, running ? styles.statusRunning : analysis.status === "error" ? styles.statusError : styles.statusDone]}>
+              <Text style={[styles.statusText, { color: running || analysis.status === "error" ? colors.onSurface : colors.onSurfaceInverse }]}>
+                {running ? `${analysis.current_step}/${analysis.total_steps}` : analysis.status === "error" ? "FAILED" : "DONE"}
+              </Text>
+            </View>
           </View>
-          <Pressable
-            testID="analysis-watch-toggle"
-            onPress={() => toggleWatch({ symbol: analysis.symbol, name: analysis.name })}
-            hitSlop={8}
-            style={[styles.watchStar, isSaved(analysis.symbol) && styles.watchStarActive]}
-          >
-            <Star
-              size={18}
-              color={isSaved(analysis.symbol) ? colors.onSurfaceInverse : colors.onSurface}
-              weight={isSaved(analysis.symbol) ? "fill" : "regular"}
-            />
-          </Pressable>
-          <View style={[styles.statusPill, running ? styles.statusRunning : analysis.status === "error" ? styles.statusError : styles.statusDone]}>
-            <Text style={[styles.statusText, { color: running || analysis.status === "error" ? colors.onSurface : colors.onSurfaceInverse }]}>
-              {running ? `${analysis.current_step}/${analysis.total_steps}` : analysis.status === "error" ? "FAILED" : "DONE"}
-            </Text>
-          </View>
-        </View>
-      </View>
+        }
+      />
 
       {/* Segmented control */}
       <View style={styles.segment}>
@@ -478,8 +476,8 @@ const styles = StyleSheet.create({
   headerSymbol: { fontFamily: fonts.display, fontSize: 22, color: colors.onSurface, letterSpacing: -0.5 },
   headerName: { fontFamily: fonts.mono, fontSize: 10.5, color: colors.onSurfaceTertiary, marginTop: 1 },
   statusPill: { paddingHorizontal: spacing.sm, paddingVertical: 5, borderWidth: 1.5, borderColor: colors.borderStrong },
-  watchStar: { width: 34, height: 34, borderWidth: BORDER, borderColor: colors.borderStrong, alignItems: "center", justifyContent: "center" },
-  watchStarActive: { backgroundColor: colors.surfaceInverse },
+  watchStar: { width: 34, height: 34, borderWidth: BORDER, borderColor: "#FFFFFF", alignItems: "center", justifyContent: "center" },
+  watchStarActive: { backgroundColor: "#FFFFFF", borderColor: "#FFFFFF" },
   statusRunning: { backgroundColor: colors.surfaceSecondary },
   statusDone: { backgroundColor: colors.success, borderColor: colors.success },
   statusError: { backgroundColor: colors.warning },
@@ -488,7 +486,7 @@ const styles = StyleSheet.create({
   segment: { flexDirection: "row", borderBottomWidth: BORDER, borderBottomColor: colors.borderStrong },
   segBtn: { flex: 1, height: 44, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
   segDivider: { borderRightWidth: BORDER, borderRightColor: colors.borderStrong },
-  segActive: { backgroundColor: colors.surfaceInverse },
+  segActive: { backgroundColor: colors.brand },
   segText: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1 },
 
   scroll: { flex: 1 },

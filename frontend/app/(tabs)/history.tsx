@@ -5,8 +5,9 @@ import { useRouter, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { Trash, CaretRight, FolderOpen } from "phosphor-react-native";
 
-import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
+import { colors, fonts, spacing, BORDER, verdictColors, accentAt } from "@/src/theme";
 import { api, Analysis } from "@/src/api";
+import { ScreenHeader } from "@/src/components/ScreenHeader";
 
 function fmtDate(iso: string): string {
   try {
@@ -80,11 +81,11 @@ export default function HistoryScreen() {
   );
 
   const renderItem = useCallback(
-    ({ item }: { item: Analysis }) => (
+    ({ item, index }: { item: Analysis; index: number }) => (
       <Pressable
         testID={`history-row-${item.symbol}`}
         onPress={() => router.push(`/analysis/${item.id}`)}
-        style={styles.row}
+        style={[styles.row, { borderLeftWidth: 5, borderLeftColor: item.verdict ? verdictColors(item.verdict.decision).bg : accentAt(index) }]}
       >
         <View style={styles.rowMain}>
           <Text style={styles.rowSymbol}>{item.symbol}</Text>
@@ -110,10 +111,7 @@ export default function HistoryScreen() {
 
   return (
     <View style={styles.root}>
-      <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Text style={styles.brand}>DECISION LOG</Text>
-        <Text style={styles.tagline}>{`// ${items.length} ANALYSES ON RECORD`}</Text>
-      </View>
+      <ScreenHeader title="DECISION LOG" subtitle={`// ${items.length} ANALYSES ON RECORD`} insetsTop={insets.top} />
 
       {loading ? (
         <View style={styles.center}>
