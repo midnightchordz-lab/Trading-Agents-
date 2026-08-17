@@ -48,6 +48,9 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
 - **Round-Table Debate**: extra step in the pipeline generates a structured `debate` (Bull/Bear/Fundamentals arguments + agreements/disagreements + recommendation), shown as a "ROUND TABLE DEBATE" section in the VERDICT view BELOW the existing single-verdict flow (kept intact). Backend stores `analysis.debate`.
 - Verified: 13/13 new backend pytest pass; all four features validated by the testing agent + screenshots.
 
+## Added (2026-06-16, session 4)
+- **Shareable Verdict card**: a "SHARE THIS VERDICT" button in the analysis VERDICT view opens a preview modal rendering a branded card (symbol, live price + sparkline, colored BUY/SELL/HOLD block with confidence bar, thesis, date + "NOT FINANCIAL ADVICE"). Captured to PNG via `react-native-view-shot` and shared through the native sheet via `expo-sharing` (`src/components/ShareCard.tsx`). Web preview shows the card but sharing is native-only (Expo Go / device).
+
 ## Backlog / Remaining
 - **P1**: Kotak Neo integration for live India-broker quotes + (optional) order placement — needs user credentials; complex session auth.
 - **P1**: Price chart range toggle (1D/1W/1M/1Y) on the quote card.

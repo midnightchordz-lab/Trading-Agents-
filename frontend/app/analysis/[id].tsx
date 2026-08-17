@@ -1,15 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator, StyleSheet } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator, StyleSheet, Modal } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { CaretLeft, CaretDown, CaretRight, Warning, Star } from "phosphor-react-native";
+import * as Sharing from "expo-sharing";
+import ViewShot from "react-native-view-shot";
+import { CaretLeft, CaretDown, CaretRight, Warning, Star, ShareNetwork } from "phosphor-react-native";
 
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
 import { api, Analysis, AgentMessageT } from "@/src/api";
 import { QuoteCard } from "@/src/components/QuoteCard";
 import { AgentMessage } from "@/src/components/AgentMessage";
 import { VerdictBlock } from "@/src/components/VerdictBadge";
+import { ShareCard } from "@/src/components/ShareCard";
 import { PHASE_LABEL, PHASE_ORDER, PhaseKey } from "@/src/agents";
 import { useWatchlist } from "@/src/watchlist";
 
@@ -31,8 +34,12 @@ export default function AnalysisScreen() {
   const [tab, setTab] = useState<Tab>("debate");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({ decision: true });
   const [blink, setBlink] = useState(true);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [shareErr, setShareErr] = useState<string | null>(null);
 
   const scrollRef = useRef<ScrollView>(null);
+  const shotRef = useRef<ViewShot>(null);
   const prevCount = useRef(0);
   const prevStatus = useRef<string | undefined>(undefined);
   const initedTab = useRef(false);
@@ -103,6 +110,31 @@ export default function AnalysisScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setExpanded((e) => ({ ...e, [phase]: !e[phase] }));
   }, []);
+
+  const onShare = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setShareErr(null);
+    setShareOpen(true);
+  }, []);
+
+  const doShare = useCallback(async () => {
+    try {
+      setSharing(true);
+      setShareErr(null);
+      const uri = await shotRef.current?.capture?.();
+      if (!uri) throw new Error("capture failed");
+      const available = await Sharing.isAvailableAsync();
+      if (available) {
+        await Sharing.shareAsync(uri, { mimeType: "image/png", dialogTitle: `${analysis?.symbol} verdict` });
+      } else {
+        setShareErr("Sharing isn't available here — open the app on your phone to share.");
+      }
+    } catch {
+      setShareErr("Couldn't generate the image. Please try again.");
+    } finally {
+      setSharing(false);
+    }
+  }, [analysis]);
 
   if (!analysis) {
     return (
@@ -190,9 +222,37 @@ export default function AnalysisScreen() {
         ) : tab === "debate" ? (
           <DebateView analysis={analysis} running={running} blink={blink} currentAgent={currentAgent} />
         ) : (
-          <VerdictView analysis={analysis} grouped={grouped} expanded={expanded} toggle={toggle} running={running} />
+          <VerdictView analysis={analysis} grouped={grouped} expanded={expanded} toggle={toggle} running={running} onShare={onShare} />
         )}
       </ScrollView>
+
+      <Modal visible={shareOpen} transparent animationType="fade" onRequestClose={() => setShareOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalInner}>
+            <ViewShot ref={shotRef} options={{ format: "png", quality: 1 }} style={styles.shotWrap}>
+              {analysis.verdict ? (
+                <ShareCard symbol={analysis.symbol} name={analysis.name} verdict={analysis.verdict} quote={analysis.quote} />
+              ) : null}
+            </ViewShot>
+            {shareErr ? <Text style={styles.shareErr}>{shareErr}</Text> : null}
+            <View style={styles.modalBtns}>
+              <Pressable testID="share-close-button" onPress={() => setShareOpen(false)} style={[styles.modalBtn, styles.modalBtnGhost]}>
+                <Text style={styles.modalBtnGhostText}>CLOSE</Text>
+              </Pressable>
+              <Pressable testID="share-image-button" onPress={doShare} disabled={sharing} style={[styles.modalBtn, styles.modalBtnPrimary]}>
+                {sharing ? (
+                  <ActivityIndicator color={colors.onSurface} />
+                ) : (
+                  <>
+                    <ShareNetwork size={18} color={colors.onSurface} weight="bold" />
+                    <Text style={styles.modalBtnPrimaryText}>SHARE IMAGE</Text>
+                  </>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -253,12 +313,14 @@ function VerdictView({
   expanded,
   toggle,
   running,
+  onShare,
 }: {
   analysis: Analysis;
   grouped: Record<string, AgentMessageT[]>;
   expanded: Record<string, boolean>;
   toggle: (p: string) => void;
   running: boolean;
+  onShare: () => void;
 }) {
   const verdict = analysis.verdict;
   const currency = analysis.quote?.currency;
@@ -311,6 +373,11 @@ function VerdictView({
           ))}
         </View>
       ) : null}
+
+      <Pressable testID="open-share-button" onPress={onShare} style={styles.shareVerdictBtn}>
+        <ShareNetwork size={18} color={colors.onSurfaceInverse} weight="bold" />
+        <Text style={styles.shareVerdictText}>SHARE THIS VERDICT</Text>
+      </Pressable>
 
       {analysis.debate ? (
         <View>
@@ -488,4 +555,28 @@ const styles = StyleSheet.create({
   errorBox: { borderWidth: BORDER, borderColor: colors.error, backgroundColor: colors.error, padding: spacing.xl, alignItems: "center", gap: spacing.sm },
   errorTitle: { fontFamily: fonts.display, fontSize: 22, color: colors.onError },
   errorBody: { fontFamily: fonts.mono, fontSize: 12, lineHeight: 18, color: colors.onError, textAlign: "center" },
+
+  shareVerdictBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    height: 54,
+    backgroundColor: colors.surfaceInverse,
+    borderWidth: BORDER,
+    borderColor: colors.borderStrong,
+    marginTop: spacing.lg,
+  },
+  shareVerdictText: { fontFamily: fonts.monoBold, fontSize: 14, letterSpacing: 1, color: colors.onSurfaceInverse },
+
+  modalBackdrop: { flex: 1, backgroundColor: "rgba(9,9,11,0.9)", alignItems: "center", justifyContent: "center", padding: spacing.lg },
+  modalInner: { width: "100%", alignItems: "center", gap: spacing.lg },
+  shotWrap: { backgroundColor: colors.surface },
+  shareErr: { fontFamily: fonts.mono, fontSize: 11, lineHeight: 16, color: colors.onSurfaceInverse, textAlign: "center", paddingHorizontal: spacing.lg },
+  modalBtns: { flexDirection: "row", gap: spacing.md, width: 330 },
+  modalBtn: { flex: 1, height: 52, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: spacing.sm },
+  modalBtnGhost: { borderWidth: BORDER, borderColor: colors.onSurfaceInverse, backgroundColor: "transparent" },
+  modalBtnGhostText: { fontFamily: fonts.monoBold, fontSize: 13, letterSpacing: 1, color: colors.onSurfaceInverse },
+  modalBtnPrimary: { backgroundColor: colors.surface },
+  modalBtnPrimaryText: { fontFamily: fonts.monoBold, fontSize: 13, letterSpacing: 1, color: colors.onSurface },
 });
