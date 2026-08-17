@@ -387,35 +387,35 @@ export default function AnalyzeScreen() {
         )}
       </ScrollView>
 
-      {/* Sticky CTA */}
-      <KeyboardStickyView offset={{ closed: 0, opened: spacing.sm }}>
-        <View style={[styles.ctaWrap, { paddingBottom: insets.bottom + spacing.sm }]}>
-          <Pressable
-            testID="execute-analysis-button"
-            onPress={onExecute}
-            disabled={!selected || submitting}
-            style={styles.cta}
-          >
-            <LinearGradient
-              colors={!selected || submitting ? ["#D4D4D8", "#D4D4D8"] : (CTA_GRADIENT as unknown as string[])}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.ctaGrad}
+      {/* Sticky CTA — only shown once a ticker is selected */}
+      {selected ? (
+        <KeyboardStickyView offset={{ closed: 0, opened: spacing.sm }}>
+          <View style={[styles.ctaWrap, { paddingBottom: insets.bottom + spacing.sm }]}>
+            <Pressable
+              testID="execute-analysis-button"
+              onPress={onExecute}
+              disabled={submitting}
+              style={styles.cta}
             >
-              {submitting ? (
-                <ActivityIndicator color={colors.onSurfaceInverse} />
-              ) : (
-                <>
-                  <Text style={[styles.ctaText, !selected && styles.ctaTextDisabled]}>
-                    {selected ? `EXECUTE ANALYSIS · ${selected.symbol}` : "SELECT A TICKER"}
-                  </Text>
-                  {selected ? <ArrowRight size={20} color={colors.onSurfaceInverse} weight="bold" /> : null}
-                </>
-              )}
-            </LinearGradient>
-          </Pressable>
-        </View>
-      </KeyboardStickyView>
+              <LinearGradient
+                colors={submitting ? ["#D4D4D8", "#D4D4D8"] : (CTA_GRADIENT as unknown as string[])}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.ctaGrad}
+              >
+                {submitting ? (
+                  <ActivityIndicator color={colors.onSurfaceInverse} />
+                ) : (
+                  <>
+                    <Text style={styles.ctaText}>{`EXECUTE ANALYSIS · ${selected.symbol}`}</Text>
+                    <ArrowRight size={20} color={colors.onSurfaceInverse} weight="bold" />
+                  </>
+                )}
+              </LinearGradient>
+            </Pressable>
+          </View>
+        </KeyboardStickyView>
+      ) : null}
     </View>
   );
 }
