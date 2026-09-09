@@ -56,6 +56,11 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
 - Shared gradient `ScreenHeader` (indigo→violet→pink) across all screens; StatusBar switched to light.
 - Colorful details: category chips get per-category color + dots; market cards get rotating accent top-bars; bottom tab active color per tab (blue/pink/teal); brand-blue active segmented control + chart-range chips; agent message cards get a colored left accent by sentiment/phase; history rows get a verdict/accent left bar; agent roster icons colored by team; gradient EXECUTE / RUN COMPARISON CTAs. Kept the crisp brutalist structure.
 
+## Upgraded (2026-06-17, session 6) — Expo SDK 57
+- Bumped Expo SDK 54 → **57** (react-native 0.81 → **0.86**, react 19.1 → **19.2**) via `expo install expo@^57` + `expo install --fix`, because the latest Expo Go (SDK 57) can't open SDK 54 projects. All expo-* + third-party libs (reanimated 4.5, worklets 0.10, keyboard-controller 1.21, view-shot 5.1, svg 15.15, linear-gradient 57, router 57) aligned. Web bundle + all screens verified on the app's own preview domain; lint clean.
+- **Removed the "SELECT A TICKER" placeholder CTA** — the gradient EXECUTE button now only appears once a ticker is selected.
+- NOTE: user must **redeploy** so production runs SDK 57 (matching their Expo Go).
+
 ## Backlog / Remaining
 - **P1**: Kotak Neo integration for live India-broker quotes + (optional) order placement — needs user credentials; complex session auth.
 - **P1**: Price chart range toggle (1D/1W/1M/1Y) on the quote card.
