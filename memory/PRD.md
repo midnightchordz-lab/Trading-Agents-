@@ -78,6 +78,11 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
 - Offer Kotak Neo wiring once the user shares credentials.
 - Add watchlist + chart range toggle if requested.
 
+## Portfolio Tab — Fix Pass (2026-06-17, session 7) — DONE
+- Replaced `portfolio.tsx` in full per `PORTFOLIO_TAB_FIX.md`: (1) symbol search-as-you-type in ADD HOLDING (api.search dropdown, tap fills field), (2) single-holding hint "Add at least one more holding to run the optimizer.", (3) "ANALYZE MISSING (N) & RE-RUN" button that runs the existing /api/analyze→poll flow per missing symbol ("ANALYZING {symbol}…") then auto re-optimizes. Frontend-only; `git diff` outside this file empty; lint clean.
+- Verified by testing agent (iteration_7): all 6 criteria pass, incl. real PLBY/BBAI analyze-missing → auto re-run.
+- Open minor findings (in spec-verbatim code, NOT changed pending user OK): (a) search dropdown re-opens ~300ms after tap-select as the debounce effect refires; (b) ADD HOLDING form row clips on <400px until a field is focused; (c) analyzeMissing polling has no timeout guard.
+
 ## Portfolio Tab (PyPortfolioOpt) — (2026-06-17, session 7) — DONE
 - **Additive**: new `backend/portfolio_optimizer.py` (HRP / max-Sharpe / min-vol via PyPortfolioOpt 1.6.0; Black-Litterman blending cached agent verdicts as Idzorek views; discrete allocation; ADD/HOLD/TRIM/SELL classifier) + `POST /api/portfolio/optimize` (reads latest completed verdict per symbol, never runs the pipeline). server.py change = import line + one block before Routes (0 removed lines). New dep `pyportfolioopt`. Tests: 8 module tests + 51 full suite pass.
 - **Frontend**: new **PORTFOLIO** tab (lime wallet) — add holdings (manual + watchlist quick-add, persisted via storage util), objective picker, "Use agent views" toggle, Run Optimizer → sorted SELL/TRIM/ADD/HOLD list with current→suggested weights + exp return/vol/Sharpe + notes. Types/method added to api.ts; tab registered in _layout.tsx.

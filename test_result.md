@@ -270,3 +270,35 @@
 ## agent_communication:
 ##     -agent: "main"
 ##     -message: "Portfolio tab (PyPortfolioOpt). Verify: (A) BACKEND POST /api/portfolio/optimize with 2-3 US symbols (AAPL/MSFT/NVDA) qty+avg_price, objective 'hrp' then 'max_sharpe' -> 200, suggested_weights sum ~1.0, actions list with ADD/TRIM/HOLD/SELL, sharpe/expected_return/volatility present, suggested_shares within total_value. (B) BACKEND use_agent_views=true: first POST /api/analyze for one of the symbols (e.g. AAPL) and let it complete so a cached verdict exists, then optimize with use_agent_views=true and objective 'max_sharpe' -> that symbol appears in used_agent_views_for; a symbol with no cached analysis appears in missing_agent_view_for; endpoint still returns a full result. (C) BACKEND edge: 1 holding -> 400; duplicate symbols -> 400; unit tests `cd /app/backend && python -m pytest tests/test_portfolio_optimizer.py -q` (8 pass) and full suite still pass (51). (D) FRONTEND https://trade-agent-app.preview.emergentagent.com/portfolio : new PORTFOLIO tab in bottom bar; add 2 holdings (AAPL 10@150, MSFT 5@300); RUN OPTIMIZER shows SUGGESTED ACTIONS with current->suggested % and stats; the not-financial-advice note shows. PERSISTENCE: change holdings, reload same URL (single browser context), holdings still present. NOTE: backend already smoke-verified; existing endpoints/pipeline untouched (server.py diff additive)."
+
+## user_problem_statement: "PORTFOLIO_TAB_FIX.md — replace frontend/app/(tabs)/portfolio.tsx in full to (1) add symbol search-as-you-type in the ADD HOLDING field (api.search, dropdown up to 6, tap fills field), (2) show a hint 'Add at least one more holding to run the optimizer.' when exactly 1 holding, (3) add an 'ANALYZE MISSING (N) & RE-RUN' button when use_agent_views is on and some symbols lack a cached verdict — it runs api.analyze then polls api.getAnalysis for each missing symbol, showing 'ANALYZING {symbol}…', then re-runs the optimizer. No backend/api.ts/_layout/other-file changes; only portfolio.tsx."
+
+## frontend:
+##   - task: "Portfolio tab fix — symbol search + analyze-missing & re-run"
+##     implemented: true
+##     working: "NA"
+##     file: "frontend/app/(tabs)/portfolio.tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         -working: "NA"
+##         -agent: "main"
+##         -comment: "Replaced portfolio.tsx in full per spec (search dropdown, 1-holding hint, analyze-missing&re-run). git diff outside this file empty; expo lint clean. Smoke: typing 'APP' shows dropdown (AAPL/APLD/AMAT...), single holding shows the hint. Needs verification of the analyze-missing & re-run flow and dropdown tap-to-fill."
+
+## metadata:
+##   created_by: "main_agent"
+##   version: "1.5"
+##   test_sequence: 7
+##   run_ui: true
+
+## test_plan:
+##   current_focus:
+##     - "Portfolio tab fix — symbol search + analyze-missing & re-run"
+##   stuck_tasks: []
+##   test_all: false
+##   test_priority: "high_first"
+
+## agent_communication:
+##     -agent: "main"
+##     -message: "Frontend-only fix to /portfolio (portfolio.tsx replaced in full; nothing else changed). Verify on https://trade-agent-app.preview.emergentagent.com/portfolio : (1) Typing 2+ chars in the SEARCH SYMBOL field shows a dropdown of up to 6 matches within ~1s; tapping a row fills the symbol field and closes the dropdown. (2) With exactly ONE holding added, the hint 'Add at least one more holding to run the optimizer.' shows (no OPTIMIZE card). (3) Add 2+ holdings incl. at least one NOT previously analyzed, turn ON 'Use agent views', RUN OPTIMIZER -> results show a 'ANALYZE MISSING (N) & RE-RUN' button. (4) Tapping it runs /api/analyze for each missing symbol (button shows 'ANALYZING {symbol}…' during each) and auto re-runs the optimizer when done, and the missing-view note shrinks/disappears. NOTE: analyze-missing calls the real LLM pipeline, one symbol at a time — each analysis can take ~40-60s, so step (4) may take a few minutes for 2 symbols; please allow ample time. (5) Watchlist quick-add chips still work. Backend unchanged (git diff outside portfolio.tsx empty)."

@@ -5,7 +5,7 @@ import { ScreenHeader } from "@/src/components/ScreenHeader";
 import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 import { useWatchlist } from "@/src/watchlist";
-import { api } from "@/src/api";
+import { api, SearchResult } from "@/src/api";
 
 // Portfolio tab: manual holdings + watchlist quick-add, then optimize against
 // PyPortfolioOpt via POST /api/portfolio/optimize. Holdings persist locally;
@@ -39,6 +39,43 @@ export default function PortfolioScreen() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [analyzingMissing, setAnalyzingMissing] = useState<string | null>(null); // symbol currently being analyzed
+
+  // Symbol search-as-you-type (mirrors the Analyze tab's search), so the user
+  // doesn't need to already know the exact ticker.
+  useEffect(() => {
+    const q = form.symbol.trim();
+    if (q.length < 1) {
+      setSearchResults([]);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    const t = setTimeout(() => {
+      api
+        .search(q)
+        .then((r) => {
+          if (!cancelled) setSearchResults(r.results.slice(0, 6));
+        })
+        .catch(() => {
+          if (!cancelled) setSearchResults([]);
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [form.symbol]);
+
+  const pickSearchResult = (r: SearchResult) => {
+    setForm((f) => ({ ...f, symbol: r.symbol }));
+    setSearchResults([]);
+  };
 
   useEffect(() => {
     (async () => {
@@ -68,6 +105,40 @@ export default function PortfolioScreen() {
     }
     persist([...holdings, { symbol, quantity: String(quantity), avgPrice: String(avgPrice) }]);
     setForm({ symbol: "", quantity: "", avgPrice: "" });
+    setSearchResults([]);
+  };
+
+  // Runs the existing /api/analyze -> poll /api/analysis/{id} flow for symbols
+  // that have no cached verdict yet, then re-runs the optimizer. Does not add
+  // any new endpoint or touch the pipeline — it drives the same flow the
+  // Analyze tab already uses, one symbol at a time.
+  const analyzeMissing = async () => {
+    const missing: string[] = result?.missing_agent_view_for || [];
+    if (!missing.length) return;
+    for (const symbol of missing) {
+      setAnalyzingMissing(symbol);
+      try {
+        const started = await api.analyze(symbol);
+        await new Promise<void>((resolve) => {
+          const interval = setInterval(async () => {
+            try {
+              const a = await api.getAnalysis(started.id);
+              if (a.status === "completed" || a.status === "error") {
+                clearInterval(interval);
+                resolve();
+              }
+            } catch {
+              clearInterval(interval);
+              resolve();
+            }
+          }, 1500);
+        });
+      } catch {
+        // one symbol failing shouldn't block the rest
+      }
+    }
+    setAnalyzingMissing(null);
+    await runOptimize();
   };
 
   const addFromWatchlist = (symbol: string) => {
@@ -122,20 +193,38 @@ export default function PortfolioScreen() {
 
   return (
     <View style={styles.screen}>
-      <ScreenHeader title="PORTFOLIO" subtitle="Keep, trim or sell — optimized" insetsTop={insets.top} />
+      <ScreenHeader title="PORTFOLIO" subtitle="Keep, trim or sell — optimized" />
       <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
         {/* Add holding */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>ADD HOLDING</Text>
           <View style={styles.formRow}>
-            <TextInput
-              placeholder="SYMBOL"
-              value={form.symbol}
-              onChangeText={(t) => setForm((f) => ({ ...f, symbol: t.toUpperCase() }))}
-              autoCapitalize="characters"
-              style={[styles.input, { flex: 1.4 }]}
-              placeholderTextColor={colors.onSurfaceTertiary}
-            />
+            <View style={{ flex: 1.4 }}>
+              <TextInput
+                placeholder="SEARCH SYMBOL"
+                value={form.symbol}
+                onChangeText={(t) => setForm((f) => ({ ...f, symbol: t.toUpperCase() }))}
+                autoCapitalize="characters"
+                style={styles.input}
+                placeholderTextColor={colors.onSurfaceTertiary}
+              />
+              {searchResults.length > 0 ? (
+                <View style={styles.searchDropdown}>
+                  {searchResults.map((r) => (
+                    <Pressable key={r.symbol} onPress={() => pickSearchResult(r)} style={styles.searchRow}>
+                      <Text style={styles.searchSymbol}>{r.symbol}</Text>
+                      <Text style={styles.searchName} numberOfLines={1}>
+                        {r.name}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : searching ? (
+                <View style={styles.searchDropdown}>
+                  <ActivityIndicator color={colors.onSurface} style={{ padding: spacing.sm }} />
+                </View>
+              ) : null}
+            </View>
             <TextInput
               placeholder="QTY"
               value={form.quantity}
@@ -198,6 +287,9 @@ export default function PortfolioScreen() {
         ) : null}
 
         {/* Controls */}
+        {holdings.length > 0 && holdings.length < 2 ? (
+          <Text style={styles.hint}>Add at least one more holding to run the optimizer.</Text>
+        ) : null}
         {holdings.length >= 2 ? (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>OPTIMIZE</Text>
@@ -232,10 +324,28 @@ export default function PortfolioScreen() {
           <View style={styles.card}>
             <Text style={styles.cardTitle}>SUGGESTED ACTIONS</Text>
             {result.missing_agent_view_for?.length ? (
-              <Text style={styles.note}>
-                No cached analysis for {result.missing_agent_view_for.join(", ")} — run an analysis on those tickers first to
-                include their view.
-              </Text>
+              <View style={styles.missingBox}>
+                <Text style={styles.note}>
+                  No cached analysis for {result.missing_agent_view_for.join(", ")} — their weight is based on price
+                  history only.
+                </Text>
+                <Pressable
+                  onPress={analyzeMissing}
+                  style={styles.analyzeMissingBtn}
+                  disabled={analyzingMissing !== null}
+                >
+                  {analyzingMissing ? (
+                    <>
+                      <ActivityIndicator color={colors.onSurfaceInverse} size="small" />
+                      <Text style={styles.analyzeMissingText}>ANALYZING {analyzingMissing}…</Text>
+                    </>
+                  ) : (
+                    <Text style={styles.analyzeMissingText}>
+                      ANALYZE MISSING ({result.missing_agent_view_for.length}) & RE-RUN
+                    </Text>
+                  )}
+                </Pressable>
+              </View>
             ) : null}
             {actionsSorted.map((a: any) => {
               const { bg, fg } = verdictColors(a.action === "ADD" ? "BUY" : a.action === "SELL" ? "SELL" : "HOLD");
@@ -359,4 +469,30 @@ const styles = StyleSheet.create({
   statLabel: { fontFamily: fonts.monoBold, fontSize: 9, color: colors.onSurfaceTertiary },
   statValue: { fontFamily: fonts.mono, fontSize: 14, color: colors.onSurface, marginTop: 2 },
   note: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary, padding: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border },
+  hint: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurfaceTertiary, marginBottom: spacing.lg, paddingHorizontal: spacing.xs },
+  searchDropdown: {
+    position: "absolute",
+    top: 44,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    backgroundColor: colors.surface,
+    borderWidth: BORDER,
+    borderColor: colors.borderStrong,
+  },
+  searchRow: { paddingHorizontal: spacing.sm, paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border },
+  searchSymbol: { fontFamily: fonts.monoBold, fontSize: 12, color: colors.onSurface },
+  searchName: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary },
+  missingBox: { borderTopWidth: 1, borderTopColor: colors.border },
+  analyzeMissingBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.brand,
+    marginHorizontal: spacing.sm,
+    marginBottom: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  analyzeMissingText: { fontFamily: fonts.monoBold, fontSize: 10, letterSpacing: 0.5, color: colors.onSurfaceInverse },
 });
