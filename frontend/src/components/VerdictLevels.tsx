@@ -1,11 +1,16 @@
 import React from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, Pressable, StyleSheet } from "react-native";
+import * as Haptics from "expo-haptics";
+import { Bell, BellRinging } from "phosphor-react-native";
 import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
 import type { Verdict, Quote } from "@/src/api";
+import { useAlerts } from "@/src/alerts";
 
 type Props = {
   verdict: Verdict;
   quote?: Quote | null;
+  symbol: string;
+  name: string;
 };
 
 function fmt(n?: number | null, currency?: string): string {
@@ -25,14 +30,29 @@ function pct(from?: number | null, to?: number | null): string {
  * live price, the target, and the stop loss. Sits directly under the
  * TradingView chart so the levels read against the live candles.
  */
-export function VerdictLevels({ verdict, quote }: Props) {
+export function VerdictLevels({ verdict, quote, symbol, name }: Props) {
   const decision = verdict.decision;
   const isHold = decision === "HOLD";
   const price = quote?.price ?? null;
   const currency = quote?.currency;
   const { bg, fg } = verdictColors(decision);
+  const { add, remove, findActive, evaluate } = useAlerts();
 
-  const rows: { label: string; value: string; delta: string; color: string; fg: string }[] = [
+  // Evaluate any standing alerts against the live price when levels render.
+  React.useEffect(() => {
+    if (price != null) evaluate(symbol, price);
+  }, [symbol, price, evaluate]);
+
+  type Row = {
+    label: string;
+    value: string;
+    delta: string;
+    color: string;
+    fg: string;
+    alert?: { price: number; direction: "above" | "below"; label: string };
+  };
+
+  const rows: Row[] = [
     {
       label: isHold ? "HOLD · NO ENTRY" : `${decision} ENTRY`,
       value: fmt(price, currency),
@@ -46,6 +66,10 @@ export function VerdictLevels({ verdict, quote }: Props) {
       delta: pct(price, verdict.target_price),
       color: colors.success,
       fg: colors.onSuccess,
+      alert:
+        verdict.target_price != null && price != null
+          ? { price: verdict.target_price, direction: verdict.target_price >= price ? "above" : "below", label: "TARGET" }
+          : undefined,
     },
     {
       label: "STOP LOSS",
@@ -53,23 +77,56 @@ export function VerdictLevels({ verdict, quote }: Props) {
       delta: pct(price, verdict.stop_loss),
       color: colors.error,
       fg: colors.onError,
+      alert:
+        verdict.stop_loss != null && price != null
+          ? { price: verdict.stop_loss, direction: verdict.stop_loss <= price ? "below" : "above", label: "STOP LOSS" }
+          : undefined,
     },
   ];
 
+  const onToggleAlert = (a: NonNullable<Row["alert"]>) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const existing = findActive(symbol, a.price, a.direction);
+    if (existing) {
+      remove(existing.id);
+    } else {
+      add({ symbol, name, label: a.label, price: a.price, direction: a.direction, currency: currency || undefined });
+    }
+  };
+
   return (
     <View testID="verdict-levels" style={styles.wrap}>
-      {rows.map((r, i) => (
-        <View key={r.label} style={[styles.row, i < rows.length - 1 && styles.rowBorder]}>
-          <View style={[styles.swatch, { backgroundColor: r.color }]} />
-          <Text style={styles.label}>{r.label}</Text>
-          <Text style={styles.value}>{r.value}</Text>
-          <View style={[styles.deltaBox, { backgroundColor: r.color }]}>
-            <Text style={[styles.delta, { color: r.fg }]}>{r.delta || "—"}</Text>
+      {rows.map((r, i) => {
+        const set = r.alert ? !!findActive(symbol, r.alert.price, r.alert.direction) : false;
+        return (
+          <View key={r.label} style={[styles.row, i < rows.length - 1 && styles.rowBorder]}>
+            <View style={[styles.swatch, { backgroundColor: r.color }]} />
+            <Text style={styles.label}>{r.label}</Text>
+            <Text style={styles.value}>{r.value}</Text>
+            <View style={[styles.deltaBox, { backgroundColor: r.color }]}>
+              <Text style={[styles.delta, { color: r.fg }]}>{r.delta || "—"}</Text>
+            </View>
+            {r.alert ? (
+              <Pressable
+                testID={`alert-toggle-${r.label.replace(/\s+/g, "-").toLowerCase()}`}
+                onPress={() => onToggleAlert(r.alert!)}
+                hitSlop={8}
+                style={[styles.bell, set && styles.bellActive]}
+              >
+                {set ? (
+                  <BellRinging size={16} color={colors.onSurfaceInverse} weight="fill" />
+                ) : (
+                  <Bell size={16} color={colors.onSurface} weight="regular" />
+                )}
+              </Pressable>
+            ) : (
+              <View style={styles.bellSpacer} />
+            )}
           </View>
-        </View>
-      ))}
+        );
+      })}
       <Text style={styles.note}>
-        Levels from the committee verdict · {verdict.time_horizon} horizon · not financial advice
+        Tap the bell to set a price alert · {verdict.time_horizon} horizon · not financial advice
       </Text>
     </View>
   );
@@ -95,6 +152,9 @@ const styles = StyleSheet.create({
   value: { fontFamily: fonts.mono, fontSize: 13, color: colors.onSurface },
   deltaBox: { minWidth: 58, paddingHorizontal: 6, paddingVertical: 2, alignItems: "center" },
   delta: { fontFamily: fonts.monoBold, fontSize: 10 },
+  bell: { width: 30, height: 30, borderWidth: 1.5, borderColor: colors.borderStrong, alignItems: "center", justifyContent: "center" },
+  bellActive: { backgroundColor: colors.surfaceInverse, borderColor: colors.borderStrong },
+  bellSpacer: { width: 30, height: 30 },
   note: {
     fontFamily: fonts.mono,
     fontSize: 9,

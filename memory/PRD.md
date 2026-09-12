@@ -68,9 +68,19 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
 - **P2**: Compare two tickers side-by-side; share a verdict as an image.
 - **P2**: Re-run "reflection" (learn from realized return vs prior verdict) like the original framework's decision log.
 
+## News · Alerts · Fear & Greed (2026-06-17, session 7) — DONE
+- **News feed**: new backend `GET /api/news/{symbol}` (Yahoo Finance search, no key) + `NewsList` component showing headline, thumbnail, publisher and relative time in the VERDICT tab; tapping opens the article via `Linking`.
+- **Fear & Greed gauge**: `src/sentiment.ts` derives a 0-100 score from the committee verdict + confidence, the bull/bear balance of agent signals, and 1-day momentum. `FearGreedGauge` renders a 5-zone bar (red→green) with a marker + label under the verdict block. No extra data source.
+- **Price alerts (in-app, Expo-Go friendly)**: `src/alerts.tsx` store (AsyncStorage) + new **ALERTS tab**. Tap the bell on a TARGET / STOP LOSS level to set/clear an alert; alerts persist and are evaluated whenever a fresh live price arrives (analysis poll + Alerts-tab pull-to-refresh). On a crossing the user gets a haptic + in-app dialog "ping" (no push notifications / background work). Alerts tab shows live "now" price, delete, and clear-fired.
+- Verified end-to-end on the preview: gold analysis showed gauge 88/Extreme Greed, both alert bells active, alerts listed with live prices, headlines with thumbnails.
+
 ## Next Tasks
 - Offer Kotak Neo wiring once the user shares credentials.
 - Add watchlist + chart range toggle if requested.
+
+## NSE/BSE in-app OHLC fallback chart — Part 1b (2026-06-17, session 7) — DONE
+- **New additive backend endpoint** `GET /api/ohlc/{symbol}` (appended after `/chart`; `fetch_ohlc_sync`) returning `{symbol, range, interval, currency, bars[]}` with time/open/high/low/close/volume. No pipeline/prompt/existing-endpoint changes; `git diff server.py` is purely additive. New tests `backend/tests/test_ohlc.py` (3) pass; full suite 28 pass.
+- **Frontend**: `TradingViewChart` now routes via `widgetSupports()` — `.NS` / `.BO` / `^NSEI` / `^BSESN` fall back to the new `LightweightChart` (TradingView open-source Lightweight Charts in a WebView/iframe, no new deps): candles + volume, EMA 20/50, Bollinger 20, RSI 14 pane, MACD 12/26/9 pane, own 1D/1W/1M/1Y chips, and the committee's entry/target/stop drawn as price lines. Non-Indian symbols keep the TradingView widget unchanged. Analysis screen passes `levels`+`livePrice` and hides its outer range bar for fallback symbols. Verified end-to-end by testing agent (iteration_3): canvases paint, widget branch untouched.
 
 ## TradingView Charts (2026-06-17, session 7) — DONE
 - Wired the interactive TradingView Advanced Chart into the Analysis screen **VERDICT tab** (frontend only, no backend changes).

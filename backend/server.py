@@ -158,6 +158,34 @@ def search_sync(q: str) -> list:
     return out
 
 
+def fetch_news_sync(symbol: str) -> list:
+    url = "https://query1.finance.yahoo.com/v1/finance/search"
+    r = _yf_get(url, {"q": symbol, "quotesCount": 0, "newsCount": 15})
+    r.raise_for_status()
+    data = r.json()
+    out = []
+    for it in data.get("news", []):
+        title = it.get("title")
+        link = it.get("link")
+        if not title or not link:
+            continue
+        thumb = None
+        try:
+            res = (it.get("thumbnail") or {}).get("resolutions") or []
+            if res:
+                thumb = res[0].get("url")
+        except Exception:
+            thumb = None
+        out.append({
+            "title": title,
+            "publisher": it.get("publisher"),
+            "link": link,
+            "published": it.get("providerPublishTime"),
+            "thumbnail": thumb,
+        })
+    return out
+
+
 # ----------------------------------------------------------------------------
 # Agent personas
 # ----------------------------------------------------------------------------
@@ -545,6 +573,63 @@ async def chart(symbol: str, range: str = "1M"):
     except Exception as e:
         logger.warning(f"chart failed for {symbol}: {e}")
         raise HTTPException(status_code=404, detail="Chart unavailable for this ticker")
+
+
+# --- OHLC candles (additive; used by the in-app fallback chart for NSE/BSE) ---
+def fetch_ohlc_sync(symbol: str, rng: str) -> dict:
+    range_, interval = RANGE_MAP.get(rng, ("1mo", "1d"))
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    r = _yf_get(url, {"range": range_, "interval": interval})
+    r.raise_for_status()
+    result = r.json()["chart"]["result"][0]
+    ts = result.get("timestamp") or []
+    q = (result.get("indicators", {}).get("quote") or [{}])[0]
+    o, h, l, c, v = (q.get(k) or [] for k in ("open", "high", "low", "close", "volume"))
+    bars = []
+    for i, t in enumerate(ts):
+        try:
+            if None in (o[i], h[i], l[i], c[i]):
+                continue
+            bars.append({
+                "time": int(t),
+                "open": round(float(o[i]), 4),
+                "high": round(float(h[i]), 4),
+                "low": round(float(l[i]), 4),
+                "close": round(float(c[i]), 4),
+                "volume": int(v[i] or 0) if i < len(v) else 0,
+            })
+        except (IndexError, TypeError, ValueError):
+            continue
+    meta = result.get("meta", {})
+    return {
+        "symbol": meta.get("symbol", symbol),
+        "range": rng,
+        "interval": interval,
+        "currency": meta.get("currency"),
+        "bars": bars[-500:],
+    }
+
+
+@api_router.get("/ohlc/{symbol}")
+async def ohlc(symbol: str, range: str = "1M"):
+    rng = range.upper()
+    if rng not in RANGE_MAP:
+        rng = "1M"
+    try:
+        return await asyncio.to_thread(fetch_ohlc_sync, symbol, rng)
+    except Exception as e:
+        logger.warning(f"ohlc failed for {symbol}: {e}")
+        raise HTTPException(status_code=404, detail="OHLC unavailable for this ticker")
+
+
+@api_router.get("/news/{symbol}")
+async def news(symbol: str):
+    try:
+        items = await asyncio.to_thread(fetch_news_sync, symbol)
+        return {"results": items}
+    except Exception as e:
+        logger.warning(f"news failed for {symbol}: {e}")
+        return {"results": []}
 
 
 async def get_market(category: str) -> list:

@@ -10,6 +10,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { WatchlistProvider } from "@/src/watchlist";
+import { AlertsProvider } from "@/src/alerts";
 
 // Disable logbox errors etc so that users can see the app
 // and agent works as expected.
@@ -49,12 +50,14 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <KeyboardProvider>
           <WatchlistProvider>
-            <StatusBar style="light" />
-            <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#FFFFFF" } }}>
-              <Stack.Screen name="(tabs)" />
-              <Stack.Screen name="analysis/[id]" />
-              <Stack.Screen name="compare" />
-            </Stack>
+            <AlertsProvider>
+              <StatusBar style="light" />
+              <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#FFFFFF" } }}>
+                <Stack.Screen name="(tabs)" />
+                <Stack.Screen name="analysis/[id]" />
+                <Stack.Screen name="compare" />
+              </Stack>
+            </AlertsProvider>
           </WatchlistProvider>
         </KeyboardProvider>
       </SafeAreaProvider>

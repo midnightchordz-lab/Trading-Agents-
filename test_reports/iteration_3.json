@@ -1,0 +1,31 @@
+{
+  "summary": "PART1B (TradingView fallback for NSE/BSE via in-app Lightweight Charts + additive GET /api/ohlc/{symbol}) VERIFIED END-TO-END. Backend: 3/3 pytest passing (test_ohlc.py) — RELIANCE.NS?range=1M returns 200 with symbol/range/interval/currency/bars[] where each bar has time/open/high/low/close/volume and low<=close<=high (bars length >5); AAPL?range=9Z falls back to range=='1M'; THIS_DOES_NOT_EXIST_XYZ returns 404. Existing endpoints unaffected: /api/quote/AAPL, /api/chart/AAPL?range=1M, /api/news/AAPL all still return 200. Frontend: RELIANCE.NS (fe57f968-…) verdict tab renders testID 'lightweight-chart' (NOT tradingview-chart), with header 'CHART · OWN DATA', RANGE chips 1D/1W/1M/1Y, and NO 'only available on TradingView' notice. Inspected the srcdoc iframe: 21 canvases mounted (main+RSI+MACD panes with time/price scales) — main pane canvases show 45000/45000 non-white sampled pixels confirming candles + indicators + price lines paint. Range chips 1D/1W/1M/1Y all reload without crash/blank. On GC=F (09f6b956-…) verdict tab correctly renders testID 'tradingview-chart' (header 'TRADINGVIEW', TVC:GOLD) — widget branch preserved with no behavior change. RCA for prior agent's blank-canvas observation confirmed: Playwright page-level screenshots do not capture cross-frame canvas paints; canvases DO draw (verified via iframe.evaluate on getImageData). Non-blocking: many 'Invalid language tag: en-US@posix' pageerrors emitted by @formatjs/intl inside the RN-web bundle (pre-existing, not caused by this change).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_ohlc.py",
+    "/app/test_reports/pytest/ohlc_results.xml"
+  ],
+  "action_items": [
+    "No action items — feature works as spec'd.",
+    "Optional/cosmetic: silence @formatjs 'Invalid language tag: en-US@posix' page errors by normalising the locale to 'en-US' at RN-web bootstrap (unrelated to PART1B)."
+  ],
+  "critical_code_review_comments": [
+    "LightweightChart uses `sandbox: allow-scripts allow-same-origin` on the web iframe. This is fine because the srcDoc HTML is app-controlled, but keep it strict.",
+    "buildHtml() embeds the OHLC bars inline in the iframe HTML. For very large `bars[]` this could grow the string; the backend already caps at 500 bars so it's bounded.",
+    "The web fallback path uses `React.createElement('iframe', ...)` which sidesteps react-native-webview correctly on web; native path uses WebView. Good separation.",
+    "server.py fetch_ohlc_sync silently skips bars with any None OHLC field — correct for Yahoo intraday holes. No _id leakage from Mongo (only endpoint that touches Mongo is analysis and it already projects _id:0)."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100% (3/3 new ohlc tests + all pre-existing endpoints still 200)", "frontend": "100% of the two exercised analyses (RELIANCE.NS fallback + GC=F widget)" },
+  "seed_data_creation": "None. Reused the two analysis ids provided in the review request.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "PART1B fallback pipeline: widgetSupports() in /app/frontend/src/tv.ts routes .NS/.BO/^NSEI/^BSESN to /app/frontend/src/components/LightweightChart.tsx which fetches /api/ohlc/{symbol}?range=X and renders 3 stacked TV Lightweight-Charts panes (main+vol+EMA20/50+BB20 with entry/target/stop priceLines, RSI 14 pane with 30/70 lines, MACD 12/26/9 pane with histogram). Web renders via iframe(srcDoc) — Playwright top-level screenshots CANNOT capture the iframe canvas paint; validate paint by iterating `page.frames`, finding url=='about:srcdoc', and running getImageData on the canvases to count non-white pixels. Non-supported symbols still fall through to TradingViewChart (testID tradingview-chart). Backend test file: /app/backend/tests/test_ohlc.py.",
+  "rca_of_issue": "The main-agent-reported 'blank canvas' in the Playwright screenshot is NOT a real bug — it is a screenshot-capture limitation: TV Lightweight Charts draw on <canvas> elements inside a same-origin `about:srcdoc` iframe, and Playwright's default page.screenshot() flattens iframe DOM but does not always re-composite in-frame WebGL/2D canvas raster into the outer PNG on headless Chromium (especially with sandbox='allow-scripts allow-same-origin'). Verified true paint by evaluating inside the iframe: 21 canvases mounted, main-pane canvases return 45000/45000 non-white pixels from getImageData sampling. Candles, indicators and the SELL/TARGET/STOP price lines are all drawn. No code change needed."
+}

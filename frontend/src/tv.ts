@@ -140,3 +140,17 @@ export function rangeToInterval(range?: string): string {
       return "D";
   }
 }
+
+/**
+ * Exchanges whose data TradingView is not licensed to show in the free
+ * embeddable widget. For these we fall back to our own OHLC chart.
+ */
+const WIDGET_UNSUPPORTED_SUFFIXES = new Set(["NS", "BO"]);
+const WIDGET_UNSUPPORTED_INDICES = new Set(["^NSEI", "^BSESN"]);
+
+export function widgetSupports(yahoo: string): boolean {
+  const s = (yahoo || "").trim().toUpperCase();
+  if (WIDGET_UNSUPPORTED_INDICES.has(s)) return false;
+  const m = s.match(/\.([A-Z]{1,3})$/);
+  return !(m && WIDGET_UNSUPPORTED_SUFFIXES.has(m[1]));
+}

@@ -64,6 +64,31 @@ export type ChartData = {
   currency?: string;
 };
 
+export type NewsItem = {
+  title: string;
+  publisher?: string | null;
+  link: string;
+  published?: number | null;
+  thumbnail?: string | null;
+};
+
+export type OhlcBar = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
+
+export type OhlcData = {
+  symbol: string;
+  range: string;
+  interval: string;
+  currency?: string;
+  bars: OhlcBar[];
+};
+
 export type Analysis = {
   id: string;
   symbol: string;
@@ -101,6 +126,9 @@ export const api = {
   quote: (symbol: string) => j<Quote>(`/quote/${encodeURIComponent(symbol)}`),
   chart: (symbol: string, range: string) =>
     j<ChartData>(`/chart/${encodeURIComponent(symbol)}?range=${encodeURIComponent(range)}`),
+  news: (symbol: string) => j<{ results: NewsItem[] }>(`/news/${encodeURIComponent(symbol)}`),
+  ohlc: (symbol: string, range: string) =>
+    j<OhlcData>(`/ohlc/${encodeURIComponent(symbol)}?range=${encodeURIComponent(range)}`),
   trending: () => j<{ results: Quote[] }>(`/trending`),
   markets: (category: string) => j<{ results: Quote[] }>(`/markets/${category}`),
   analyze: (symbol: string, name?: string) =>

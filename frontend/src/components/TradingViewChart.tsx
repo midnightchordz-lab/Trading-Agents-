@@ -2,7 +2,9 @@ import React, { useMemo, useState } from "react";
 import { View, Text, StyleSheet, Platform, ActivityIndicator } from "react-native";
 import { WebView } from "react-native-webview";
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
-import { DEFAULT_STUDIES, STUDIES_OVERRIDES, toTradingViewSymbol, TvTheme } from "@/src/tv";
+import { DEFAULT_STUDIES, STUDIES_OVERRIDES, toTradingViewSymbol, widgetSupports, TvTheme } from "@/src/tv";
+import { LightweightChart } from "@/src/components/LightweightChart";
+import type { Verdict } from "@/src/api";
 
 type Props = {
   /** Yahoo-style symbol from the backend (RELIANCE.NS, BTC-USD, GC=F, AAPL). */
@@ -16,6 +18,10 @@ type Props = {
   height?: number;
   /** Hide the widget's own top toolbar for a more compact card. */
   compact?: boolean;
+  /** Agents' verdict — drawn as entry/target/stop lines when the fallback chart is used. */
+  levels?: Verdict | null;
+  /** Live price used for the entry line on the fallback chart. */
+  livePrice?: number | null;
 };
 
 function buildHtml(opts: {
@@ -76,13 +82,21 @@ export function TradingViewChart({
   theme = "light",
   height = 360,
   compact = false,
+  levels,
+  livePrice,
 }: Props) {
   const [loading, setLoading] = useState(true);
+  const supported = useMemo(() => widgetSupports(symbol), [symbol]);
   const tvSymbol = useMemo(() => toTradingViewSymbol(symbol, exchange), [symbol, exchange]);
   const html = useMemo(
     () => buildHtml({ tvSymbol, interval, studies, theme, compact }),
     [tvSymbol, interval, studies, theme, compact],
   );
+
+  if (!supported) {
+    // NSE / BSE data is not licensed for the free widget — use our own OHLC chart.
+    return <LightweightChart symbol={symbol} height={height} levels={levels} livePrice={livePrice} />;
+  }
 
   return (
     <View testID="tradingview-chart" style={[styles.card, { height }]}>

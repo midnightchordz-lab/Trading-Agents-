@@ -16,9 +16,12 @@ import { ShareCard } from "@/src/components/ShareCard";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
 import { TradingViewChart } from "@/src/components/TradingViewChart";
 import { VerdictLevels } from "@/src/components/VerdictLevels";
-import { rangeToInterval } from "@/src/tv";
+import { FearGreedGauge } from "@/src/components/FearGreedGauge";
+import { NewsList } from "@/src/components/NewsList";
+import { rangeToInterval, widgetSupports } from "@/src/tv";
 import { PHASE_LABEL, PHASE_ORDER, PhaseKey } from "@/src/agents";
 import { useWatchlist } from "@/src/watchlist";
+import { useAlerts } from "@/src/alerts";
 
 type Tab = "debate" | "verdict";
 
@@ -33,6 +36,7 @@ export default function AnalysisScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { isSaved, toggle: toggleWatch } = useWatchlist();
+  const { evaluate } = useAlerts();
 
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [tab, setTab] = useState<Tab>("debate");
@@ -79,6 +83,13 @@ export default function AnalysisScreen() {
     const t = setInterval(() => setBlink((b) => !b), 480);
     return () => clearInterval(t);
   }, []);
+
+  // Evaluate standing price alerts whenever a fresh live price arrives.
+  useEffect(() => {
+    if (analysis?.symbol && analysis.quote?.price != null) {
+      evaluate(analysis.symbol, analysis.quote.price);
+    }
+  }, [analysis?.symbol, analysis?.quote?.price, evaluate]);
 
   // Initial tab + reactions to new messages / completion.
   useEffect(() => {
@@ -341,12 +352,17 @@ function VerdictView({
     <View>
       <VerdictBlock decision={verdict.decision} confidence={verdict.confidence} />
 
+      <FearGreedGauge analysis={analysis} />
+
       <TvSection
         symbol={analysis.symbol}
+        name={analysis.name}
         exchange={analysis.quote?.exchange}
         verdict={verdict}
         quote={analysis.quote}
       />
+
+      <NewsList symbol={analysis.symbol} />
 
       <View style={styles.statsGrid}>
         <View style={styles.statCell}>
@@ -460,45 +476,52 @@ function VerdictView({
 
 function TvSection({
   symbol,
+  name,
   exchange,
   verdict,
   quote,
 }: {
   symbol: string;
+  name: string;
   exchange?: string;
   verdict: Verdict;
   quote?: Quote | null;
 }) {
   const [range, setRange] = useState<string>("1M");
   const ranges = ["1D", "1W", "1M", "1Y"];
+  const widgetChart = widgetSupports(symbol);
   return (
     <View style={styles.tvSection}>
-      <View style={styles.rangeBar}>
-        {ranges.map((r, i) => {
-          const active = range === r;
-          return (
-            <Pressable
-              key={r}
-              testID={`tv-range-${r}`}
-              onPress={() => {
-                Haptics.selectionAsync();
-                setRange(r);
-              }}
-              style={[styles.rangeBtn, i > 0 && styles.rangeDivider, active && styles.rangeActive]}
-            >
-              <Text style={[styles.rangeText, { color: active ? colors.onSurfaceInverse : colors.onSurface }]}>{r}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      {widgetChart ? (
+        <View style={styles.rangeBar}>
+          {ranges.map((r, i) => {
+            const active = range === r;
+            return (
+              <Pressable
+                key={r}
+                testID={`tv-range-${r}`}
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setRange(r);
+                }}
+                style={[styles.rangeBtn, i > 0 && styles.rangeDivider, active && styles.rangeActive]}
+              >
+                <Text style={[styles.rangeText, { color: active ? colors.onSurfaceInverse : colors.onSurface }]}>{r}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
       <TradingViewChart
         symbol={symbol}
         exchange={exchange}
         interval={rangeToInterval(range)}
         theme="light"
-        height={360}
+        height={widgetChart ? 360 : 460}
+        levels={verdict}
+        livePrice={quote?.price ?? null}
       />
-      <VerdictLevels verdict={verdict} quote={quote} />
+      <VerdictLevels verdict={verdict} quote={quote} symbol={symbol} name={name} />
     </View>
   );
 }
