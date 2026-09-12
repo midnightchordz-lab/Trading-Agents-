@@ -78,6 +78,11 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
 - Offer Kotak Neo wiring once the user shares credentials.
 - Add watchlist + chart range toggle if requested.
 
+## Position Sizer — Part 1d (2026-06-17, session 7) — DONE
+- **Frontend-only, additive**: new `PositionSizer.tsx` under the verdict. Deterministic sizing `qty = min(floor(capital×risk%/|price−stop|), floor(capital×maxPos%/price))` — LLM never involved. Inputs Capital/Risk%/MaxPos% (defaults 100000/1/20) persist via the `storage` util (keys `sizer:*`). Shows qty, notional, at-risk (+% of capital), to-target, R:R, and a note stating which limit clamped. Disabled with a reason for HOLD, `grounding.status==='failed'`, no price, or no stop. Header "RISK DISPOSES · NOT ADVICE".
+- Only edits: new component + 2 lines in `app/analysis/[id].tsx` (import + `<PositionSizer/>` after GroundingBadge). `git diff backend/` empty; lint clean; worked examples verified (100000/1/20 → 666 risk-limited; price2500/stop2480 → 8 position-cap-limited).
+- Verified by testing agent (iteration_5): live NVDA SELL sized to 91 shares (cap-limited), live edits recompute, inputs persist across reload, HOLD shows disabled reason, no regressions.
+
 ## Verdict Grounding Gate — Part 1c (2026-06-17, session 7) — DONE
 - **Additive** `ground_verdict(verdict, quote)` in server.py checks the agents' target/stop against the live quote (direction vs price, magnitude 0.5x–2x, within 25% of 52w range, risk/reward ≥1, levels present) and stores a `grounding` report `{status, checks[], evidence}` in the existing completion `$set`. Status: failed / warning / grounded / unverified. Verdict is never mutated. Pipeline/prompts/parse_verdict/parse_debate/build_context untouched; `git diff server.py` = new function + the one `$set` line only.
 - **Frontend**: `GroundingBadge` under the verdict block (LEVELS VERIFIED / · CHECK / REJECTED / UNVERIFIED, tap to expand the individual checks + evidence). Chart entry/target/stop lines are suppressed when `grounding.status==='failed'` (`chartLevels` gate); the VerdictLevels strip + stats stay visible. New api types `Grounding`/`GroundingCheck` + `Analysis.grounding`.

@@ -18,6 +18,7 @@ import { TradingViewChart } from "@/src/components/TradingViewChart";
 import { VerdictLevels } from "@/src/components/VerdictLevels";
 import { FearGreedGauge } from "@/src/components/FearGreedGauge";
 import { GroundingBadge } from "@/src/components/GroundingBadge";
+import { PositionSizer } from "@/src/components/PositionSizer";
 import { NewsList } from "@/src/components/NewsList";
 import { rangeToInterval, widgetSupports } from "@/src/tv";
 import { PHASE_LABEL, PHASE_ORDER, PhaseKey } from "@/src/agents";
@@ -354,6 +355,8 @@ function VerdictView({
       <VerdictBlock decision={verdict.decision} confidence={verdict.confidence} />
 
       {analysis.grounding ? <GroundingBadge grounding={analysis.grounding} /> : null}
+
+      <PositionSizer verdict={verdict} quote={analysis.quote} grounding={analysis.grounding} />
 
       <FearGreedGauge analysis={analysis} />
 

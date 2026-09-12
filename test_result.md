@@ -192,3 +192,35 @@
 ## agent_communication:
 ##     -agent: "main"
 ##     -message: "Part1c grounding gate. Backend verified (9 unit tests + 37 full pass, minimal diff). Please verify: (A) A newly completed analysis (POST /api/analyze {symbol:AAPL} then poll GET /api/analysis/{id}) returns a 'grounding' object with status + checks[] + evidence, and 'verdict' shape unchanged. (B) Frontend VERDICT tab shows testID 'grounding-badge' under the BUY/SELL/HOLD block; tapping it expands the individual checks list. Existing completed analysis with grounding=warning: id 6dbf6223-256e-486f-a23e-855d4c3e1930. (C) Confirm existing endpoints/pipeline untouched (quote/chart/ohlc/news/analyze still work). Note: the 'failed' status (BUY target below live price) is covered by unit tests since it depends on LLM output and can't be forced e2e; verify logic via test_grounding.py."
+
+## user_problem_statement: "Implement TRADINGVIEW_INTEGRATION_PART1D.md — frontend-only additive Position Sizer card under the verdict. Deterministic arithmetic: qty = min(floor(capital*risk%/|price-stop|), floor(capital*maxPos%/price)). Inputs Capital/Risk%/MaxPos% persist via storage util. Shows qty, notional, at-risk (+%), to-target, R:R, and a note saying which limit clamped. Disabled with a reason for HOLD, grounding.status==='failed', no price, or no stop. NO backend/pipeline/dependency changes; only new PositionSizer.tsx + 2 lines in analysis/[id].tsx."
+
+## frontend:
+##   - task: "PositionSizer card (frontend-only, additive)"
+##     implemented: true
+##     working: "NA"
+##     file: "frontend/src/components/PositionSizer.tsx, frontend/app/analysis/[id].tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         -working: "NA"
+##         -agent: "main"
+##         -comment: "Added PositionSizer verbatim from spec + 2 lines (import + <PositionSizer/> after GroundingBadge). Lint clean; git diff backend/ empty; worked math verified via node (100000/1/20 price15 stop13.5 -> 666 risk-limited; price2500 stop2480 -> 8 position-cap-limited). Rendered on AAPL(HOLD) analysis showing blocker 'HOLD verdict — no position to size.' with inputs 100000/1/20. Needs verification: active BUY/SELL sizing (qty+4 stats+note), live edit updates, persistence across reload, and the four disabled reasons."
+
+## metadata:
+##   created_by: "main_agent"
+##   version: "1.3"
+##   test_sequence: 5
+##   run_ui: true
+
+## test_plan:
+##   current_focus:
+##     - "PositionSizer card (frontend-only, additive)"
+##   stuck_tasks: []
+##   test_all: false
+##   test_priority: "high_first"
+
+## agent_communication:
+##     -agent: "main"
+##     -message: "Part1d Position Sizer (frontend-only). Please verify on the preview: (A) Trigger a fresh analysis likely to be BUY/SELL — POST /api/analyze with a trending name, e.g. {symbol:'NVDA',name:'NVIDIA'} or {symbol:'TSLA',name:'Tesla'} — poll GET /api/analysis/{id} to completed. If decision is BUY or SELL with a stop_loss, open it, tap VERDICT tab, scroll to testID 'position-sizer' and confirm it shows a share count + NOTIONAL/AT RISK(+%)/TO TARGET/R:R and a one-line note (risk-budget vs capped-by-max-position). Editing CAPITAL/RISK/MAX POSITION updates the numbers instantly. (B) Persistence: change CAPITAL, reload the page, confirm the new value is still there. (C) Disabled reasons: on a HOLD analysis (id 6dbf6223-256e-486f-a23e-855d4c3e1930) the card shows 'HOLD verdict — no position to size.'. (D) Confirm nothing else on the screen broke (GroundingBadge, chart, VerdictLevels, headlines). NOTE: if several fresh analyses all come back HOLD, that's fine — the exported sizePosition() math is already verified (666 risk-limited / 8 position-cap-limited); focus on whichever BUY/SELL you can obtain, else validate via a SELL. Backend is byte-identical (git diff backend/ empty) so existing 37 pytest tests are unchanged — no need to rerun unless you want to."
