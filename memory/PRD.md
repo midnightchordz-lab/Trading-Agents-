@@ -78,6 +78,11 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
 - Offer Kotak Neo wiring once the user shares credentials.
 - Add watchlist + chart range toggle if requested.
 
+## Multi-Timeframe Verdicts — PHASE 8 (2026-06-17, session 7) — DONE
+- **First pipeline-extending change**: new PHASE 8 "Multi-Horizon Desk" LLM call after the round-table debate (TOTAL_STEPS 12→13). Produces a separate BUY/SELL/HOLD call for short (1-2wk) / medium (1-3mo) / long (6-12mo) horizons, each with confidence + optional target/stop + thesis. Never mutates the primary verdict/debate/grounding. `parse_timeframes()` requires all three horizons or returns None → `fallback_timeframes()` reuses primary decision/confidence, null levels, explicit "unavailable" note (never invents prices). New additive `analysis.timeframes` field (initial doc + $set). Only the genuinely-new pieces were applied — the spec's raw diff also referenced an unrelated `technical_factors.py` (absent here) which was intentionally skipped.
+- **Frontend**: `TimeframesCard` (MULTI-HORIZON VIEW) under PositionSizer — three tabs colored by each horizon's decision; body shows decision badge + confidence + thesis + TARGET/STOP (or fallback note). New `Timeframes`/`TimeframeCall` types + `Analysis.timeframes`.
+- Updated 3 stale tests (12→13 steps/messages). Verified by testing agent (iteration_8): 6 unit + 63 full + 9 e2e pass; live AAPL split short HOLD / med BUY / long BUY; card renders + tab-switches; no regressions.
+
 ## Portfolio Tab — Fix Pass (2026-06-17, session 7) — DONE
 - Replaced `portfolio.tsx` in full per `PORTFOLIO_TAB_FIX.md`: (1) symbol search-as-you-type in ADD HOLDING (api.search dropdown, tap fills field), (2) single-holding hint "Add at least one more holding to run the optimizer.", (3) "ANALYZE MISSING (N) & RE-RUN" button that runs the existing /api/analyze→poll flow per missing symbol ("ANALYZING {symbol}…") then auto re-optimizes. Frontend-only; `git diff` outside this file empty; lint clean.
 - Verified by testing agent (iteration_7): all 6 criteria pass, incl. real PLBY/BBAI analyze-missing → auto re-run.

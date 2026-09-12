@@ -19,6 +19,7 @@ import { VerdictLevels } from "@/src/components/VerdictLevels";
 import { FearGreedGauge } from "@/src/components/FearGreedGauge";
 import { GroundingBadge } from "@/src/components/GroundingBadge";
 import { PositionSizer } from "@/src/components/PositionSizer";
+import { TimeframesCard } from "@/src/components/TimeframesCard";
 import { NewsList } from "@/src/components/NewsList";
 import { rangeToInterval, widgetSupports } from "@/src/tv";
 import { PHASE_LABEL, PHASE_ORDER, PhaseKey } from "@/src/agents";
@@ -357,6 +358,8 @@ function VerdictView({
       {analysis.grounding ? <GroundingBadge grounding={analysis.grounding} /> : null}
 
       <PositionSizer verdict={verdict} quote={analysis.quote} grounding={analysis.grounding} />
+
+      {analysis.timeframes ? <TimeframesCard timeframes={analysis.timeframes} currency={analysis.quote?.currency} /> : null}
 
       <FearGreedGauge analysis={analysis} />
 

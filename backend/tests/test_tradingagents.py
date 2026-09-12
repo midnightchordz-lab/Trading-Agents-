@@ -96,7 +96,7 @@ class TestAnalyze:
         assert r.status_code == 200
         j = r.json()
         assert j["status"] == "running"
-        assert j["total_steps"] == 12
+        assert j["total_steps"] == 13
         assert j["symbol"] == "NVDA"
         assert j.get("id")
         TestAnalyze.created_id = j["id"]
@@ -117,7 +117,7 @@ class TestAnalyze:
             time.sleep(2)
         assert status == "completed", f"analysis did not complete in time (last status={status})"
         msgs = j.get("messages") or []
-        assert len(msgs) == 12, f"expected 12 messages, got {len(msgs)}"
+        assert len(msgs) == 13, f"expected 13 messages, got {len(msgs)}"
         phases = {m["phase"] for m in msgs}
         # at least these phases must appear
         for p in ("analysis", "debate", "trade", "risk", "decision"):

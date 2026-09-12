@@ -302,3 +302,49 @@
 ## agent_communication:
 ##     -agent: "main"
 ##     -message: "Frontend-only fix to /portfolio (portfolio.tsx replaced in full; nothing else changed). Verify on https://trade-agent-app.preview.emergentagent.com/portfolio : (1) Typing 2+ chars in the SEARCH SYMBOL field shows a dropdown of up to 6 matches within ~1s; tapping a row fills the symbol field and closes the dropdown. (2) With exactly ONE holding added, the hint 'Add at least one more holding to run the optimizer.' shows (no OPTIMIZE card). (3) Add 2+ holdings incl. at least one NOT previously analyzed, turn ON 'Use agent views', RUN OPTIMIZER -> results show a 'ANALYZE MISSING (N) & RE-RUN' button. (4) Tapping it runs /api/analyze for each missing symbol (button shows 'ANALYZING {symbol}…' during each) and auto re-runs the optimizer when done, and the missing-view note shrinks/disappears. NOTE: analyze-missing calls the real LLM pipeline, one symbol at a time — each analysis can take ~40-60s, so step (4) may take a few minutes for 2 symbols; please allow ample time. (5) Watchlist quick-add chips still work. Backend unchanged (git diff outside portfolio.tsx empty)."
+
+## user_problem_statement: "MULTI_TIMEFRAME_VERDICTS.md — add PHASE 8 (Multi-Horizon Desk) to run_analysis: one new LLM call after the debate producing separate BUY/SELL/HOLD calls for short (1-2wk)/medium (1-3mo)/long (6-12mo) horizons. TOTAL_STEPS 12->13. New parse_timeframes/fallback_timeframes (never invents prices). New analysis.timeframes field (additive). Frontend TimeframesCard tabbed by horizon under PositionSizer. No change to existing phases/prompts/parse_verdict/verdict shape/ground_verdict/endpoints."
+
+## backend:
+##   - task: "PHASE 8 Multi-Horizon Desk + parse/fallback_timeframes + TOTAL_STEPS 13"
+##     implemented: true
+##     working: true
+##     file: "backend/server.py, backend/tests/test_timeframes.py"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         -working: true
+##         -agent: "main"
+##         -comment: "Added TIMEFRAME_SYS, TOTAL_STEPS 12->13, parse_timeframes/fallback_timeframes, PHASE 8 after debate (safe_agent + append_message 'Multi-Horizon Desk') before grounding, timeframes added to $set and initial doc. Only NEW pieces applied (spec diff also re-listed already-present ground_verdict/portfolio/ohlc and a non-existent technical_factors module — NOT applied). test_timeframes.py 6 pass. Updated 3 stale assertions (12->13 steps/messages) in test_tradingagents.py & test_iteration.py. Full suite 63 pass. Live AAPL run: total_steps 13, 13 msgs, last='Multi-Horizon Desk', timeframes parsed (short HOLD84 / med HOLD76 / long BUY68 w/ target365 stop302)."
+
+## frontend:
+##   - task: "TimeframesCard under PositionSizer"
+##     implemented: true
+##     working: "NA"
+##     file: "frontend/src/components/TimeframesCard.tsx, frontend/src/api.ts, frontend/app/analysis/[id].tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         -working: "NA"
+##         -agent: "main"
+##         -comment: "Added Timeframes/TimeframeCall types + Analysis.timeframes. TimeframesCard (MULTI-HORIZON VIEW): 3 tabs colored by decision, body shows decision badge, confidence, thesis, TARGET/STOP or fallback note. Rendered after PositionSizer, gated on analysis.timeframes. Smoke on AAPL: tabs 1-2WK HOLD / 1-3MO HOLD / 6-12MO BUY; tapping 6-12MONTHS switches to green BUY 68% + long thesis + TARGET/STOP. Needs e2e verification via testing agent."
+
+## metadata:
+##   created_by: "main_agent"
+##   version: "1.6"
+##   test_sequence: 8
+##   run_ui: true
+
+## test_plan:
+##   current_focus:
+##     - "PHASE 8 Multi-Horizon Desk + parse/fallback_timeframes + TOTAL_STEPS 13"
+##     - "TimeframesCard under PositionSizer"
+##   stuck_tasks: []
+##   test_all: false
+##   test_priority: "high_first"
+
+## agent_communication:
+##     -agent: "main"
+##     -message: "Multi-Timeframe Verdicts. Verify: (A) BACKEND unit `cd /app/backend && python -m pytest tests/test_timeframes.py -q` (6 pass) + full suite `python -m pytest tests/ -q` (63 pass). (B) BACKEND e2e: POST /api/analyze {symbol:AAPL,name:Apple Inc.} poll GET /api/analysis/{id} to completed (~30-60s). Confirm total_steps==13, messages length==13 with last agent 'Multi-Horizon Desk', and a new 'timeframes' object with short_term/medium_term/long_term each having decision/confidence/target_price/stop_loss/thesis/horizon/label. Confirm existing 'verdict' and 'debate' shapes are unchanged. (C) FRONTEND: open a completed analysis (e.g. id 3f09af12-5761-4240-b6e3-fa64b76ee352), VERDICT tab, scroll to testID 'timeframes-card' (MULTI-HORIZON VIEW). Confirm 3 tabs (1-2 WEEKS / 1-3 MONTHS / 6-12 MONTHS) each showing a decision, tapping a tab swaps the body (decision badge + % confidence + thesis, and TARGET/STOP when present). (D) Non-regression: GroundingBadge, PositionSizer, chart, VerdictLevels, headlines still render. NOTE additive-only; existing endpoints unchanged."

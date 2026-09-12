@@ -137,6 +137,22 @@ export type Grounding = {
   } | null;
 };
 
+export type TimeframeCall = {
+  horizon: "short_term" | "medium_term" | "long_term";
+  label: string;
+  decision: "BUY" | "SELL" | "HOLD";
+  confidence: number;
+  target_price: number | null;
+  stop_loss: number | null;
+  thesis: string | null;
+};
+
+export type Timeframes = {
+  short_term: TimeframeCall;
+  medium_term: TimeframeCall;
+  long_term: TimeframeCall;
+};
+
 export type Analysis = {
   id: string;
   symbol: string;
@@ -146,6 +162,7 @@ export type Analysis = {
   quote: Quote | null;
   verdict: Verdict | null;
   debate: Debate | null;
+  timeframes?: Timeframes | null;
   grounding?: Grounding | null;
   current_step: number;
   total_steps: number;

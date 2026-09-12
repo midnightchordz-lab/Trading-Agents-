@@ -94,7 +94,7 @@ class TestAnalysisDebate:
 
         # existing checks still hold
         msgs = j.get("messages") or []
-        assert len(msgs) == 12
+        assert len(msgs) == 13
         v = j.get("verdict") or {}
         assert v.get("decision") in ("BUY", "SELL", "HOLD")
         assert 0 <= v.get("confidence", -1) <= 100

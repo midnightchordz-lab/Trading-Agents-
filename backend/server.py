@@ -261,7 +261,20 @@ DEBATE_SYS = (
     '"recommendation": "<=40 word final call consistent with the verdict>"}'
 )
 
-TOTAL_STEPS = 12
+TIMEFRAME_SYS = (
+    "You are the Multi-Horizon Desk. Using the full desk transcript and the Portfolio Manager's final verdict, "
+    "produce a SEPARATE call for three distinct time horizons, because a stock can be attractive on one horizon "
+    "and unattractive on another. Output ONLY a raw JSON object (no markdown fences, no prose) with EXACTLY "
+    "these keys, each holding an object with EXACTLY these sub-keys: "
+    '{"short_term": {"decision": "BUY|SELL|HOLD", "confidence": <integer 0-100>, '
+    '"target_price": <number or null>, "stop_loss": <number or null>, "thesis": "<=30 word horizon-specific rationale>"}, '
+    '"medium_term": {<same shape>}, "long_term": {<same shape>}}. '
+    "short_term = next 1-2 weeks, medium_term = next 1-3 months, long_term = next 6-12 months. "
+    "Each horizon's call may genuinely differ from the others and from the primary verdict — do not repeat the "
+    "same numbers three times unless the case truly holds across all three horizons."
+)
+
+TOTAL_STEPS = 13
 
 
 async def safe_agent(system_message: str, user_text: str, fallback: str = "Analysis unavailable.") -> str:
@@ -469,6 +482,80 @@ def parse_debate(text: str):
     }
 
 
+def parse_timeframes(text: str) -> Optional[dict]:
+    """Parse the Multi-Horizon Desk's per-horizon calls. Requires all three
+    horizons to parse cleanly; otherwise returns None so the caller falls
+    back rather than showing a partially-fabricated set."""
+    data = extract_json(text)
+    if not isinstance(data, dict):
+        return None
+
+    def parse_one(d):
+        if not isinstance(d, dict):
+            return None
+        decision = str(d.get("decision", "")).upper().strip()
+        if decision not in ("BUY", "SELL", "HOLD"):
+            decision = "HOLD"
+        try:
+            confidence = int(round(float(d.get("confidence", 50))))
+        except Exception:
+            confidence = 50
+        confidence = max(0, min(100, confidence))
+
+        def num(v):
+            try:
+                return round(float(v), 2)
+            except Exception:
+                return None
+
+        thesis = str(d.get("thesis") or "").strip()[:280] or None
+        return {
+            "decision": decision,
+            "confidence": confidence,
+            "target_price": num(d.get("target_price")),
+            "stop_loss": num(d.get("stop_loss")),
+            "thesis": thesis,
+        }
+
+    horizons = (
+        ("short_term", "Short-term (1-2 weeks)"),
+        ("medium_term", "Medium-term (1-3 months)"),
+        ("long_term", "Long-term (6-12 months)"),
+    )
+    out = {}
+    for key, label in horizons:
+        one = parse_one(data.get(key))
+        if one is None:
+            return None
+        one["horizon"] = key
+        one["label"] = label
+        out[key] = one
+    return out
+
+
+def fallback_timeframes(verdict: dict) -> dict:
+    """Used only when the Multi-Horizon Desk call fails or doesn't parse.
+    Never invents new price levels — reuses the primary verdict's decision
+    and confidence, leaves target/stop null, and says so explicitly."""
+    horizons = (
+        ("short_term", "Short-term (1-2 weeks)"),
+        ("medium_term", "Medium-term (1-3 months)"),
+        ("long_term", "Long-term (6-12 months)"),
+    )
+    return {
+        key: {
+            "horizon": key,
+            "label": label,
+            "decision": verdict.get("decision", "HOLD"),
+            "confidence": verdict.get("confidence", 50),
+            "target_price": None,
+            "stop_loss": None,
+            "thesis": "Timeframe-specific view unavailable — shown as the primary desk verdict.",
+        }
+        for key, label in horizons
+    }
+
+
 def build_context(symbol: str, quote: Optional[dict]) -> str:
     if symbol.endswith("=F"):
         asset_class = "Commodity / futures contract"
@@ -649,10 +736,28 @@ async def run_analysis(analysis_id: str, symbol: str):
                 "recommendation": verdict["summary"],
             }
 
+        # PHASE 8 — Multi-Horizon Desk (short / medium / long-term calls)
+        tf_raw = await safe_agent(
+            TIMEFRAME_SYS,
+            f"{ctx}\n\nDESK TRANSCRIPT:\n{full_transcript}\n\n"
+            f"PRIMARY VERDICT: {verdict['decision']} ({verdict['confidence']}%), "
+            f"target {verdict.get('target_price')}, stop {verdict.get('stop_loss')}. {verdict['summary']}\n\n"
+            f"Produce the three-horizon JSON for {symbol}.",
+            fallback="{}",
+        )
+        timeframes = parse_timeframes(tf_raw) or fallback_timeframes(verdict)
+        step += 1
+        tf_msg = (
+            f"SHORT-TERM: {timeframes['short_term']['decision']} ({timeframes['short_term']['confidence']}%)\n"
+            f"MEDIUM-TERM: {timeframes['medium_term']['decision']} ({timeframes['medium_term']['confidence']}%)\n"
+            f"LONG-TERM: {timeframes['long_term']['decision']} ({timeframes['long_term']['confidence']}%)"
+        )
+        await append_message(analysis_id, make_message("Multi-Horizon Desk", "MULTI_HORIZON_DESK", "decision", tf_msg, None), step)
+
         grounding = ground_verdict(verdict, quote)
         await db.analyses.update_one(
             {"id": analysis_id},
-            {"$set": {"status": "completed", "verdict": verdict, "debate": debate, "grounding": grounding, "current_step": TOTAL_STEPS, "updated_at": now_iso()}},
+            {"$set": {"status": "completed", "verdict": verdict, "debate": debate, "timeframes": timeframes, "grounding": grounding, "current_step": TOTAL_STEPS, "updated_at": now_iso()}},
         )
         logger.info(f"analysis {analysis_id} for {symbol} completed: {verdict['decision']}")
     except Exception as e:
@@ -936,6 +1041,7 @@ async def analyze(body: AnalyzeRequest):
         "quote": None,
         "verdict": None,
         "debate": None,
+        "timeframes": None,
         "current_step": 0,
         "total_steps": TOTAL_STEPS,
         "error": None,
