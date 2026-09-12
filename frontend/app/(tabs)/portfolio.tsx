@@ -1,0 +1,362 @@
+import React, { useEffect, useMemo, useState, useCallback } from "react";
+import { View, Text, TextInput, Pressable, ScrollView, ActivityIndicator, StyleSheet, Alert } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ScreenHeader } from "@/src/components/ScreenHeader";
+import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
+import { storage } from "@/src/utils/storage";
+import { useWatchlist } from "@/src/watchlist";
+import { api } from "@/src/api";
+
+// Portfolio tab: manual holdings + watchlist quick-add, then optimize against
+// PyPortfolioOpt via POST /api/portfolio/optimize. Holdings persist locally;
+// nothing here touches the analysis pipeline — the backend endpoint only
+// *reads* cached verdicts when "Use agent views" is on.
+
+type Holding = { symbol: string; quantity: string; avgPrice: string };
+type Objective = "hrp" | "max_sharpe" | "min_volatility";
+
+const KEY_HOLDINGS = "portfolio:holdings";
+const KEY_CASH = "portfolio:cash";
+
+const OBJECTIVES: { id: Objective; label: string; blurb: string }[] = [
+  { id: "hrp", label: "HRP", blurb: "Hierarchical Risk Parity — no return forecast, more robust." },
+  { id: "max_sharpe", label: "MAX SHARPE", blurb: "Best risk-adjusted return given the covariance." },
+  { id: "min_volatility", label: "MIN VOL", blurb: "Lowest-volatility mix given the covariance." },
+];
+
+function fmtPct(n: number) {
+  return `${(n * 100).toFixed(1)}%`;
+}
+
+export default function PortfolioScreen() {
+  const insets = useSafeAreaInsets();
+  const { items: watchlist } = useWatchlist();
+  const [holdings, setHoldings] = useState<Holding[]>([]);
+  const [cash, setCash] = useState("0");
+  const [objective, setObjective] = useState<Objective>("hrp");
+  const [useAgentViews, setUseAgentViews] = useState(false);
+  const [form, setForm] = useState<Holding>({ symbol: "", quantity: "", avgPrice: "" });
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const saved = await storage.getItem<Holding[]>(KEY_HOLDINGS, []);
+      const savedCash = await storage.getItem(KEY_CASH, "0");
+      if (saved) setHoldings(saved);
+      if (savedCash != null) setCash(String(savedCash));
+    })();
+  }, []);
+
+  const persist = useCallback((next: Holding[]) => {
+    setHoldings(next);
+    storage.setItem(KEY_HOLDINGS, next);
+  }, []);
+
+  const addHolding = () => {
+    const symbol = form.symbol.trim().toUpperCase();
+    const quantity = Number(form.quantity);
+    const avgPrice = Number(form.avgPrice);
+    if (!symbol || !quantity || !avgPrice) {
+      Alert.alert("Missing details", "Symbol, quantity and average price are required.");
+      return;
+    }
+    if (holdings.some((h) => h.symbol === symbol)) {
+      Alert.alert("Already added", `${symbol} is already in the portfolio.`);
+      return;
+    }
+    persist([...holdings, { symbol, quantity: String(quantity), avgPrice: String(avgPrice) }]);
+    setForm({ symbol: "", quantity: "", avgPrice: "" });
+  };
+
+  const addFromWatchlist = (symbol: string) => {
+    if (holdings.some((h) => h.symbol === symbol)) return;
+    setForm((f) => ({ ...f, symbol }));
+  };
+
+  const removeHolding = (symbol: string) => {
+    persist(holdings.filter((h) => h.symbol !== symbol));
+    setResult(null);
+  };
+
+  const quickAddable = watchlist.filter((w) => !holdings.some((h) => h.symbol === w.symbol));
+
+  const runOptimize = async () => {
+    if (holdings.length < 2) {
+      Alert.alert("Add more holdings", "Optimization needs at least 2 symbols.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const body = {
+        holdings: holdings.map((h) => ({
+          symbol: h.symbol,
+          quantity: Number(h.quantity),
+          avg_price: Number(h.avgPrice),
+        })),
+        objective,
+        use_agent_views: useAgentViews,
+        cash: Number(cash) || 0,
+      };
+      const res = await api.portfolioOptimize(body);
+      setResult(res);
+    } catch (e: any) {
+      setError(e?.message || "Optimization failed. Try a different objective or fewer symbols.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    storage.setItem(KEY_CASH, cash);
+  }, [cash]);
+
+  const actionsSorted = useMemo(() => {
+    if (!result?.actions) return [];
+    const order: Record<string, number> = { SELL: 0, TRIM: 1, ADD: 2, HOLD: 3 };
+    return [...result.actions].sort((a: any, b: any) => order[a.action] - order[b.action]);
+  }, [result]);
+
+  return (
+    <View style={styles.screen}>
+      <ScreenHeader title="PORTFOLIO" subtitle="Keep, trim or sell — optimized" insetsTop={insets.top} />
+      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
+        {/* Add holding */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>ADD HOLDING</Text>
+          <View style={styles.formRow}>
+            <TextInput
+              placeholder="SYMBOL"
+              value={form.symbol}
+              onChangeText={(t) => setForm((f) => ({ ...f, symbol: t.toUpperCase() }))}
+              autoCapitalize="characters"
+              style={[styles.input, { flex: 1.4 }]}
+              placeholderTextColor={colors.onSurfaceTertiary}
+            />
+            <TextInput
+              placeholder="QTY"
+              value={form.quantity}
+              onChangeText={(t) => setForm((f) => ({ ...f, quantity: t.replace(/[^0-9.]/g, "") }))}
+              keyboardType="decimal-pad"
+              style={[styles.input, { flex: 1 }]}
+              placeholderTextColor={colors.onSurfaceTertiary}
+            />
+            <TextInput
+              placeholder="AVG PRICE"
+              value={form.avgPrice}
+              onChangeText={(t) => setForm((f) => ({ ...f, avgPrice: t.replace(/[^0-9.]/g, "") }))}
+              keyboardType="decimal-pad"
+              style={[styles.input, { flex: 1.2 }]}
+              placeholderTextColor={colors.onSurfaceTertiary}
+            />
+            <Pressable onPress={addHolding} style={styles.addBtn}>
+              <Text style={styles.addBtnText}>ADD</Text>
+            </Pressable>
+          </View>
+          {quickAddable.length > 0 ? (
+            <View style={styles.quickAddRow}>
+              <Text style={styles.quickAddLabel}>FROM WATCHLIST:</Text>
+              <View style={styles.chipRow}>
+                {quickAddable.map((w) => (
+                  <Pressable key={w.symbol} onPress={() => addFromWatchlist(w.symbol)} style={styles.chip}>
+                    <Text style={styles.chipText}>{w.symbol}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Current holdings */}
+        {holdings.length > 0 ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>HOLDINGS ({holdings.length})</Text>
+            {holdings.map((h) => (
+              <View key={h.symbol} style={styles.holdingRow}>
+                <Text style={styles.holdingSymbol}>{h.symbol}</Text>
+                <Text style={styles.holdingDetail}>
+                  {h.quantity} @ {h.avgPrice}
+                </Text>
+                <Pressable onPress={() => removeHolding(h.symbol)}>
+                  <Text style={styles.removeText}>REMOVE</Text>
+                </Pressable>
+              </View>
+            ))}
+            <View style={styles.cashRow}>
+              <Text style={styles.holdingDetail}>UNINVESTED CASH</Text>
+              <TextInput
+                value={cash}
+                onChangeText={(t) => setCash(t.replace(/[^0-9.]/g, ""))}
+                keyboardType="decimal-pad"
+                style={styles.cashInput}
+              />
+            </View>
+          </View>
+        ) : null}
+
+        {/* Controls */}
+        {holdings.length >= 2 ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>OPTIMIZE</Text>
+            <View style={styles.objRow}>
+              {OBJECTIVES.map((o) => {
+                const active = objective === o.id;
+                return (
+                  <Pressable key={o.id} onPress={() => setObjective(o.id)} style={[styles.objChip, active && styles.objChipActive]}>
+                    <Text style={[styles.objChipText, active && styles.objChipTextActive]}>{o.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={styles.objBlurb}>{OBJECTIVES.find((o) => o.id === objective)?.blurb}</Text>
+
+            <Pressable onPress={() => setUseAgentViews((v) => !v)} style={styles.toggleRow}>
+              <View style={[styles.checkbox, useAgentViews && styles.checkboxOn]}>
+                {useAgentViews ? <Text style={styles.checkMark}>✓</Text> : null}
+              </View>
+              <Text style={styles.toggleText}>Use agent views (Black-Litterman) where available</Text>
+            </Pressable>
+
+            <Pressable onPress={runOptimize} style={styles.runBtn} disabled={loading}>
+              {loading ? <ActivityIndicator color={colors.onSurfaceInverse} /> : <Text style={styles.runBtnText}>RUN OPTIMIZER</Text>}
+            </Pressable>
+            {error ? <Text style={styles.errorText}>{error}</Text> : null}
+          </View>
+        ) : null}
+
+        {/* Results */}
+        {result ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>SUGGESTED ACTIONS</Text>
+            {result.missing_agent_view_for?.length ? (
+              <Text style={styles.note}>
+                No cached analysis for {result.missing_agent_view_for.join(", ")} — run an analysis on those tickers first to
+                include their view.
+              </Text>
+            ) : null}
+            {actionsSorted.map((a: any) => {
+              const { bg, fg } = verdictColors(a.action === "ADD" ? "BUY" : a.action === "SELL" ? "SELL" : "HOLD");
+              return (
+                <View key={a.symbol} style={styles.actionRow}>
+                  <View style={[styles.actionBadge, { backgroundColor: bg }]}>
+                    <Text style={[styles.actionBadgeText, { color: fg }]}>{a.action}</Text>
+                  </View>
+                  <Text style={styles.actionSymbol}>{a.symbol}</Text>
+                  <Text style={styles.actionWeights}>
+                    {fmtPct(a.current_weight)} {"→"} {fmtPct(a.suggested_weight)}
+                  </Text>
+                </View>
+              );
+            })}
+            <View style={styles.statsRow}>
+              <Stat label="EXP. RETURN" value={fmtPct(result.expected_return)} />
+              <Stat label="VOLATILITY" value={fmtPct(result.volatility)} />
+              <Stat label="SHARPE" value={result.sharpe.toFixed(2)} />
+            </View>
+            {result.dropped_symbols?.length ? (
+              <Text style={styles.note}>Skipped (insufficient history): {result.dropped_symbols.join(", ")}</Text>
+            ) : null}
+            <Text style={styles.note}>Not financial advice — an allocation model, not a guarantee.</Text>
+          </View>
+        ) : null}
+      </ScrollView>
+    </View>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.stat}>
+      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={styles.statValue}>{value}</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.surface },
+  card: { borderWidth: BORDER, borderColor: colors.borderStrong, backgroundColor: colors.surface, marginBottom: spacing.lg },
+  cardTitle: {
+    fontFamily: fonts.monoBold,
+    fontSize: 11,
+    letterSpacing: 1,
+    color: colors.onSurfaceInverse,
+    backgroundColor: colors.surfaceInverse,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  formRow: { flexDirection: "row", padding: spacing.sm, gap: spacing.xs },
+  input: {
+    fontFamily: fonts.mono,
+    fontSize: 12,
+    color: colors.onSurface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  addBtn: { backgroundColor: colors.brand, paddingHorizontal: spacing.md, justifyContent: "center" },
+  addBtnText: { fontFamily: fonts.monoBold, fontSize: 11, color: colors.onSurfaceInverse },
+  quickAddRow: { paddingHorizontal: spacing.sm, paddingBottom: spacing.sm },
+  quickAddLabel: { fontFamily: fonts.monoBold, fontSize: 9, color: colors.onSurfaceTertiary, marginBottom: spacing.xs },
+  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
+  chip: { borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.sm, paddingVertical: 4 },
+  chipText: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurface },
+  holdingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    gap: spacing.sm,
+  },
+  holdingSymbol: { flex: 1, fontFamily: fonts.monoBold, fontSize: 13, color: colors.onSurface },
+  holdingDetail: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurfaceTertiary },
+  removeText: { fontFamily: fonts.monoBold, fontSize: 9, color: colors.error },
+  cashRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  cashInput: { fontFamily: fonts.mono, fontSize: 12, color: colors.onSurface, borderBottomWidth: 1, borderBottomColor: colors.borderStrong, minWidth: 80, textAlign: "right" },
+  objRow: { flexDirection: "row", padding: spacing.sm, gap: spacing.xs },
+  objChip: { flex: 1, borderWidth: 1, borderColor: colors.border, paddingVertical: spacing.sm, alignItems: "center" },
+  objChipActive: { backgroundColor: colors.brand, borderColor: colors.brand },
+  objChipText: { fontFamily: fonts.monoBold, fontSize: 10, color: colors.onSurface },
+  objChipTextActive: { color: colors.onSurfaceInverse },
+  objBlurb: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary, paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
+  toggleRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: spacing.md, paddingBottom: spacing.md, gap: spacing.sm },
+  checkbox: { width: 16, height: 16, borderWidth: 1, borderColor: colors.borderStrong, alignItems: "center", justifyContent: "center" },
+  checkboxOn: { backgroundColor: colors.brand },
+  checkMark: { color: colors.onSurfaceInverse, fontSize: 11, fontFamily: fonts.monoBold },
+  toggleText: { flex: 1, fontFamily: fonts.mono, fontSize: 11, color: colors.onSurface },
+  runBtn: { backgroundColor: colors.surfaceInverse, margin: spacing.md, paddingVertical: spacing.md, alignItems: "center" },
+  runBtnText: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1, color: colors.onSurfaceInverse },
+  errorText: { fontFamily: fonts.mono, fontSize: 11, color: colors.error, padding: spacing.md, paddingTop: 0 },
+  actionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    gap: spacing.sm,
+  },
+  actionBadge: { paddingHorizontal: spacing.sm, paddingVertical: 4, minWidth: 56, alignItems: "center" },
+  actionBadgeText: { fontFamily: fonts.monoBold, fontSize: 10 },
+  actionSymbol: { flex: 1, fontFamily: fonts.monoBold, fontSize: 13, color: colors.onSurface },
+  actionWeights: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurfaceTertiary },
+  statsRow: { flexDirection: "row", borderTopWidth: 1, borderTopColor: colors.border },
+  stat: { flex: 1, padding: spacing.sm, borderRightWidth: 1, borderRightColor: colors.border },
+  statLabel: { fontFamily: fonts.monoBold, fontSize: 9, color: colors.onSurfaceTertiary },
+  statValue: { fontFamily: fonts.mono, fontSize: 14, color: colors.onSurface, marginTop: 2 },
+  note: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary, padding: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border },
+});

@@ -224,3 +224,49 @@
 ## agent_communication:
 ##     -agent: "main"
 ##     -message: "Part1d Position Sizer (frontend-only). Please verify on the preview: (A) Trigger a fresh analysis likely to be BUY/SELL — POST /api/analyze with a trending name, e.g. {symbol:'NVDA',name:'NVIDIA'} or {symbol:'TSLA',name:'Tesla'} — poll GET /api/analysis/{id} to completed. If decision is BUY or SELL with a stop_loss, open it, tap VERDICT tab, scroll to testID 'position-sizer' and confirm it shows a share count + NOTIONAL/AT RISK(+%)/TO TARGET/R:R and a one-line note (risk-budget vs capped-by-max-position). Editing CAPITAL/RISK/MAX POSITION updates the numbers instantly. (B) Persistence: change CAPITAL, reload the page, confirm the new value is still there. (C) Disabled reasons: on a HOLD analysis (id 6dbf6223-256e-486f-a23e-855d4c3e1930) the card shows 'HOLD verdict — no position to size.'. (D) Confirm nothing else on the screen broke (GroundingBadge, chart, VerdictLevels, headlines). NOTE: if several fresh analyses all come back HOLD, that's fine — the exported sizePosition() math is already verified (666 risk-limited / 8 position-cap-limited); focus on whichever BUY/SELL you can obtain, else validate via a SELL. Backend is byte-identical (git diff backend/ empty) so existing 37 pytest tests are unchanged — no need to rerun unless you want to."
+
+## user_problem_statement: "Implement PORTFOLIO_TAB_INTEGRATION.md — additive Portfolio tab. New backend/portfolio_optimizer.py (PyPortfolioOpt) + POST /api/portfolio/optimize (reads cached verdicts only, never runs the pipeline). Modes: HRP / max_sharpe / min_volatility, optional Black-Litterman using cached agent verdicts as views. New frontend Portfolio tab: add holdings (manual + watchlist quick-add, persisted locally), objective picker, use-agent-views toggle, Run Optimizer -> sorted ADD/TRIM/HOLD/SELL action list + exp return/vol/Sharpe + notes. Additive only; no pipeline/prompt/existing-endpoint/prior-component changes; one new dep pyportfolioopt."
+
+## backend:
+##   - task: "portfolio_optimizer.py module + POST /api/portfolio/optimize"
+##     implemented: true
+##     working: true
+##     file: "backend/portfolio_optimizer.py, backend/tests/test_portfolio_optimizer.py, backend/server.py"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         -working: true
+##         -agent: "main"
+##         -comment: "New module (HRP/max_sharpe/min_vol via PyPortfolioOpt 1.6.0, Black-Litterman with cached verdicts as Idzorek views, discrete allocation, classify_actions). New endpoint reads latest completed verdict per symbol (never triggers a run). server.py diff = ONLY the import line + the portfolio block before Routes (0 removed lines). tests/test_portfolio_optimizer.py 8 pass; full suite 51 pass. Smoke curl (AAPL/MSFT/NVDA HRP): weights sum 1.0, actions ADD/TRIM/HOLD, sharpe 1.362, discrete shares within budget."
+
+## frontend:
+##   - task: "Portfolio tab UI (add holdings, optimize, results)"
+##     implemented: true
+##     working: "NA"
+##     file: "frontend/app/(tabs)/portfolio.tsx, frontend/app/(tabs)/_layout.tsx, frontend/src/api.ts"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         -working: "NA"
+##         -agent: "main"
+##         -comment: "New PORTFOLIO tab (lime wallet icon) between HISTORY and ALERTS. Add holdings manual + watchlist quick-add, persisted via storage util (portfolio:holdings/cash). Objective picker HRP/MAX SHARPE/MIN VOL, Use-agent-views toggle, RUN OPTIMIZER. Results: sorted SELL/TRIM/ADD/HOLD with current->suggested weight, exp return/vol/Sharpe, not-financial-advice note. Smoke: added AAPL+MSFT, HRP -> TRIM MSFT (42.7->37.3), ADD AAPL (57.3->62.7), Sharpe 1.19. Needs verification: persistence across reload, Black-Litterman 'Use agent views' populating used/missing view notes, action classification."
+
+## metadata:
+##   created_by: "main_agent"
+##   version: "1.4"
+##   test_sequence: 6
+##   run_ui: true
+
+## test_plan:
+##   current_focus:
+##     - "portfolio_optimizer.py module + POST /api/portfolio/optimize"
+##     - "Portfolio tab UI (add holdings, optimize, results)"
+##   stuck_tasks: []
+##   test_all: false
+##   test_priority: "high_first"
+
+## agent_communication:
+##     -agent: "main"
+##     -message: "Portfolio tab (PyPortfolioOpt). Verify: (A) BACKEND POST /api/portfolio/optimize with 2-3 US symbols (AAPL/MSFT/NVDA) qty+avg_price, objective 'hrp' then 'max_sharpe' -> 200, suggested_weights sum ~1.0, actions list with ADD/TRIM/HOLD/SELL, sharpe/expected_return/volatility present, suggested_shares within total_value. (B) BACKEND use_agent_views=true: first POST /api/analyze for one of the symbols (e.g. AAPL) and let it complete so a cached verdict exists, then optimize with use_agent_views=true and objective 'max_sharpe' -> that symbol appears in used_agent_views_for; a symbol with no cached analysis appears in missing_agent_view_for; endpoint still returns a full result. (C) BACKEND edge: 1 holding -> 400; duplicate symbols -> 400; unit tests `cd /app/backend && python -m pytest tests/test_portfolio_optimizer.py -q` (8 pass) and full suite still pass (51). (D) FRONTEND https://trade-agent-app.preview.emergentagent.com/portfolio : new PORTFOLIO tab in bottom bar; add 2 holdings (AAPL 10@150, MSFT 5@300); RUN OPTIMIZER shows SUGGESTED ACTIONS with current->suggested % and stats; the not-financial-advice note shows. PERSISTENCE: change holdings, reload same URL (single browser context), holdings still present. NOTE: backend already smoke-verified; existing endpoints/pipeline untouched (server.py diff additive)."

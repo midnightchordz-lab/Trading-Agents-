@@ -89,6 +89,33 @@ export type OhlcData = {
   bars: OhlcBar[];
 };
 
+export type PortfolioHoldingInput = { symbol: string; quantity: number; avg_price: number };
+
+export type PortfolioAction = {
+  symbol: string;
+  current_weight: number;
+  suggested_weight: number;
+  delta: number;
+  action: "ADD" | "HOLD" | "TRIM" | "SELL";
+};
+
+export type PortfolioOptimizeResult = {
+  objective: string;
+  used_agent_views_for: string[];
+  missing_agent_view_for: string[];
+  dropped_symbols: string[];
+  total_value: number;
+  current_weights: Record<string, number>;
+  suggested_weights: Record<string, number>;
+  actions: PortfolioAction[];
+  suggested_shares: Record<string, number>;
+  leftover_cash: number;
+  expected_return: number;
+  volatility: number;
+  sharpe: number;
+  current_prices: Record<string, number>;
+};
+
 export type GroundingCheck = {
   id: string;
   ok: boolean;
@@ -151,6 +178,16 @@ export const api = {
   news: (symbol: string) => j<{ results: NewsItem[] }>(`/news/${encodeURIComponent(symbol)}`),
   ohlc: (symbol: string, range: string) =>
     j<OhlcData>(`/ohlc/${encodeURIComponent(symbol)}?range=${encodeURIComponent(range)}`),
+  portfolioOptimize: (body: {
+    holdings: PortfolioHoldingInput[];
+    objective: "hrp" | "max_sharpe" | "min_volatility";
+    use_agent_views: boolean;
+    cash: number;
+  }) =>
+    j<PortfolioOptimizeResult>(`/portfolio/optimize`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   trending: () => j<{ results: Quote[] }>(`/trending`),
   markets: (category: string) => j<{ results: Quote[] }>(`/markets/${category}`),
   analyze: (symbol: string, name?: string) =>
