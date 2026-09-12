@@ -17,6 +17,7 @@ import { ScreenHeader } from "@/src/components/ScreenHeader";
 import { TradingViewChart } from "@/src/components/TradingViewChart";
 import { VerdictLevels } from "@/src/components/VerdictLevels";
 import { FearGreedGauge } from "@/src/components/FearGreedGauge";
+import { GroundingBadge } from "@/src/components/GroundingBadge";
 import { NewsList } from "@/src/components/NewsList";
 import { rangeToInterval, widgetSupports } from "@/src/tv";
 import { PHASE_LABEL, PHASE_ORDER, PhaseKey } from "@/src/agents";
@@ -352,6 +353,8 @@ function VerdictView({
     <View>
       <VerdictBlock decision={verdict.decision} confidence={verdict.confidence} />
 
+      {analysis.grounding ? <GroundingBadge grounding={analysis.grounding} /> : null}
+
       <FearGreedGauge analysis={analysis} />
 
       <TvSection
@@ -359,6 +362,7 @@ function VerdictView({
         name={analysis.name}
         exchange={analysis.quote?.exchange}
         verdict={verdict}
+        chartLevels={analysis.grounding?.status === "failed" ? null : analysis.verdict}
         quote={analysis.quote}
       />
 
@@ -479,12 +483,14 @@ function TvSection({
   name,
   exchange,
   verdict,
+  chartLevels,
   quote,
 }: {
   symbol: string;
   name: string;
   exchange?: string;
   verdict: Verdict;
+  chartLevels: Verdict | null;
   quote?: Quote | null;
 }) {
   const [range, setRange] = useState<string>("1M");
@@ -518,7 +524,7 @@ function TvSection({
         interval={rangeToInterval(range)}
         theme="light"
         height={widgetChart ? 360 : 460}
-        levels={verdict}
+        levels={chartLevels}
         livePrice={quote?.price ?? null}
       />
       <VerdictLevels verdict={verdict} quote={quote} symbol={symbol} name={name} />

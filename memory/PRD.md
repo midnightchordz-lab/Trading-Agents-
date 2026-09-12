@@ -78,6 +78,11 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
 - Offer Kotak Neo wiring once the user shares credentials.
 - Add watchlist + chart range toggle if requested.
 
+## Verdict Grounding Gate — Part 1c (2026-06-17, session 7) — DONE
+- **Additive** `ground_verdict(verdict, quote)` in server.py checks the agents' target/stop against the live quote (direction vs price, magnitude 0.5x–2x, within 25% of 52w range, risk/reward ≥1, levels present) and stores a `grounding` report `{status, checks[], evidence}` in the existing completion `$set`. Status: failed / warning / grounded / unverified. Verdict is never mutated. Pipeline/prompts/parse_verdict/parse_debate/build_context untouched; `git diff server.py` = new function + the one `$set` line only.
+- **Frontend**: `GroundingBadge` under the verdict block (LEVELS VERIFIED / · CHECK / REJECTED / UNVERIFIED, tap to expand the individual checks + evidence). Chart entry/target/stop lines are suppressed when `grounding.status==='failed'` (`chartLevels` gate); the VerdictLevels strip + stats stay visible. New api types `Grounding`/`GroundingCheck` + `Analysis.grounding`.
+- Verified by testing agent (iteration_4): 9 grounding unit tests + 6 e2e + 37 full suite pass; badge renders/expands on a live HOLD (warning) analysis; existing endpoints/features intact.
+
 ## News relevance fix (2026-06-17, session 7) — DONE
 - **Bug**: the news feed showed generic filler (Trump statues, Cardi B) for suffixed/symbolic tickers (RELIANCE.NS, BTC-USD) because Yahoo search was queried with the raw ticker and fell back to trending news.
 - **Fix** (`fetch_news_sync` in server.py): query Yahoo by a smart per-asset term (`_news_query`: company name / coin name / index name / suffix-stripped symbol) and then keep only stories whose `relatedTickers` include the exact researched symbol. Result: Apple→Apple, Tesla→Tesla, BTC-USD→Bitcoin, GC=F→gold, ^NSEI→Nifty/India; when Yahoo genuinely has no coverage the feed is honestly short/empty instead of junk. Verified via curl across 6 symbols + frontend render.

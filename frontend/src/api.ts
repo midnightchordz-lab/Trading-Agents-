@@ -89,6 +89,27 @@ export type OhlcData = {
   bars: OhlcBar[];
 };
 
+export type GroundingCheck = {
+  id: string;
+  ok: boolean;
+  severity: "info" | "warn" | "fail";
+  message: string;
+};
+
+export type Grounding = {
+  status: "grounded" | "warning" | "failed" | "unverified";
+  checks: GroundingCheck[];
+  evidence: {
+    price: number;
+    dayLow?: number | null;
+    dayHigh?: number | null;
+    fiftyTwoWeekLow?: number | null;
+    fiftyTwoWeekHigh?: number | null;
+    currency?: string | null;
+    asOf: string;
+  } | null;
+};
+
 export type Analysis = {
   id: string;
   symbol: string;
@@ -98,6 +119,7 @@ export type Analysis = {
   quote: Quote | null;
   verdict: Verdict | null;
   debate: Debate | null;
+  grounding?: Grounding | null;
   current_step: number;
   total_steps: number;
   error: string | null;

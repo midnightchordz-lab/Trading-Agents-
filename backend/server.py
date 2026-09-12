@@ -341,6 +341,107 @@ def parse_verdict(text: str) -> dict:
     }
 
 
+# --- Verdict grounding gate (additive; verdict itself is never modified) ---
+def ground_verdict(verdict: dict, quote: Optional[dict]) -> dict:
+    """Check the agents' price levels against observed market evidence.
+
+    Never changes the verdict. Returns a grounding report the UI can show
+    and a future order-placement step can gate on:
+      status: grounded | warning | failed | unverified
+    """
+    checks: list = []
+
+    def add(cid: str, ok: bool, msg: str, severity: str = "fail"):
+        checks.append({"id": cid, "ok": ok, "severity": "info" if ok else severity, "message": msg})
+
+    if not quote or quote.get("price") in (None, 0):
+        return {
+            "status": "unverified",
+            "checks": [{"id": "evidence", "ok": False, "severity": "warn", "message": "No live quote was available, so price levels could not be verified."}],
+            "evidence": None,
+        }
+
+    price = float(quote["price"])
+    lo52 = quote.get("fiftyTwoWeekLow")
+    hi52 = quote.get("fiftyTwoWeekHigh")
+    evidence = {
+        "price": price,
+        "dayLow": quote.get("dayLow"),
+        "dayHigh": quote.get("dayHigh"),
+        "fiftyTwoWeekLow": lo52,
+        "fiftyTwoWeekHigh": hi52,
+        "currency": quote.get("currency"),
+        "asOf": now_iso(),
+    }
+
+    decision = verdict.get("decision", "HOLD")
+    target = verdict.get("target_price")
+    stop = verdict.get("stop_loss")
+
+    def num(v):
+        try:
+            f = float(v)
+            return f if f > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    t, sl = num(target), num(stop)
+
+    # 1. Levels present and positive (a HOLD may legitimately carry no levels -> warn only)
+    missing_sev = "warn" if decision == "HOLD" else "fail"
+    add("target_present", t is not None, "Target price is missing or not a positive number." if t is None else "Target price present.", severity=missing_sev)
+    add("stop_present", sl is not None, "Stop loss is missing or not a positive number." if sl is None else "Stop loss present.", severity=missing_sev)
+
+    # 2. Direction consistency with the decision
+    if decision == "BUY":
+        if t is not None:
+            add("target_direction", t > price, f"BUY target {t:g} is not above the live price {price:g}." if t <= price else "Target sits above the live price.")
+        if sl is not None:
+            add("stop_direction", sl < price, f"BUY stop {sl:g} is not below the live price {price:g}." if sl >= price else "Stop sits below the live price.")
+    elif decision == "SELL":
+        if t is not None:
+            add("target_direction", t < price, f"SELL target {t:g} is not below the live price {price:g}." if t >= price else "Target sits below the live price.")
+        if sl is not None:
+            add("stop_direction", sl > price, f"SELL stop {sl:g} is not above the live price {price:g}." if sl <= price else "Stop sits above the live price.")
+
+    # 3. Magnitude plausibility vs live price (warn, not fail)
+    for cid, lvl, name in (("target_magnitude", t, "Target"), ("stop_magnitude", sl, "Stop")):
+        if lvl is None:
+            continue
+        ratio = lvl / price
+        ok = 0.5 <= ratio <= 2.0
+        add(cid, ok, f"{name} {lvl:g} is {ratio:.2f}x the live price — outside a plausible range." if not ok else f"{name} is within 0.5x–2x of the live price.", severity="warn")
+
+    # 4. Against 52-week range (warn): beyond 25% outside the observed year
+    if lo52 and hi52:
+        try:
+            lo, hi = float(lo52), float(hi52)
+            band_lo, band_hi = lo * 0.75, hi * 1.25
+            for cid, lvl, name in (("target_52w", t, "Target"), ("stop_52w", sl, "Stop")):
+                if lvl is None:
+                    continue
+                ok = band_lo <= lvl <= band_hi
+                add(cid, ok, f"{name} {lvl:g} is far outside the 52-week range {lo:g}–{hi:g}." if not ok else f"{name} is within reach of the 52-week range.", severity="warn")
+        except (TypeError, ValueError):
+            pass
+
+    # 5. Risk/reward (warn)
+    if t is not None and sl is not None and decision in ("BUY", "SELL"):
+        reward = abs(t - price)
+        risk = abs(price - sl)
+        if risk > 0:
+            rr = reward / risk
+            add("risk_reward", rr >= 1.0, f"Risk/reward is {rr:.2f} — less reward than risk." if rr < 1.0 else f"Risk/reward is {rr:.2f}.", severity="warn")
+
+    if any((not c["ok"]) and c["severity"] == "fail" for c in checks):
+        status = "failed"
+    elif any(not c["ok"] for c in checks):
+        status = "warning"
+    else:
+        status = "grounded"
+    return {"status": status, "checks": checks, "evidence": evidence}
+
+
 def parse_debate(text: str):
     d = extract_json(text) or {}
 
@@ -547,9 +648,10 @@ async def run_analysis(analysis_id: str, symbol: str):
                 "recommendation": verdict["summary"],
             }
 
+        grounding = ground_verdict(verdict, quote)
         await db.analyses.update_one(
             {"id": analysis_id},
-            {"$set": {"status": "completed", "verdict": verdict, "debate": debate, "current_step": TOTAL_STEPS, "updated_at": now_iso()}},
+            {"$set": {"status": "completed", "verdict": verdict, "debate": debate, "grounding": grounding, "current_step": TOTAL_STEPS, "updated_at": now_iso()}},
         )
         logger.info(f"analysis {analysis_id} for {symbol} completed: {verdict['decision']}")
     except Exception as e:

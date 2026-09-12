@@ -146,3 +146,49 @@
 ## agent_communication:
 ##     -agent: "main"
 ##     -message: "Implemented Part1b. Backend /api/ohlc verified + all pytest pass. Please verify frontend: (1) NSE/BSE analysis (e.g. RELIANCE.NS id fe57f968-11a7-4dd9-b0b6-20acdb8d87de) VERDICT tab shows an in-app candlestick chart (CHART · OWN DATA) with candles actually drawn, RSI & MACD panes, working 1D/1W/1M/1Y chips, and BUY/SELL/HOLD entry + TARGET + STOP LOSS price lines — NO 'only available on TradingView' notice. (2) A widget symbol (GC=F id 09f6b956-b57c-4ebf-9c81-e1c1435cf3a7, or AAPL/BTC-USD) still renders the TradingView widget unchanged. Backend base URL from frontend/.env EXPO_PUBLIC_BACKEND_URL."
+
+## user_problem_statement: "Implement TRADINGVIEW_INTEGRATION_PART1C.md — additive Verdict Grounding Gate. New backend ground_verdict() checks the agents' target/stop against the live quote and stores a grounding report {status, checks[], evidence} in the existing completion $set. Frontend: new GroundingBadge under the verdict block (tap to expand checks) + gate chart lines so rejected levels are NOT drawn. Must NOT modify pipeline/prompts/parse_verdict/parse_debate/build_context/run_analysis control flow/verdict schema/existing endpoints or any Part 1/1a/1b work."
+
+## backend:
+##   - task: "ground_verdict() grounding gate + grounding in completion $set"
+##     implemented: true
+##     working: true
+##     file: "backend/server.py, backend/tests/test_grounding.py"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         -working: true
+##         -agent: "main"
+##         -comment: "Added ground_verdict() before parse_debate() and added grounding=ground_verdict(verdict,quote) into the existing final $set. Status logic: fail-check->failed, warn-check->warning, all-pass->grounded, no quote->unverified. Verdict never mutated. tests/test_grounding.py 9 pass; full suite 37 pass. git diff server.py shows ONLY the new function + the one $set line replaced (verified: only removed line is old $set). Fresh AAPL analysis returned grounding status=warning (HOLD w/o levels), evidence.price=332.27."
+
+## frontend:
+##   - task: "GroundingBadge under verdict + gate rejected chart levels"
+##     implemented: true
+##     working: "NA"
+##     file: "frontend/src/components/GroundingBadge.tsx, frontend/src/api.ts, frontend/app/analysis/[id].tsx"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         -working: "NA"
+##         -agent: "main"
+##         -comment: "Added Grounding/GroundingCheck types + Analysis.grounding. GroundingBadge shows LEVELS VERIFIED/CHECK/REJECTED/UNVERIFIED, tap to expand checks + evidence. Rendered on AAPL analysis as amber 'LEVELS · CHECK / 2 FLAGS' under HOLD block. Chart lines gated: chartLevels = grounding.status==='failed' ? null : verdict (VerdictLevels strip stays visible). Needs verification: badge expand works and failed-status hides chart entry/target/stop lines."
+
+## metadata:
+##   created_by: "main_agent"
+##   version: "1.2"
+##   test_sequence: 4
+##   run_ui: true
+
+## test_plan:
+##   current_focus:
+##     - "ground_verdict() grounding gate + grounding in completion $set"
+##     - "GroundingBadge under verdict + gate rejected chart levels"
+##   stuck_tasks: []
+##   test_all: false
+##   test_priority: "high_first"
+
+## agent_communication:
+##     -agent: "main"
+##     -message: "Part1c grounding gate. Backend verified (9 unit tests + 37 full pass, minimal diff). Please verify: (A) A newly completed analysis (POST /api/analyze {symbol:AAPL} then poll GET /api/analysis/{id}) returns a 'grounding' object with status + checks[] + evidence, and 'verdict' shape unchanged. (B) Frontend VERDICT tab shows testID 'grounding-badge' under the BUY/SELL/HOLD block; tapping it expands the individual checks list. Existing completed analysis with grounding=warning: id 6dbf6223-256e-486f-a23e-855d4c3e1930. (C) Confirm existing endpoints/pipeline untouched (quote/chart/ohlc/news/analyze still work). Note: the 'failed' status (BUY target below live price) is covered by unit tests since it depends on LLM output and can't be forced e2e; verify logic via test_grounding.py."
