@@ -159,31 +159,68 @@ def search_sync(q: str) -> list:
 
 
 def fetch_news_sync(symbol: str) -> list:
+    s = (symbol or "").upper().strip()
+    query = _news_query(s)
     url = "https://query1.finance.yahoo.com/v1/finance/search"
-    r = _yf_get(url, {"q": symbol, "quotesCount": 0, "newsCount": 15})
+    r = _yf_get(url, {"q": query, "quotesCount": 0, "newsCount": 40})
     r.raise_for_status()
     data = r.json()
-    out = []
-    for it in data.get("news", []):
-        title = it.get("title")
-        link = it.get("link")
+
+    def norm(item):
+        title = item.get("title")
+        link = item.get("link")
         if not title or not link:
-            continue
+            return None
         thumb = None
         try:
-            res = (it.get("thumbnail") or {}).get("resolutions") or []
+            res = (item.get("thumbnail") or {}).get("resolutions") or []
             if res:
                 thumb = res[0].get("url")
         except Exception:
             thumb = None
-        out.append({
+        return {
             "title": title,
-            "publisher": it.get("publisher"),
+            "publisher": item.get("publisher"),
             "link": link,
-            "published": it.get("providerPublishTime"),
+            "published": item.get("providerPublishTime"),
             "thumbnail": thumb,
-        })
-    return out
+        }
+
+    # Keep only stories that Yahoo tags with THIS exact ticker — this is what
+    # makes the feed about the researched asset instead of generic filler.
+    relevant = []
+    for it in data.get("news", []):
+        related = {str(t).upper() for t in (it.get("relatedTickers") or [])}
+        if s in related:
+            n = norm(it)
+            if n:
+                relevant.append(n)
+    return relevant[:12]
+
+
+CRYPTO_NEWS_NAMES = {
+    "BTC": "Bitcoin", "ETH": "Ethereum", "SOL": "Solana", "XRP": "XRP",
+    "DOGE": "Dogecoin", "BNB": "BNB", "ADA": "Cardano", "LTC": "Litecoin",
+}
+INDEX_NEWS_NAMES = {
+    "^GSPC": "S&P 500", "^DJI": "Dow Jones", "^IXIC": "Nasdaq", "^NSEI": "Nifty 50",
+    "^BSESN": "Sensex", "^FTSE": "FTSE 100", "^N225": "Nikkei 225", "^HSI": "Hang Seng",
+}
+
+
+def _news_query(symbol: str) -> str:
+    """Best Yahoo search term for a symbol so the returned news pool actually
+    references it (Yahoo indexes news by company/asset name, not raw ticker)."""
+    s = symbol.upper().strip()
+    if s in COMMODITY_NAMES:
+        return COMMODITY_NAMES[s]
+    if s in INDEX_NEWS_NAMES:
+        return INDEX_NEWS_NAMES[s]
+    if s.endswith("-USD") or s.endswith("-USDT"):
+        base = s.split("-")[0]
+        return CRYPTO_NEWS_NAMES.get(base, base)
+    m = re.match(r"^(.+)\.[A-Z]{1,3}$", s)  # strip exchange suffix: RELIANCE.NS -> RELIANCE
+    return m.group(1) if m else s
 
 
 # ----------------------------------------------------------------------------
