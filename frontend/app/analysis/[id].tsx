@@ -8,12 +8,15 @@ import ViewShot from "react-native-view-shot";
 import { CaretDown, CaretRight, Warning, Star, ShareNetwork } from "phosphor-react-native";
 
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
-import { api, Analysis, AgentMessageT } from "@/src/api";
+import { api, Analysis, AgentMessageT, Verdict, Quote } from "@/src/api";
 import { QuoteCard } from "@/src/components/QuoteCard";
 import { AgentMessage } from "@/src/components/AgentMessage";
 import { VerdictBlock } from "@/src/components/VerdictBadge";
 import { ShareCard } from "@/src/components/ShareCard";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
+import { TradingViewChart } from "@/src/components/TradingViewChart";
+import { VerdictLevels } from "@/src/components/VerdictLevels";
+import { rangeToInterval } from "@/src/tv";
 import { PHASE_LABEL, PHASE_ORDER, PhaseKey } from "@/src/agents";
 import { useWatchlist } from "@/src/watchlist";
 
@@ -338,6 +341,13 @@ function VerdictView({
     <View>
       <VerdictBlock decision={verdict.decision} confidence={verdict.confidence} />
 
+      <TvSection
+        symbol={analysis.symbol}
+        exchange={analysis.quote?.exchange}
+        verdict={verdict}
+        quote={analysis.quote}
+      />
+
       <View style={styles.statsGrid}>
         <View style={styles.statCell}>
           <Text style={styles.statLabel}>TARGET</Text>
@@ -448,6 +458,51 @@ function VerdictView({
   );
 }
 
+function TvSection({
+  symbol,
+  exchange,
+  verdict,
+  quote,
+}: {
+  symbol: string;
+  exchange?: string;
+  verdict: Verdict;
+  quote?: Quote | null;
+}) {
+  const [range, setRange] = useState<string>("1M");
+  const ranges = ["1D", "1W", "1M", "1Y"];
+  return (
+    <View style={styles.tvSection}>
+      <View style={styles.rangeBar}>
+        {ranges.map((r, i) => {
+          const active = range === r;
+          return (
+            <Pressable
+              key={r}
+              testID={`tv-range-${r}`}
+              onPress={() => {
+                Haptics.selectionAsync();
+                setRange(r);
+              }}
+              style={[styles.rangeBtn, i > 0 && styles.rangeDivider, active && styles.rangeActive]}
+            >
+              <Text style={[styles.rangeText, { color: active ? colors.onSurfaceInverse : colors.onSurface }]}>{r}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      <TradingViewChart
+        symbol={symbol}
+        exchange={exchange}
+        interval={rangeToInterval(range)}
+        theme="light"
+        height={360}
+      />
+      <VerdictLevels verdict={verdict} quote={quote} />
+    </View>
+  );
+}
+
 function DebateArg({ tag, color, text }: { tag: string; color: string; text: string }) {
   return (
     <View style={[styles.debateArg, { borderLeftWidth: 6, borderLeftColor: color }]}>
@@ -516,6 +571,19 @@ const styles = StyleSheet.create({
   statCellMid: { borderLeftWidth: BORDER, borderRightWidth: BORDER, borderColor: colors.borderStrong },
   statLabel: { fontFamily: fonts.mono, fontSize: 9, color: colors.onSurfaceTertiary, letterSpacing: 0.5 },
   statValue: { fontFamily: fonts.monoBold, fontSize: 14, color: colors.onSurface, marginTop: 4 },
+
+  tvSection: { marginTop: spacing.lg },
+  rangeBar: {
+    flexDirection: "row",
+    borderWidth: BORDER,
+    borderBottomWidth: 0,
+    borderColor: colors.borderStrong,
+  },
+  rangeBtn: { flex: 1, height: 38, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
+  rangeDivider: { borderLeftWidth: 1.5, borderLeftColor: colors.border },
+  rangeActive: { backgroundColor: colors.brand },
+  rangeText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1 },
+
 
   summaryBox: { borderWidth: BORDER, borderTopWidth: 0, borderColor: colors.borderStrong, padding: spacing.lg },
   summaryLabel: { fontFamily: fonts.monoBold, fontSize: 10, letterSpacing: 1.5, color: colors.onSurfaceTertiary, marginBottom: spacing.sm },
