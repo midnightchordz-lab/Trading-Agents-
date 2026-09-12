@@ -1,0 +1,60 @@
+{
+  "common": {
+    "execute_analysis": "Execute analysis",
+    "watch": "Watch",
+    "watching": "Watching",
+    "compare": "Compare",
+    "cancel": "Cancel",
+    "save": "Save",
+    "remove": "Remove",
+    "add": "Add",
+    "loading": "Loading",
+    "retry": "Retry",
+    "not_financial_advice": "Not financial advice",
+    "language": "Language"
+  },
+  "tabs": {
+    "analyze": "Analyze",
+    "history": "History",
+    "alerts": "Alerts",
+    "agents": "Agents",
+    "portfolio": "Portfolio"
+  },
+  "analyze": {
+    "title": "TradingAgents",
+    "subtitle": "Multi-agent equity desk",
+    "search_placeholder": "Search ticker — AAPL, BTC-USD…",
+    "selected_target": "Selected target",
+    "or_pick_another": "Or pick another",
+    "browse_markets": "Browse markets",
+    "watchlist_tap_to_rerun": "Watchlist · tap to re-run",
+    "no_results": "No matches found"
+  },
+  "quote": {
+    "fifty_two_week_low": "52w low",
+    "fifty_two_week_high": "52w high",
+    "exchange": "Exchange"
+  },
+  "verdict": {
+    "confidence": "Confidence",
+    "target": "Target",
+    "stop_loss": "Stop loss",
+    "time_horizon": "Time horizon",
+    "key_risks": "Key risks",
+    "summary": "Summary",
+    "buy": "BUY",
+    "sell": "SELL",
+    "hold": "HOLD"
+  },
+  "grounding": {
+    "verified": "Levels verified",
+    "check": "Levels · check",
+    "rejected": "Levels rejected",
+    "unverified": "Levels unverified"
+  },
+  "settings": {
+    "title": "Settings",
+    "language": "Language",
+    "language_hint": "Applies to the app and to new analyses"
+  }
+}

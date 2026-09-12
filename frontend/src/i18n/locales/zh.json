@@ -1,0 +1,60 @@
+{
+  "common": {
+    "execute_analysis": "执行分析",
+    "watch": "关注",
+    "watching": "已关注",
+    "compare": "对比",
+    "cancel": "取消",
+    "save": "保存",
+    "remove": "移除",
+    "add": "添加",
+    "loading": "加载中",
+    "retry": "重试",
+    "not_financial_advice": "非财务建议",
+    "language": "语言"
+  },
+  "tabs": {
+    "analyze": "分析",
+    "history": "历史",
+    "alerts": "提醒",
+    "agents": "智能体",
+    "portfolio": "投资组合"
+  },
+  "analyze": {
+    "title": "TradingAgents",
+    "subtitle": "多智能体股票分析台",
+    "search_placeholder": "搜索代码 — AAPL、BTC-USD…",
+    "selected_target": "已选标的",
+    "or_pick_another": "或选择其他",
+    "browse_markets": "浏览市场",
+    "watchlist_tap_to_rerun": "关注列表 · 点击重新分析",
+    "no_results": "未找到结果"
+  },
+  "quote": {
+    "fifty_two_week_low": "52周最低",
+    "fifty_two_week_high": "52周最高",
+    "exchange": "交易所"
+  },
+  "verdict": {
+    "confidence": "置信度",
+    "target": "目标价",
+    "stop_loss": "止损价",
+    "time_horizon": "时间周期",
+    "key_risks": "主要风险",
+    "summary": "摘要",
+    "buy": "BUY",
+    "sell": "SELL",
+    "hold": "HOLD"
+  },
+  "grounding": {
+    "verified": "点位已核实",
+    "check": "点位 · 待核查",
+    "rejected": "点位被拒绝",
+    "unverified": "点位未核实"
+  },
+  "settings": {
+    "title": "设置",
+    "language": "语言",
+    "language_hint": "适用于应用及新分析"
+  }
+}

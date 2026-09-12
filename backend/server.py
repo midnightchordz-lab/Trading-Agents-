@@ -607,7 +607,7 @@ async def append_message(analysis_id: str, message: dict, step: int):
 # ----------------------------------------------------------------------------
 # The multi-agent pipeline
 # ----------------------------------------------------------------------------
-async def run_analysis(analysis_id: str, symbol: str):
+async def run_analysis(analysis_id: str, symbol: str, language: str = "en"):
     try:
         quote = None
         try:
@@ -621,6 +621,7 @@ async def run_analysis(analysis_id: str, symbol: str):
 
         ctx = build_context(symbol, quote)
         step = 0
+        lang_directive = language_directive(language if language in SUPPORTED_LANGUAGES else "en")
 
         # PHASE 1 — Analyst team (concurrent)
         analyst_specs = [
@@ -630,7 +631,7 @@ async def run_analysis(analysis_id: str, symbol: str):
             ("News Analyst", "NEWS_ANALYST", NEWS_SYS),
         ]
         analyst_tasks = [
-            safe_agent(sysmsg, f"{ctx}\n\nProvide your {name} briefing for {symbol}.")
+            safe_agent(sysmsg + lang_directive, f"{ctx}\n\nProvide your {name} briefing for {symbol}.")
             for (name, _tag, sysmsg) in analyst_specs
         ]
         analyst_results = await asyncio.gather(*analyst_tasks)
@@ -655,7 +656,7 @@ async def run_analysis(analysis_id: str, symbol: str):
             if bear_prev:
                 bull_user += f"The Bear just argued:\n{bear_prev}\n\nRebut the bear and "
             bull_user += f"make the BULLISH case for {symbol} (round {rnd})."
-            bull_raw = await safe_agent(BULL_SYS, bull_user)
+            bull_raw = await safe_agent(BULL_SYS + lang_directive, bull_user)
             bull_content, _ = split_signal(bull_raw)
             step += 1
             await append_message(analysis_id, make_message("Bull Researcher", "BULL_RESEARCHER", "debate", bull_content, "bullish"), step)
@@ -666,7 +667,7 @@ async def run_analysis(analysis_id: str, symbol: str):
                 f"{ctx}\n\nANALYST REPORTS:\n{analyst_summary}\n\n"
                 f"The Bull just argued:\n{bull_prev}\n\nRebut the bull and make the BEARISH case for {symbol} (round {rnd})."
             )
-            bear_raw = await safe_agent(BEAR_SYS, bear_user)
+            bear_raw = await safe_agent(BEAR_SYS + lang_directive, bear_user)
             bear_content, _ = split_signal(bear_raw)
             step += 1
             await append_message(analysis_id, make_message("Bear Researcher", "BEAR_RESEARCHER", "debate", bear_content, "bearish"), step)
@@ -676,7 +677,7 @@ async def run_analysis(analysis_id: str, symbol: str):
 
         # PHASE 3 — Research Manager
         rm_raw = await safe_agent(
-            RM_SYS,
+            RM_SYS + lang_directive,
             f"{ctx}\n\nANALYST REPORTS:\n{analyst_summary}\n\nDEBATE:\n{debate_text}\n\nJudge the debate and give the recommended stance for {symbol}.",
         )
         rm_content, rm_sig = split_signal(rm_raw)
@@ -685,7 +686,7 @@ async def run_analysis(analysis_id: str, symbol: str):
 
         # PHASE 4 — Trader
         tr_raw = await safe_agent(
-            TRADER_SYS,
+            TRADER_SYS + lang_directive,
             f"{ctx}\n\nANALYST REPORTS:\n{analyst_summary}\n\nDEBATE VERDICT:\n{rm_content}\n\nPropose a concrete trade plan for {symbol}.",
         )
         tr_content, tr_sig = split_signal(tr_raw)
@@ -694,7 +695,7 @@ async def run_analysis(analysis_id: str, symbol: str):
 
         # PHASE 5 — Risk Manager
         rk_raw = await safe_agent(
-            RISK_SYS,
+            RISK_SYS + lang_directive,
             f"{ctx}\n\nTRADE PLAN:\n{tr_content}\n\nDEBATE VERDICT:\n{rm_content}\n\nStress-test the trade and give your risk ruling for {symbol}.",
         )
         rk_content, rk_sig = split_signal(rk_raw)
@@ -707,7 +708,7 @@ async def run_analysis(analysis_id: str, symbol: str):
             f"\n\nTRADER:\n{tr_content}\n\nRISK MANAGER:\n{rk_content}"
         )
         pm_raw = await safe_agent(
-            PM_SYS,
+            PM_SYS + lang_directive,
             f"{ctx}\n\nFULL DESK TRANSCRIPT:\n{full_transcript}\n\nMake the FINAL decision for {symbol}. Output ONLY the JSON object.",
             fallback="{}",
         )
@@ -719,7 +720,7 @@ async def run_analysis(analysis_id: str, symbol: str):
 
         # PHASE 7 — Round-table debate (Bull vs Bear vs Fundamentals) + synthesis
         debate_raw = await safe_agent(
-            DEBATE_SYS,
+            DEBATE_SYS + lang_directive,
             f"{ctx}\n\nDESK TRANSCRIPT:\n{full_transcript}\n\n"
             f"FINAL VERDICT: {verdict['decision']} ({verdict['confidence']}%). {verdict['summary']}\n\n"
             f"Produce the round-table JSON for {symbol}.",
@@ -738,7 +739,7 @@ async def run_analysis(analysis_id: str, symbol: str):
 
         # PHASE 8 — Multi-Horizon Desk (short / medium / long-term calls)
         tf_raw = await safe_agent(
-            TIMEFRAME_SYS,
+            TIMEFRAME_SYS + lang_directive,
             f"{ctx}\n\nDESK TRANSCRIPT:\n{full_transcript}\n\n"
             f"PRIMARY VERDICT: {verdict['decision']} ({verdict['confidence']}%), "
             f"target {verdict.get('target_price')}, stop {verdict.get('stop_loss')}. {verdict['summary']}\n\n"
@@ -771,9 +772,30 @@ async def run_analysis(analysis_id: str, symbol: str):
 # ----------------------------------------------------------------------------
 # Schemas
 # ----------------------------------------------------------------------------
+SUPPORTED_LANGUAGES = {"en": "English", "hi": "Hindi", "es": "Spanish", "zh": "Mandarin Chinese"}
+
+
+def language_directive(lang: str) -> str:
+    """Appended to an agent's system prompt when lang != "en". Returns ""
+    (a no-op) for English, so English-language behavior is byte-identical
+    to before this feature existed. Explicitly protects the fixed JSON
+    keys and enum values every parser depends on."""
+    name = SUPPORTED_LANGUAGES.get(lang)
+    if not name or lang == "en":
+        return ""
+    return (
+        f"\n\nRespond in {name}. Write every free-text field's VALUE in {name} "
+        "(summaries, arguments, theses, risk descriptions, rationale). "
+        "Keep every JSON KEY in English exactly as specified, and keep every "
+        'enum value (e.g. "decision": "BUY", "SELL", or "HOLD") in English '
+        "exactly as specified — never translate a key or an enum value."
+    )
+
+
 class AnalyzeRequest(BaseModel):
     symbol: str
     name: Optional[str] = None
+    language: str = "en"
 
 
 # --- Portfolio optimization (additive; never mutates analyses or the pipeline) ---
@@ -1031,11 +1053,13 @@ async def analyze(body: AnalyzeRequest):
     symbol = (body.symbol or "").strip().upper()
     if not symbol or not re.match(r'^[A-Z0-9.\-\^=]{1,20}$', symbol):
         raise HTTPException(status_code=400, detail="Invalid ticker symbol")
+    language = body.language if body.language in SUPPORTED_LANGUAGES else "en"
 
     analysis = {
         "id": str(uuid.uuid4()),
         "symbol": symbol,
         "name": (body.name or symbol),
+        "language": language,
         "status": "running",
         "messages": [],
         "quote": None,
@@ -1049,7 +1073,7 @@ async def analyze(body: AnalyzeRequest):
         "updated_at": now_iso(),
     }
     await db.analyses.insert_one({**analysis})
-    asyncio.create_task(run_analysis(analysis["id"], symbol))
+    asyncio.create_task(run_analysis(analysis["id"], symbol, language))
     return analysis
 
 

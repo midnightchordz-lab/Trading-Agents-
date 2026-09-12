@@ -4,6 +4,7 @@ import * as Haptics from "expo-haptics";
 import { colors, fonts, spacing, BORDER, changeColor } from "@/src/theme";
 import { Sparkline } from "@/src/components/Sparkline";
 import { Quote, ChartData, api } from "@/src/api";
+import { useTranslation } from "react-i18next";
 
 const RANGES = ["1D", "1W", "1M", "1Y"];
 
@@ -13,6 +14,7 @@ function fmt(n?: number | null, dp = 2): string {
 }
 
 export function QuoteCard({ quote, showRanges = false }: { quote: Quote; showRanges?: boolean }) {
+  const { t } = useTranslation();
   const [range, setRange] = useState<string>("1M");
   const [chart, setChart] = useState<ChartData | null>(null);
   const [loadingChart, setLoadingChart] = useState(false);
@@ -82,6 +84,25 @@ export function QuoteCard({ quote, showRanges = false }: { quote: Quote; showRan
         </View>
       </View>
 
+      {quote.fiftyTwoWeekLow != null && quote.fiftyTwoWeekHigh != null && quote.price != null && quote.fiftyTwoWeekHigh > quote.fiftyTwoWeekLow ? (
+        <View style={styles.rangeBarWrap}>
+          <View style={styles.rangeBarLabels}>
+            <Text style={styles.rangeBarLabel}>{fmt(quote.fiftyTwoWeekLow)}</Text>
+            <Text style={styles.rangeBarLabel}>{fmt(quote.fiftyTwoWeekHigh)}</Text>
+          </View>
+          <View style={styles.rangeBarTrack}>
+            <View
+              style={[
+                styles.rangeBarDot,
+                {
+                  left: `${Math.max(0, Math.min(100, ((quote.price - quote.fiftyTwoWeekLow) / (quote.fiftyTwoWeekHigh - quote.fiftyTwoWeekLow)) * 100))}%`,
+                },
+              ]}
+            />
+          </View>
+        </View>
+      ) : null}
+
       {showRanges ? (
         <View style={styles.rangeRow}>
           {RANGES.map((r, i) => {
@@ -105,15 +126,15 @@ export function QuoteCard({ quote, showRanges = false }: { quote: Quote; showRan
 
       <View style={styles.statsRow}>
         <View style={styles.stat}>
-          <Text style={styles.statLabel}>52W LOW</Text>
+          <Text style={styles.statLabel}>{t("quote.fifty_two_week_low")}</Text>
           <Text style={styles.statValue}>{fmt(quote.fiftyTwoWeekLow)}</Text>
         </View>
         <View style={[styles.stat, styles.statMid]}>
-          <Text style={styles.statLabel}>52W HIGH</Text>
+          <Text style={styles.statLabel}>{t("quote.fifty_two_week_high")}</Text>
           <Text style={styles.statValue}>{fmt(quote.fiftyTwoWeekHigh)}</Text>
         </View>
         <View style={styles.stat}>
-          <Text style={styles.statLabel}>EXCHANGE</Text>
+          <Text style={styles.statLabel}>{t("quote.exchange")}</Text>
           <Text style={styles.statValue} numberOfLines={1}>
             {quote.exchange || "—"}
           </Text>
@@ -148,6 +169,18 @@ const styles = StyleSheet.create({
   price: { fontFamily: fonts.monoBold, fontSize: 24, color: colors.onSurface },
   changeBox: { paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
   changeText: { fontFamily: fonts.monoBold, fontSize: 12, color: "#FFFFFF" },
+  rangeBarWrap: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
+  rangeBarLabels: { flexDirection: "row", justifyContent: "space-between", marginBottom: 4 },
+  rangeBarLabel: { fontFamily: fonts.mono, fontSize: 9, color: colors.onSurfaceTertiary },
+  rangeBarTrack: { height: 4, backgroundColor: colors.borderStrong, borderRadius: 2 },
+  rangeBarDot: {
+    position: "absolute",
+    top: -3,
+    width: 3,
+    height: 10,
+    backgroundColor: colors.onSurface,
+    marginLeft: -1.5,
+  },
   rangeRow: {
     flexDirection: "row",
     marginHorizontal: spacing.lg,

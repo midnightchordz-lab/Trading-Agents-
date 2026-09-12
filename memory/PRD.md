@@ -78,6 +78,11 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
 - Offer Kotak Neo wiring once the user shares credentials.
 - Add watchlist + chart range toggle if requested.
 
+## Redesign polish + Multi-language i18n (2026-06-17, session 7) — DONE
+- **Part A**: QuoteCard 52-week range bar (marker between 52w low/high; hidden gracefully if bounds absent) + category-chip right-edge LinearGradient fade on Analyze.
+- **Part B i18n** (English/Hindi/Spanish/Mandarin): backend `language_directive(lang)` appended to all 9 agent system prompts when lang!=en (returns '' for en → English byte-identical); `AnalyzeRequest.language` threaded through `run_analysis`. Frontend i18next+react-i18next+expo-localization; `LanguagePicker` in Agents tab (persists via `settings:language`, device-locale default); translated tab labels, Analyze strings, QuoteCard 52w labels, VerdictBadge confidence. JSON keys + BUY/SELL/HOLD enums always English.
+- Verified by testing agent (iteration_9): 10 i18n unit + 82 full + 2 live e2e (Hindi run keeps English keys/enums, translates summary/thesis to Devanagari); live UI switch + persistence + revert; Part A visuals render; no regressions. server.py diff = only the B1a-d edits.
+
 ## Multi-Timeframe Verdicts — PHASE 8 (2026-06-17, session 7) — DONE
 - **First pipeline-extending change**: new PHASE 8 "Multi-Horizon Desk" LLM call after the round-table debate (TOTAL_STEPS 12→13). Produces a separate BUY/SELL/HOLD call for short (1-2wk) / medium (1-3mo) / long (6-12mo) horizons, each with confidence + optional target/stop + thesis. Never mutates the primary verdict/debate/grounding. `parse_timeframes()` requires all three horizons or returns None → `fallback_timeframes()` reuses primary decision/confidence, null levels, explicit "unavailable" note (never invents prices). New additive `analysis.timeframes` field (initial doc + $set). Only the genuinely-new pieces were applied — the spec's raw diff also referenced an unrelated `technical_factors.py` (absent here) which was intentionally skipped.
 - **Frontend**: `TimeframesCard` (MULTI-HORIZON VIEW) under PositionSizer — three tabs colored by each horizon's decision; body shows decision badge + confidence + thesis + TARGET/STOP (or fallback note). New `Timeframes`/`TimeframeCall` types + `Analysis.timeframes`.

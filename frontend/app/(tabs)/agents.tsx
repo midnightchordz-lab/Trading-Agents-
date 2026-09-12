@@ -17,6 +17,7 @@ import {
 import { colors, fonts, spacing, BORDER, accents } from "@/src/theme";
 import { AGENT_ROSTER, PIPELINE_STEPS } from "@/src/agents";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
+import { LanguagePicker } from "@/src/components/LanguagePicker";
 
 const ICONS: Record<string, any> = {
   ChartLineUp,
@@ -85,6 +86,8 @@ export default function AgentsScreen() {
             </View>
           );
         })}
+
+        <LanguagePicker />
 
         <View style={styles.disclaimer}>
           <Text style={styles.disclaimerText}>

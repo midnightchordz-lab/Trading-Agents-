@@ -1,6 +1,7 @@
 import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
+import { useTranslation } from "react-i18next";
 
 // Big edge-to-edge verdict block for the Report screen.
 export function VerdictBlock({
@@ -10,13 +11,14 @@ export function VerdictBlock({
   decision: string;
   confidence: number;
 }) {
+  const { t } = useTranslation();
   const { bg, fg } = verdictColors(decision);
   return (
     <View testID="verdict-block" style={[styles.block, { backgroundColor: bg }]}>
       <Text style={[styles.blockLabel, { color: fg }]}>PORTFOLIO MANAGER VERDICT</Text>
       <Text style={[styles.blockDecision, { color: fg }]}>{decision.toUpperCase()}</Text>
       <View style={styles.confRow}>
-        <Text style={[styles.confLabel, { color: fg }]}>CONFIDENCE</Text>
+        <Text style={[styles.confLabel, { color: fg }]}>{t("verdict.confidence")}</Text>
         <Text style={[styles.confValue, { color: fg }]}>{confidence}%</Text>
       </View>
       <View style={[styles.confTrack, { borderColor: fg }]}>

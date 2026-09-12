@@ -18,6 +18,8 @@ import { MagnifyingGlass, X, ArrowRight, CaretRight, Star, ArrowsLeftRight } fro
 
 import { colors, fonts, spacing, BORDER, changeColor, accentAt, CATEGORY_COLORS, accents, CTA_GRADIENT } from "@/src/theme";
 import { api, Quote, SearchResult } from "@/src/api";
+import { useTranslation } from "react-i18next";
+import { getCurrentLanguage } from "@/src/i18n";
 import { QuoteCard } from "@/src/components/QuoteCard";
 import { Sparkline } from "@/src/components/Sparkline";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
@@ -34,6 +36,7 @@ export default function AnalyzeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { items: watchItems, isSaved, toggle: toggleWatch, remove: removeWatch } = useWatchlist();
+  const { t } = useTranslation();
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -146,7 +149,7 @@ export default function AnalyzeScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       setSubmitting(true);
       try {
-        const res = await api.analyze(sym, nm);
+        const res = await api.analyze(sym, nm, getCurrentLanguage());
         router.push(`/analysis/${res.id}`);
       } catch {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -167,13 +170,13 @@ export default function AnalyzeScreen() {
     <View style={styles.root}>
       {/* Sticky header */}
       <ScreenHeader
-        title="TRADINGAGENTS"
-        subtitle="// MULTI-AGENT EQUITY DESK"
+        title={t("analyze.title")}
+        subtitle={t("analyze.subtitle")}
         insetsTop={insets.top}
         right={
           <Pressable testID="compare-button" onPress={() => router.push("/compare")} style={styles.compareBtn}>
             <ArrowsLeftRight size={16} color={colors.onSurface} weight="bold" />
-            <Text style={styles.compareText}>COMPARE</Text>
+            <Text style={styles.compareText}>{t("common.compare")}</Text>
           </Pressable>
         }
       />
@@ -195,7 +198,7 @@ export default function AnalyzeScreen() {
               setQuery(t);
               if (selected) setSelected(null);
             }}
-            placeholder="SEARCH TICKER — AAPL, BTC-USD…"
+            placeholder={t("analyze.search_placeholder")}
             placeholderTextColor="#9CA3AF"
             autoCapitalize="characters"
             autoCorrect={false}
@@ -241,7 +244,7 @@ export default function AnalyzeScreen() {
             {selected ? (
               <View style={styles.section}>
                 <View style={styles.sectionHeadRow}>
-                  <Text style={[styles.sectionLabel, { marginBottom: 0 }]}>SELECTED TARGET</Text>
+                  <Text style={[styles.sectionLabel, { marginBottom: 0 }]}>{t("analyze.selected_target")}</Text>
                   <Pressable
                     testID="watchlist-toggle"
                     onPress={() => selected && toggleWatch({ symbol: selected.symbol, name: selected.name })}
@@ -254,7 +257,7 @@ export default function AnalyzeScreen() {
                       weight={isSaved(selected.symbol) ? "fill" : "regular"}
                     />
                     <Text style={[styles.starText, isSaved(selected.symbol) && { color: colors.onSurfaceInverse }]}>
-                      {isSaved(selected.symbol) ? "SAVED" : "WATCH"}
+                      {isSaved(selected.symbol) ? t("common.watching") : t("common.watch")}
                     </Text>
                   </Pressable>
                 </View>
@@ -278,7 +281,7 @@ export default function AnalyzeScreen() {
             {/* Watchlist */}
             {watchItems.length > 0 ? (
               <View style={styles.section}>
-                <Text style={styles.sectionLabel}>WATCHLIST · TAP TO RE-RUN</Text>
+                <Text style={styles.sectionLabel}>{t("analyze.watchlist_tap_to_rerun")}</Text>
                 <ScrollView
                   horizontal
                   showsHorizontalScrollIndicator={false}
@@ -315,29 +318,38 @@ export default function AnalyzeScreen() {
 
             {/* Browse markets */}
             <View style={styles.section}>
-              <Text style={styles.sectionLabel}>{selected ? "OR PICK ANOTHER" : "BROWSE MARKETS"}</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.chipRowContent}
-                style={styles.chipRow}
-              >
-                {CATEGORIES.map((c) => {
-                  const active = category === c.key;
-                  const catColor = CATEGORY_COLORS[c.key] || accents.blue;
-                  return (
-                    <Pressable
-                      key={c.key}
-                      testID={`category-chip-${c.key}`}
-                      onPress={() => onSelectCategory(c.key)}
-                      style={[styles.chip, active && { backgroundColor: catColor, borderColor: catColor }]}
-                    >
-                      <View style={[styles.chipDot, { backgroundColor: active ? "#FFFFFF" : catColor }]} />
-                      <Text style={[styles.chipText, { color: active ? "#FFFFFF" : colors.onSurface }]}>{c.label}</Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
+              <Text style={styles.sectionLabel}>{selected ? t("analyze.or_pick_another") : t("analyze.browse_markets")}</Text>
+              <View style={styles.chipScrollWrap}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.chipRowContent}
+                  style={styles.chipRow}
+                >
+                  {CATEGORIES.map((c) => {
+                    const active = category === c.key;
+                    const catColor = CATEGORY_COLORS[c.key] || accents.blue;
+                    return (
+                      <Pressable
+                        key={c.key}
+                        testID={`category-chip-${c.key}`}
+                        onPress={() => onSelectCategory(c.key)}
+                        style={[styles.chip, active && { backgroundColor: catColor, borderColor: catColor }]}
+                      >
+                        <View style={[styles.chipDot, { backgroundColor: active ? "#FFFFFF" : catColor }]} />
+                        <Text style={[styles.chipText, { color: active ? "#FFFFFF" : colors.onSurface }]}>{c.label}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+                <LinearGradient
+                  colors={["rgba(255,255,255,0)", colors.surface] as unknown as string[]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.chipFade}
+                  pointerEvents="none"
+                />
+              </View>
               {loadingCat && !marketData[category] ? (
                 <View style={styles.previewLoading}>
                   <ActivityIndicator color={colors.onSurface} />
@@ -512,6 +524,8 @@ const styles = StyleSheet.create({
 
   chipRow: { marginBottom: spacing.md, marginHorizontal: -spacing.lg },
   chipRowContent: { gap: spacing.sm, paddingHorizontal: spacing.lg },
+  chipScrollWrap: { position: "relative" },
+  chipFade: { position: "absolute", right: 0, top: 0, bottom: spacing.md, width: 28 },
   chip: {
     height: 36,
     flexDirection: "row",

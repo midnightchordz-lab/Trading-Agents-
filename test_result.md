@@ -348,3 +348,49 @@
 ## agent_communication:
 ##     -agent: "main"
 ##     -message: "Multi-Timeframe Verdicts. Verify: (A) BACKEND unit `cd /app/backend && python -m pytest tests/test_timeframes.py -q` (6 pass) + full suite `python -m pytest tests/ -q` (63 pass). (B) BACKEND e2e: POST /api/analyze {symbol:AAPL,name:Apple Inc.} poll GET /api/analysis/{id} to completed (~30-60s). Confirm total_steps==13, messages length==13 with last agent 'Multi-Horizon Desk', and a new 'timeframes' object with short_term/medium_term/long_term each having decision/confidence/target_price/stop_loss/thesis/horizon/label. Confirm existing 'verdict' and 'debate' shapes are unchanged. (C) FRONTEND: open a completed analysis (e.g. id 3f09af12-5761-4240-b6e3-fa64b76ee352), VERDICT tab, scroll to testID 'timeframes-card' (MULTI-HORIZON VIEW). Confirm 3 tabs (1-2 WEEKS / 1-3 MONTHS / 6-12 MONTHS) each showing a decision, tapping a tab swaps the body (decision badge + % confidence + thesis, and TARGET/STOP when present). (D) Non-regression: GroundingBadge, PositionSizer, chart, VerdictLevels, headlines still render. NOTE additive-only; existing endpoints unchanged."
+
+## user_problem_statement: "REDESIGN_AND_I18N.md — Part A redesign polish (52-week range bar in QuoteCard; category chip scroll-fade on Analyze) + Part B multi-language (en/hi/es/zh). Backend: language_directive() appended to agent system prompts when lang!=en (empty for en, byte-identical English behavior); AnalyzeRequest.language; run_analysis threads language. Frontend: i18next+react-i18next+expo-localization, LanguagePicker in Agents tab, translated tab labels/Analyze strings/QuoteCard/VerdictBadge. JSON keys + BUY/SELL/HOLD enums NEVER translated."
+
+## backend:
+##   - task: "language_directive + AnalyzeRequest.language + run_analysis threading"
+##     implemented: true
+##     working: true
+##     file: "backend/server.py, backend/tests/test_i18n.py"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         -working: true
+##         -agent: "main"
+##         -comment: "language_directive('en')=='' (no-op, English byte-identical); appended (+ lang_directive) to all 9 agent calls (4 analysts, bull, bear, RM, trader, risk, PM, debate, timeframe). AnalyzeRequest.language default en; /analyze validates + stores language + passes to run_analysis. test_i18n.py 10 pass; full suite 82 pass. server.py diff = only B1a-d in-place edits (no prompt/parser bodies changed)."
+
+## frontend:
+##   - task: "i18n (LanguagePicker, translated UI) + Part A polish"
+##     implemented: true
+##     working: "NA"
+##     file: "frontend/src/i18n/*, LanguagePicker.tsx, QuoteCard.tsx, VerdictBadge.tsx, app/_layout.tsx, (tabs)/_layout.tsx, (tabs)/index.tsx, (tabs)/agents.tsx, src/api.ts"
+##     stuck_count: 0
+##     priority: "high"
+##     needs_retesting: true
+##     status_history:
+##         -working: "NA"
+##         -agent: "main"
+##         -comment: "i18next init + initLanguage() in root layout (stored pref -> device locale -> en). LanguagePicker in Agents tab (en/hi/es/zh native+english, persists). Translated: tab labels, Analyze title/subtitle/search/compare/selected-target/watch(ing)/watchlist/browse, QuoteCard 52w labels, VerdictBadge CONFIDENCE. api.analyze passes getCurrentLanguage(). Part A: 52-week range bar in QuoteCard; category chip LinearGradient fade. 4 locales identical key sets; lint clean. Smoke: switching to Hindi translated Analyze header/placeholder/compare/browse + tab bar; BUY/SELL/HOLD stayed English; revert to English restored. Needs e2e verification."
+
+## metadata:
+##   created_by: "main_agent"
+##   version: "1.7"
+##   test_sequence: 9
+##   run_ui: true
+
+## test_plan:
+##   current_focus:
+##     - "language_directive + AnalyzeRequest.language + run_analysis threading"
+##     - "i18n (LanguagePicker, translated UI) + Part A polish"
+##   stuck_tasks: []
+##   test_all: false
+##   test_priority: "high_first"
+
+## agent_communication:
+##     -agent: "main"
+##     -message: "REDESIGN_AND_I18N (Parts A+B). Verify: (A) BACKEND `cd /app/backend && python -m pytest tests/test_i18n.py -q` (10 pass) + full suite (82 pass). language_directive('en')=='' and unsupported->''; hi/es/zh directives name the language and instruct keys/enums stay English. (B) BACKEND e2e: POST /api/analyze {symbol:AAPL,name:Apple Inc.,language:hi} -> 200; poll to completed; verify verdict.decision is still one of BUY/SELL/HOLD (enum English) and JSON keys unchanged, while free-text (summary/thesis) is in Hindi; a request with no language behaves exactly as before (English). (C) FRONTEND https://trade-agent-app.preview.emergentagent.com : Agents tab shows testID 'language-picker' with 4 options; tapping language-option-hi translates the bottom tab labels + the Analyze tab header/search-placeholder/Compare/Browse; BUY/SELL/HOLD text stays English; selection persists after reload; switching back to language-option-en restores English exactly. (D) Part A: on an analysis, QuoteCard shows a 52-week range bar with a marker between the 52w low/high (absent gracefully if bounds missing); the category chip row on Analyze has a soft right-edge fade. (E) Non-regression: no red screen/console errors; existing analysis/history/alerts flows intact. NOTE existing English behavior must be byte-identical."

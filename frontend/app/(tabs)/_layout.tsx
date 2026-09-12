@@ -6,15 +6,17 @@ import * as Haptics from "expo-haptics";
 import { ChartLineUp, ClockCounterClockwise, UsersThree, Bell } from "phosphor-react-native";
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { colors, fonts, BORDER, accents } from "@/src/theme";
+import { useTranslation } from "react-i18next";
 
-const TABS: Record<string, { label: string; Icon: any; color: string }> = {
-  index: { label: "ANALYZE", Icon: ChartLineUp, color: accents.blue },
-  history: { label: "HISTORY", Icon: ClockCounterClockwise, color: accents.pink },
-  alerts: { label: "ALERTS", Icon: Bell, color: accents.amber },
-  agents: { label: "AGENTS", Icon: UsersThree, color: accents.teal },
+const TABS: Record<string, { labelKey: string; Icon: any; color: string }> = {
+  index: { labelKey: "tabs.analyze", Icon: ChartLineUp, color: accents.blue },
+  history: { labelKey: "tabs.history", Icon: ClockCounterClockwise, color: accents.pink },
+  alerts: { labelKey: "tabs.alerts", Icon: Bell, color: accents.amber },
+  agents: { labelKey: "tabs.agents", Icon: UsersThree, color: accents.teal },
 };
 
 function BrutalTabBar({ state, navigation }: BottomTabBarProps) {
+  const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   return (
     <View style={[styles.bar, { paddingBottom: insets.bottom }]}>
@@ -42,7 +44,7 @@ function BrutalTabBar({ state, navigation }: BottomTabBarProps) {
               ]}
             >
               <Icon size={22} color={color} weight={focused ? "fill" : "regular"} />
-              <Text style={[styles.label, { color }]}>{conf.label}</Text>
+              <Text style={[styles.label, { color }]}>{t(conf.labelKey).toUpperCase()}</Text>
             </Pressable>
           );
         })}

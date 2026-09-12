@@ -207,8 +207,8 @@ export const api = {
     }),
   trending: () => j<{ results: Quote[] }>(`/trending`),
   markets: (category: string) => j<{ results: Quote[] }>(`/markets/${category}`),
-  analyze: (symbol: string, name?: string) =>
-    j<Analysis>(`/analyze`, { method: "POST", body: JSON.stringify({ symbol, name }) }),
+  analyze: (symbol: string, name?: string, language?: string) =>
+    j<Analysis>(`/analyze`, { method: "POST", body: JSON.stringify({ symbol, name, language }) }),
   getAnalysis: (id: string) => j<Analysis>(`/analysis/${id}`),
   history: () => j<{ results: Analysis[] }>(`/history`),
   remove: (id: string) => j<{ ok: boolean }>(`/analysis/${id}`, { method: "DELETE" }),

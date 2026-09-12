@@ -1,0 +1,60 @@
+{
+  "common": {
+    "execute_analysis": "विश्लेषण चलाएं",
+    "watch": "वॉच करें",
+    "watching": "वॉच किया जा रहा है",
+    "compare": "तुलना करें",
+    "cancel": "रद्द करें",
+    "save": "सहेजें",
+    "remove": "हटाएं",
+    "add": "जोड़ें",
+    "loading": "लोड हो रहा है",
+    "retry": "पुनः प्रयास करें",
+    "not_financial_advice": "यह वित्तीय सलाह नहीं है",
+    "language": "भाषा"
+  },
+  "tabs": {
+    "analyze": "विश्लेषण",
+    "history": "इतिहास",
+    "alerts": "अलर्ट",
+    "agents": "एजेंट्स",
+    "portfolio": "पोर्टफोलियो"
+  },
+  "analyze": {
+    "title": "ट्रेडिंगएजेंट्स",
+    "subtitle": "मल्टी-एजेंट इक्विटी डेस्क",
+    "search_placeholder": "टिकर खोजें — AAPL, BTC-USD…",
+    "selected_target": "चयनित लक्ष्य",
+    "or_pick_another": "या कोई और चुनें",
+    "browse_markets": "बाज़ार ब्राउज़ करें",
+    "watchlist_tap_to_rerun": "वॉचलिस्ट · फिर से चलाने के लिए टैप करें",
+    "no_results": "कोई परिणाम नहीं मिला"
+  },
+  "quote": {
+    "fifty_two_week_low": "52 सप्ताह न्यूनतम",
+    "fifty_two_week_high": "52 सप्ताह अधिकतम",
+    "exchange": "एक्सचेंज"
+  },
+  "verdict": {
+    "confidence": "विश्वास स्तर",
+    "target": "लक्ष्य",
+    "stop_loss": "स्टॉप लॉस",
+    "time_horizon": "समय सीमा",
+    "key_risks": "प्रमुख जोखिम",
+    "summary": "सारांश",
+    "buy": "BUY",
+    "sell": "SELL",
+    "hold": "HOLD"
+  },
+  "grounding": {
+    "verified": "स्तर सत्यापित",
+    "check": "स्तर · जाँच करें",
+    "rejected": "स्तर अस्वीकृत",
+    "unverified": "स्तर असत्यापित"
+  },
+  "settings": {
+    "title": "सेटिंग्स",
+    "language": "भाषा",
+    "language_hint": "ऐप और नए विश्लेषणों पर लागू होता है"
+  }
+}

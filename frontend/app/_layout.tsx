@@ -1,6 +1,6 @@
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { LogBox } from "react-native";
 import { useFonts } from "expo-font";
 import { StatusBar } from "expo-status-bar";
@@ -11,6 +11,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { WatchlistProvider } from "@/src/watchlist";
 import { AlertsProvider } from "@/src/alerts";
+import { initLanguage } from "@/src/i18n";
 
 // Disable logbox errors etc so that users can see the app
 // and agent works as expected.
@@ -24,6 +25,7 @@ SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const [iconsLoaded, iconsError] = useIconFonts();
+  const [langReady, setLangReady] = useState(false);
   const [fontsLoaded, fontsError] = useFonts({
     "SpaceGrotesk-Regular": require("../assets/fonts/SpaceGrotesk-Regular.ttf"),
     "SpaceGrotesk-Medium": require("../assets/fonts/SpaceGrotesk-Medium.ttf"),
@@ -33,7 +35,11 @@ export default function RootLayout() {
     "JetBrainsMono-Bold": require("../assets/fonts/JetBrainsMono-Bold.ttf"),
   });
 
-  const ready = (iconsLoaded || iconsError) && (fontsLoaded || fontsError);
+  const ready = (iconsLoaded || iconsError) && (fontsLoaded || fontsError) && langReady;
+
+  useEffect(() => {
+    initLanguage().finally(() => setLangReady(true));
+  }, []);
 
   useEffect(() => {
     if (ready) {
