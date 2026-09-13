@@ -12,6 +12,12 @@ import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { WatchlistProvider } from "@/src/watchlist";
 import { AlertsProvider } from "@/src/alerts";
 import { initLanguage } from "@/src/i18n";
+import { useAuthGate } from "@/src/auth";
+import { LoginScreen } from "@/src/components/LoginScreen";
+
+// Login is required before any screen renders — set to false to make it
+// optional again without removing the mechanism.
+const AUTH_REQUIRED = true;
 
 // Disable logbox errors etc so that users can see the app
 // and agent works as expected.
@@ -36,20 +42,32 @@ export default function RootLayout() {
   });
 
   const ready = (iconsLoaded || iconsError) && (fontsLoaded || fontsError) && langReady;
+  const { checking: authChecking, user, refresh: refreshAuth } = useAuthGate();
 
   useEffect(() => {
     initLanguage().finally(() => setLangReady(true));
   }, []);
 
   useEffect(() => {
-    if (ready) {
+    if (ready && !authChecking) {
       SplashScreen.hideAsync();
     }
-  }, [ready]);
+  }, [ready, authChecking]);
 
   // If the CDN is unreachable we fall through on error rather than wedging
   // the app — icons will tofu, but the app still boots.
-  if (!ready) return null;
+  if (!ready || authChecking) return null;
+
+  if (AUTH_REQUIRED && !user) {
+    return (
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <SafeAreaProvider>
+          <StatusBar style="dark" />
+          <LoginScreen onAuthenticated={refreshAuth} />
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    );
+  }
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>

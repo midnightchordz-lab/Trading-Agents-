@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   Keyboard,
+  Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -18,6 +19,7 @@ import { MagnifyingGlass, X, ArrowRight, CaretRight, Star, ArrowsLeftRight } fro
 
 import { colors, fonts, spacing, BORDER, changeColor, accentAt, CATEGORY_COLORS, accents, CTA_GRADIENT } from "@/src/theme";
 import { api, Quote, SearchResult } from "@/src/api";
+import { getWalletDeviceId } from "@/src/wallet";
 import { useTranslation } from "react-i18next";
 import { getCurrentLanguage } from "@/src/i18n";
 import { QuoteCard } from "@/src/components/QuoteCard";
@@ -149,10 +151,13 @@ export default function AnalyzeScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       setSubmitting(true);
       try {
-        const res = await api.analyze(sym, nm, getCurrentLanguage());
+        const res = await api.analyze(sym, nm, getCurrentLanguage(), await getWalletDeviceId());
         router.push(`/analysis/${res.id}`);
-      } catch {
+      } catch (e: any) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        if (e?.message?.toLowerCase().includes("insufficient balance")) {
+          Alert.alert("Add funds to continue", e.message);
+        }
       } finally {
         setSubmitting(false);
       }

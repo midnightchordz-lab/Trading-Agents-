@@ -154,6 +154,10 @@ export type Timeframes = {
   long_term: TimeframeCall;
 };
 
+export type SessionUser = { id: string; phone?: string | null; email?: string | null };
+
+export type WalletBalance = { device_id: string; balance_usd: number; prices: Record<string, number> };
+
 export type Analysis = {
   id: string;
   symbol: string;
@@ -208,9 +212,27 @@ export const api = {
     }),
   trending: () => j<{ results: Quote[] }>(`/trending`),
   markets: (category: string) => j<{ results: Quote[] }>(`/markets/${category}`),
-  analyze: (symbol: string, name?: string, language?: string) =>
-    j<Analysis>(`/analyze`, { method: "POST", body: JSON.stringify({ symbol, name, language }) }),
+  analyze: (symbol: string, name?: string, language?: string, deviceId?: string) =>
+    j<Analysis>(`/analyze`, { method: "POST", body: JSON.stringify({ symbol, name, language, device_id: deviceId }) }),
+  getWalletBalance: (deviceId: string) => j<WalletBalance>(`/wallet/balance?device_id=${encodeURIComponent(deviceId)}`),
+  topUpWallet: (deviceId: string, amountUsd: number) =>
+    j<{ device_id: string; balance_usd: number }>(`/wallet/topup`, {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId, amount_usd: amountUsd }),
+    }),
   getAnalysis: (id: string) => j<Analysis>(`/analysis/${id}`),
   history: () => j<{ results: Analysis[] }>(`/history`),
   remove: (id: string) => j<{ ok: boolean }>(`/analysis/${id}`, { method: "DELETE" }),
+  requestOtp: (identifier: string, deviceId?: string) =>
+    j<{ identifier: string; identifier_type: string; sent: boolean; debug_otp?: string }>(`/auth/otp/request`, {
+      method: "POST",
+      body: JSON.stringify({ identifier, device_id: deviceId }),
+    }),
+  verifyOtp: (identifier: string, otp: string, deviceId?: string) =>
+    j<{ token: string; user: SessionUser }>(`/auth/otp/verify`, {
+      method: "POST",
+      body: JSON.stringify({ identifier, otp, device_id: deviceId }),
+    }),
+  authMe: (token: string) =>
+    j<SessionUser>(`/auth/me`, { headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` } }),
 };

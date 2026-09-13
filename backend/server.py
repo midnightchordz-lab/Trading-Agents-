@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Header, Depends
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 import requests
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 import portfolio_optimizer as pfopt
+import wallet as wal
+import auth as au
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -874,6 +876,227 @@ class AnalyzeRequest(BaseModel):
     symbol: str
     name: Optional[str] = None
     language: str = "en"
+    device_id: Optional[str] = None  # required only when WALLET_ENFORCEMENT_ENABLED
+
+
+# --- Wallet / usage-based pricing (additive; OFF by default — see WALLET_ENFORCEMENT_ENABLED) ---
+WALLET_ENFORCEMENT_ENABLED = os.environ.get("WALLET_ENFORCEMENT_ENABLED", "false").lower() == "true"
+
+
+class WalletTopup(BaseModel):
+    device_id: str
+    amount_usd: float
+
+
+async def get_wallet_balance(device_id: str) -> float:
+    doc = await db.wallets.find_one({"device_id": device_id})
+    return doc["balance_usd"] if doc else 0.0
+
+
+async def latest_completed_analysis_for(symbol: str) -> Optional[dict]:
+    """Most recent completed analysis document for a symbol (full doc, not
+    just the verdict) — used only for the wallet's free-recheck decision.
+    Never triggers a new run."""
+    return await db.analyses.find_one(
+        {"symbol": symbol, "status": "completed", "verdict": {"$ne": None}},
+        {"_id": 0},
+        sort=[("updated_at", -1)],
+    )
+
+
+@api_router.get("/wallet/balance")
+async def wallet_balance(device_id: str):
+    balance = await get_wallet_balance(device_id)
+    return {"device_id": device_id, "balance_usd": round(balance, 4), "prices": wal.PRICES}
+
+
+@api_router.post("/wallet/topup")
+async def wallet_topup(body: WalletTopup):
+    # PLACEHOLDER — this credits a balance directly and does not charge any
+    # real payment method. Wire this to Stripe / Apple In-App Purchase /
+    # Google Play Billing (with server-side receipt verification) before
+    # this can accept real money. See the integration notes above.
+    if body.amount_usd <= 0:
+        raise HTTPException(status_code=400, detail="amount_usd must be positive")
+    current = await get_wallet_balance(body.device_id)
+    new_balance = round(current + body.amount_usd, 4)
+    await db.wallets.update_one(
+        {"device_id": body.device_id},
+        {"$set": {"device_id": body.device_id, "balance_usd": new_balance, "updated_at": now_iso()}},
+        upsert=True,
+    )
+    return {"device_id": body.device_id, "balance_usd": new_balance}
+
+
+# --- Auth (additive; OFF by default — see AUTH_REQUIRED_ENABLED). ---
+# Phone/email OTP + Google/Apple sign-in. Real OTP delivery and live
+# Google/Apple token verification are placeholders (see auth.py) pending
+# the app owner's own SMS/email provider and OAuth client credentials.
+AUTH_REQUIRED_ENABLED = os.environ.get("AUTH_REQUIRED_ENABLED", "false").lower() == "true"
+AUTH_DEBUG_RETURN_OTP = os.environ.get("AUTH_DEBUG_RETURN_OTP", "true").lower() == "true"  # DISABLE before real production
+JWT_SECRET = os.environ.get("JWT_SECRET", "dev-only-change-me")
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
+APPLE_SERVICES_ID = os.environ.get("APPLE_SERVICES_ID", "")
+
+
+class OtpRequest(BaseModel):
+    identifier: str  # phone or email, auto-detected
+    device_id: Optional[str] = None  # to link an existing anonymous wallet on first login
+
+
+class OtpVerify(BaseModel):
+    identifier: str
+    otp: str
+    device_id: Optional[str] = None
+
+
+class SocialSignIn(BaseModel):
+    token: str  # Google id_token or Apple identity_token
+    device_id: Optional[str] = None
+
+
+async def find_or_create_user(identifier_type: str, identifier: str) -> dict:
+    key = "phone" if identifier_type == "phone" else "email"
+    existing = await db.users.find_one({key: identifier})
+    if existing:
+        return existing
+    user = {"id": str(uuid.uuid4()), "phone": None, "email": None, "google_sub": None,
+            "apple_sub": None, "created_at": now_iso()}
+    user[key] = identifier
+    await db.users.insert_one({**user})
+    return user
+
+
+async def link_device_wallet_to_user(device_id: Optional[str], user_id: str) -> None:
+    """On first login, merge an existing anonymous device wallet balance
+    into the user's own wallet rather than losing it. Additive — never
+    removes the device-keyed record, just credits the user-keyed one."""
+    if not device_id:
+        return
+    device_wallet = await db.wallets.find_one({"device_id": device_id})
+    if not device_wallet or device_wallet.get("balance_usd", 0) <= 0:
+        return
+    user_wallet = await db.wallets.find_one({"device_id": f"user:{user_id}"})
+    current = user_wallet["balance_usd"] if user_wallet else 0.0
+    merged = round(current + device_wallet["balance_usd"], 4)
+    await db.wallets.update_one(
+        {"device_id": f"user:{user_id}"},
+        {"$set": {"device_id": f"user:{user_id}", "balance_usd": merged, "updated_at": now_iso()}},
+        upsert=True,
+    )
+    await db.wallets.update_one({"device_id": device_id}, {"$set": {"balance_usd": 0.0, "updated_at": now_iso()}})
+
+
+async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
+    """FastAPI dependency — use on any endpoint that should require login
+    once AUTH_REQUIRED_ENABLED is on. Not yet applied to any existing
+    endpoint in this pass; see the integration notes for why."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = authorization.split(" ", 1)[1]
+    payload = au.decode_session_token(token, JWT_SECRET)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    user = await db.users.find_one({"id": payload["sub"]})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+@api_router.post("/auth/otp/request")
+async def auth_otp_request(body: OtpRequest):
+    id_type, identifier = au.normalize_identifier(body.identifier)
+    if not id_type:
+        raise HTTPException(status_code=400, detail="Enter a valid phone number or email address")
+
+    recent = await db.otp_requests.find({"identifier": identifier}, None).sort("created_at", -1).to_list(20)
+    recent_ts = [r["created_at"] for r in recent]
+    if au.is_rate_limited(recent_ts):
+        raise HTTPException(status_code=429, detail="Too many attempts — try again later")
+
+    otp = au.generate_otp()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "identifier": identifier,
+        "identifier_type": id_type,
+        "otp_hash": au.hash_otp(otp),
+        "attempts": 0,
+        "verified": False,
+        "created_at": now_iso(),
+    }
+    await db.otp_requests.insert_one({**doc})
+    au.send_otp_stub(identifier, id_type, otp)  # placeholder — does not actually send anything
+
+    response = {"identifier": identifier, "identifier_type": id_type, "sent": True}
+    if AUTH_DEBUG_RETURN_OTP:
+        # DEV/TEST ONLY. Remove AUTH_DEBUG_RETURN_OTP before shipping to
+        # real users — this exists only so the flow is testable end-to-end
+        # before a real SMS/email provider is wired in.
+        response["debug_otp"] = otp
+    return response
+
+
+@api_router.post("/auth/otp/verify")
+async def auth_otp_verify(body: OtpVerify):
+    id_type, identifier = au.normalize_identifier(body.identifier)
+    if not id_type:
+        raise HTTPException(status_code=400, detail="Enter a valid phone number or email address")
+
+    record = await db.otp_requests.find_one({"identifier": identifier, "verified": False}, sort=[("created_at", -1)])
+    if not record:
+        raise HTTPException(status_code=400, detail="No pending code for this identifier — request a new one")
+    if au.is_otp_expired(record["created_at"]):
+        raise HTTPException(status_code=400, detail="Code expired — request a new one")
+    if record.get("attempts", 0) >= au.OTP_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many incorrect attempts — request a new code")
+    if not au.verify_otp_code(body.otp, record["otp_hash"]):
+        await db.otp_requests.update_one({"id": record["id"]}, {"$set": {"attempts": record.get("attempts", 0) + 1}})
+        raise HTTPException(status_code=400, detail="Incorrect code")
+
+    await db.otp_requests.update_one({"id": record["id"]}, {"$set": {"verified": True}})
+    user = await find_or_create_user(id_type, identifier)
+    await link_device_wallet_to_user(body.device_id, user["id"])
+    token = au.create_session_token(user["id"], JWT_SECRET)
+    return {"token": token, "user": {"id": user["id"], "phone": user.get("phone"), "email": user.get("email")}}
+
+
+@api_router.post("/auth/google")
+async def auth_google(body: SocialSignIn):
+    if not GOOGLE_OAUTH_CLIENT_ID:
+        raise HTTPException(status_code=501, detail="Google sign-in is not configured yet (GOOGLE_OAUTH_CLIENT_ID unset)")
+    claims = au.verify_google_id_token_stub(body.token, GOOGLE_OAUTH_CLIENT_ID)
+    if not claims:
+        raise HTTPException(status_code=501, detail="Google sign-in verification is not wired to a real provider yet")
+    user = await db.users.find_one({"google_sub": claims.get("sub")})
+    if not user:
+        user = {"id": str(uuid.uuid4()), "phone": None, "email": claims.get("email"),
+                "google_sub": claims.get("sub"), "apple_sub": None, "created_at": now_iso()}
+        await db.users.insert_one({**user})
+    await link_device_wallet_to_user(body.device_id, user["id"])
+    token = au.create_session_token(user["id"], JWT_SECRET)
+    return {"token": token, "user": {"id": user["id"], "email": user.get("email")}}
+
+
+@api_router.post("/auth/apple")
+async def auth_apple(body: SocialSignIn):
+    if not APPLE_SERVICES_ID:
+        raise HTTPException(status_code=501, detail="Apple sign-in is not configured yet (APPLE_SERVICES_ID unset)")
+    claims = au.verify_apple_id_token_stub(body.token, APPLE_SERVICES_ID)
+    if not claims:
+        raise HTTPException(status_code=501, detail="Apple sign-in verification is not wired to a real provider yet")
+    user = await db.users.find_one({"apple_sub": claims.get("sub")})
+    if not user:
+        user = {"id": str(uuid.uuid4()), "phone": None, "email": claims.get("email"),
+                "google_sub": None, "apple_sub": claims.get("sub"), "created_at": now_iso()}
+        await db.users.insert_one({**user})
+    await link_device_wallet_to_user(body.device_id, user["id"])
+    token = au.create_session_token(user["id"], JWT_SECRET)
+    return {"token": token, "user": {"id": user["id"], "email": user.get("email")}}
+
+
+@api_router.get("/auth/me")
+async def auth_me(user: dict = Depends(get_current_user)):
+    return {"id": user["id"], "phone": user.get("phone"), "email": user.get("email")}
 
 
 # --- Portfolio optimization (additive; never mutates analyses or the pipeline) ---
@@ -1139,6 +1362,37 @@ async def analyze(body: AnalyzeRequest):
         raise HTTPException(status_code=400, detail="Invalid ticker symbol")
     language = body.language if body.language in SUPPORTED_LANGUAGES else "en"
 
+    if WALLET_ENFORCEMENT_ENABLED:
+        if not body.device_id:
+            raise HTTPException(status_code=400, detail="device_id is required")
+
+        cached = await latest_completed_analysis_for(symbol)
+        cached_verdict = cached["verdict"] if cached else None
+        reference_price = (cached.get("quote") or {}).get("price") if cached else None
+        live_quote = None
+        try:
+            live_quote = await asyncio.to_thread(fetch_quote_sync, symbol)
+        except Exception as e:
+            logger.warning(f"pricing quote fetch failed for {symbol}: {e}")
+        live_price = live_quote.get("price") if live_quote else None
+
+        if not wal.should_charge_for_recheck(cached_verdict, live_price, reference_price):
+            # Nothing has meaningfully changed since the cached verdict —
+            # serve it for free. No new analysis document, no LLM calls.
+            return {**cached, "served_from_cache": True, "billed": False}
+
+        balance = await get_wallet_balance(body.device_id)
+        if not wal.has_sufficient_balance(balance, "full_analysis"):
+            raise HTTPException(
+                status_code=402,
+                detail=f"Insufficient balance: need ${wal.get_price('full_analysis'):.2f}, have ${balance:.2f}",
+            )
+        new_balance = wal.new_balance_after_charge(balance, "full_analysis")
+        await db.wallets.update_one(
+            {"device_id": body.device_id},
+            {"$set": {"balance_usd": new_balance, "updated_at": now_iso()}},
+        )
+
     analysis = {
         "id": str(uuid.uuid4()),
         "symbol": symbol,
@@ -1153,6 +1407,8 @@ async def analyze(body: AnalyzeRequest):
         "current_step": 0,
         "total_steps": TOTAL_STEPS,
         "error": None,
+        "billed": WALLET_ENFORCEMENT_ENABLED,
+        "price_charged": wal.get_price("full_analysis") if WALLET_ENFORCEMENT_ENABLED else None,
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }
