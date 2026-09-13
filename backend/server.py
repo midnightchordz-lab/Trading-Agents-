@@ -946,12 +946,13 @@ async def get_wallet_balance(device_id: str) -> float:
     return doc["balance"] if doc else 0.0
 
 
-async def latest_completed_analysis_for(symbol: str) -> Optional[dict]:
-    """Most recent completed analysis document for a symbol (full doc, not
-    just the verdict) — used only for the wallet's free-recheck decision.
-    Never triggers a new run."""
+async def latest_completed_analysis_for(symbol: str, language: str = "en") -> Optional[dict]:
+    """Most recent completed analysis document for a symbol IN THE REQUESTED
+    LANGUAGE (full doc, not just the verdict) — used only for the wallet's
+    free-recheck decision. A cached run in another language is not a valid
+    answer, so it isn't reused. Never triggers a new run."""
     return await db.analyses.find_one(
-        {"symbol": symbol, "status": "completed", "verdict": {"$ne": None}},
+        {"symbol": symbol, "language": language, "status": "completed", "verdict": {"$ne": None}},
         {"_id": 0},
         sort=[("updated_at", -1)],
     )
@@ -1661,7 +1662,7 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         if not wkey:
             raise HTTPException(status_code=400, detail="device_id is required")
 
-        cached = await latest_completed_analysis_for(symbol)
+        cached = await latest_completed_analysis_for(symbol, language)
         cached_verdict = cached["verdict"] if cached else None
         reference_price = (cached.get("quote") or {}).get("price") if cached else None
         live_quote = None

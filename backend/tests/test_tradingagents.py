@@ -97,7 +97,9 @@ class TestAnalyze:
         r = client.post(f"{API}/analyze", json={"symbol": "NVDA"})
         assert r.status_code == 200
         j = r.json()
-        assert j["status"] == "running"
+        # With usage-based pricing on, an unchanged re-check is served from
+        # cache (completed, free) instead of starting a fresh run.
+        assert j["status"] in ("running", "completed")
         assert j["total_steps"] == 13
         assert j["symbol"] == "NVDA"
         assert j.get("id")

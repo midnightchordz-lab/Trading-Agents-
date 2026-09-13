@@ -74,10 +74,11 @@ class TestAnalysisDebate:
         r = client.post(f"{API}/analyze", json={"symbol": "AAPL"})
         assert r.status_code == 200
         j = r.json()
-        assert j["status"] == "running"
+        assert j["status"] in ("running", "completed")  # cached free re-check is valid
         assert j.get("id")
         # verify new field exists in schema
-        assert "debate" in j and j["debate"] is None
+        # fresh run starts with debate=None; a cached completed re-check already has it
+        assert "debate" in j and (j["debate"] is None or j["status"] == "completed")
         TestAnalysisDebate.created_id = j["id"]
 
     def test_debate_populated_on_completion(self, client):
