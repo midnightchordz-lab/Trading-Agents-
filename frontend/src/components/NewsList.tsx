@@ -5,6 +5,22 @@ import { Newspaper, ArrowUpRight } from "phosphor-react-native";
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
 import { api, NewsItem } from "@/src/api";
 
+const SENTIMENT_STYLE: Record<string, { label: string; bg: string; fg: string }> = {
+  BULLISH: { label: "BULLISH", bg: colors.success, fg: colors.onSuccess },
+  BEARISH: { label: "BEARISH", bg: colors.error, fg: colors.onError },
+  NEUTRAL: { label: "NEUTRAL", bg: colors.surfaceTertiary, fg: colors.onSurfaceTertiary },
+};
+
+function SentimentTag({ value }: { value?: NewsItem["sentiment"] }) {
+  const s = SENTIMENT_STYLE[value || ""];
+  if (!s) return null;
+  return (
+    <View style={[styles.tag, { backgroundColor: s.bg }]}>
+      <Text style={[styles.tagText, { color: s.fg }]}>{s.label}</Text>
+    </View>
+  );
+}
+
 function relTime(unix?: number | null): string {
   if (!unix) return "";
   const secs = Math.floor(Date.now() / 1000) - unix;
@@ -78,6 +94,7 @@ export function NewsList({ symbol }: { symbol: string }) {
                 {n.title}
               </Text>
               <View style={styles.metaRow}>
+                <SentimentTag value={n.sentiment} />
                 <Text style={styles.meta} numberOfLines={1}>
                   {n.publisher || "News"}
                   {n.published ? ` · ${relTime(n.published)}` : ""}
@@ -118,6 +135,8 @@ const styles = StyleSheet.create({
   thumbFallback: { alignItems: "center", justifyContent: "center" },
   rowBody: { flex: 1, justifyContent: "space-between" },
   title: { fontFamily: fonts.monoMed, fontSize: 12.5, lineHeight: 18, color: colors.onSurface },
-  metaRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.xs },
+  metaRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.xs, marginTop: spacing.xs },
   meta: { flex: 1, fontFamily: fonts.mono, fontSize: 9.5, color: colors.onSurfaceTertiary, letterSpacing: 0.3 },
+  tag: { paddingHorizontal: 5, paddingVertical: 2 },
+  tagText: { fontFamily: fonts.monoBold, fontSize: 8.5, letterSpacing: 0.6 },
 });

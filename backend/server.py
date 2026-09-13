@@ -60,6 +60,7 @@ COMMODITY_NAMES = {
     "NG=F": "Natural Gas", "HG=F": "Copper", "PL=F": "Platinum", "ZW=F": "Wheat",
 }
 _market_cache: dict = {}
+_news_cache: dict = {}
 
 
 def _yf_get(url: str, params: dict):
@@ -222,6 +223,83 @@ def _news_query(symbol: str) -> str:
         return CRYPTO_NEWS_NAMES.get(base, base)
     m = re.match(r"^(.+)\.[A-Z]{1,3}$", s)  # strip exchange suffix: RELIANCE.NS -> RELIANCE
     return m.group(1) if m else s
+
+
+# ----------------------------------------------------------------------------
+# Headline sentiment tagging (AI when available, keyword fallback)
+# ----------------------------------------------------------------------------
+BULLISH_WORDS = (
+    "beat", "beats", "surge", "surges", "soar", "soars", "jump", "jumps", "rally", "rallies",
+    "rise", "rises", "gain", "gains", "record high", "all-time high", "upgrade", "upgrades",
+    "outperform", "raises guidance", "raise guidance", "buy rating", "profit", "strong demand",
+    "tops estimates", "top estimates", "growth", "expands", "wins", "approval", "beat estimates",
+    "bullish", "beats expectations", "beat expectations", "price target raised", "beat forecast",
+    "dividend hike", "buyback", "breakout", "beats street", "beats revenue",
+)
+BEARISH_WORDS = (
+    "miss", "misses", "plunge", "plunges", "slump", "slumps", "fall", "falls", "drop", "drops",
+    "sink", "sinks", "tumble", "tumbles", "slide", "slides", "downgrade", "downgrades",
+    "underperform", "cuts guidance", "cut guidance", "sell rating", "loss", "losses", "layoff",
+    "layoffs", "lawsuit", "probe", "investigation", "recall", "fraud", "warning", "warns",
+    "weak demand", "misses estimates", "miss estimates", "bearish", "selloff", "sell-off",
+    "crash", "bankruptcy", "delay", "delays", "fine", "price target cut", "short seller",
+    "resign", "resigns", "halt", "halts", "slowdown", "sanctions",
+)
+
+
+def classify_headline_keyword(title: str) -> str:
+    t = (title or "").lower()
+    bull = sum(1 for w in BULLISH_WORDS if w in t)
+    bear = sum(1 for w in BEARISH_WORDS if w in t)
+    if bull > bear:
+        return "BULLISH"
+    if bear > bull:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+NEWS_SENTIMENT_SYS = (
+    "You are a financial news sentiment classifier. For each numbered headline, decide how a trader "
+    "holding the given asset would read it: BULLISH (good for the price), BEARISH (bad for the price) "
+    "or NEUTRAL (informational, mixed or no clear price impact). "
+    'Reply ONLY with a JSON array of strings, one label per headline, in order. '
+    'Example: ["BULLISH","NEUTRAL","BEARISH"]. No other text.'
+)
+VALID_SENTIMENTS = {"BULLISH", "BEARISH", "NEUTRAL"}
+
+
+async def tag_news_sentiment(symbol: str, items: list) -> list:
+    """Attach a sentiment label to every headline. Tries one batched LLM call;
+    falls back to keyword scoring for any headline the model doesn't cover."""
+    if not items:
+        return items
+
+    for n in items:
+        n["sentiment"] = classify_headline_keyword(n.get("title", ""))
+
+    if not EMERGENT_LLM_KEY:
+        return items
+
+    listing = "\n".join(f"{i + 1}. {n.get('title', '')}" for i, n in enumerate(items))
+    user_text = f"Asset: {symbol}\nHeadlines:\n{listing}\n\nReturn {len(items)} labels as a JSON array."
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=str(uuid.uuid4()),
+            system_message=NEWS_SENTIMENT_SYS,
+        ).with_model(MODEL_PROVIDER, MODEL_NAME)
+        resp = await asyncio.wait_for(chat.send_message(UserMessage(text=user_text)), timeout=45)
+        m = re.search(r"\[.*\]", resp or "", re.DOTALL)
+        labels = json.loads(m.group(0)) if m else []
+        for i, lab in enumerate(labels):
+            if i >= len(items):
+                break
+            lab = str(lab).strip().upper()
+            if lab in VALID_SENTIMENTS:
+                items[i]["sentiment"] = lab
+    except Exception as e:
+        logger.warning(f"news sentiment classification failed for {symbol}: {e}")
+    return items
 
 
 # ----------------------------------------------------------------------------
@@ -1011,8 +1089,14 @@ async def ohlc(symbol: str, range: str = "1M"):
 
 @api_router.get("/news/{symbol}")
 async def news(symbol: str):
+    key = (symbol or "").upper().strip()
+    entry = _news_cache.get(key)
+    if entry and time.time() - entry["ts"] < 600:
+        return {"results": entry["data"]}
     try:
         items = await asyncio.to_thread(fetch_news_sync, symbol)
+        items = await tag_news_sentiment(key, items)
+        _news_cache[key] = {"ts": time.time(), "data": items}
         return {"results": items}
     except Exception as e:
         logger.warning(f"news failed for {symbol}: {e}")

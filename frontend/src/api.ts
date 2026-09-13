@@ -70,6 +70,7 @@ export type NewsItem = {
   link: string;
   published?: number | null;
   thumbnail?: string | null;
+  sentiment?: "BULLISH" | "BEARISH" | "NEUTRAL" | null;
 };
 
 export type OhlcBar = {
