@@ -25,6 +25,7 @@ import { getCurrentLanguage } from "@/src/i18n";
 import { QuoteCard } from "@/src/components/QuoteCard";
 import { Sparkline } from "@/src/components/Sparkline";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
+import { WalletBalanceChip } from "@/src/components/WalletBalanceChip";
 import { useWatchlist } from "@/src/watchlist";
 
 const CATEGORIES = [
@@ -204,10 +205,13 @@ export default function AnalyzeScreen() {
         subtitle={t("analyze.subtitle")}
         insetsTop={insets.top}
         right={
-          <Pressable testID="compare-button" onPress={() => router.push("/compare")} style={styles.compareBtn}>
-            <ArrowsLeftRight size={16} color={colors.onSurface} weight="bold" />
-            <Text style={styles.compareText}>{t("common.compare")}</Text>
-          </Pressable>
+          <View style={styles.headerRightRow}>
+            <WalletBalanceChip />
+            <Pressable testID="compare-button" onPress={() => router.push("/compare")} style={styles.compareBtn}>
+              <ArrowsLeftRight size={16} color={colors.onSurface} weight="bold" />
+              <Text style={styles.compareText}>{t("common.compare")}</Text>
+            </Pressable>
+          </View>
         }
       />
 
@@ -490,6 +494,7 @@ const styles = StyleSheet.create({
     height: 38,
   },
   compareText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1, color: colors.onSurface },
+  headerRightRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing.lg, paddingBottom: spacing.xl },
 
