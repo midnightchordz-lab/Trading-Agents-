@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, ScrollView, StyleSheet } from "react-native";
+import { View, Text, ScrollView, Pressable, Linking, StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   ChartLineUp,
@@ -95,6 +95,22 @@ export default function AgentsScreen() {
             investment or trading advice. Do your own research.
           </Text>
         </View>
+
+        <View style={styles.credit}>
+          <Text style={styles.creditLabel}>BASED ON THE RESEARCH</Text>
+          <Text style={styles.creditText}>
+            This app&apos;s multi-agent debate architecture (analysts → bull/bear debate → risk manager → trader →
+            risk team → portfolio manager) is built on the framework introduced in:
+          </Text>
+          <Text style={styles.creditCitation}>
+            Yijia Xiao, Edward Sun, Di Luo, and Wei Wang.{"\n"}
+            &quot;TradingAgents: Multi-Agents LLM Financial Trading Framework.&quot;{"\n"}
+            arXiv:2412.20138 (2025).
+          </Text>
+          <Pressable onPress={() => Linking.openURL("https://arxiv.org/abs/2412.20138")} hitSlop={8}>
+            <Text style={styles.creditLink}>arxiv.org/abs/2412.20138 ↗</Text>
+          </Pressable>
+        </View>
       </ScrollView>
     </View>
   );
@@ -147,4 +163,9 @@ const styles = StyleSheet.create({
 
   disclaimer: { marginTop: spacing.xl, borderWidth: 1.5, borderColor: colors.border, padding: spacing.md, backgroundColor: colors.surfaceSecondary },
   disclaimerText: { fontFamily: fonts.mono, fontSize: 10.5, lineHeight: 16, color: colors.onSurfaceTertiary },
+  credit: { marginTop: spacing.md, borderWidth: 1, borderColor: colors.border, padding: spacing.md, backgroundColor: colors.surface },
+  creditLabel: { fontFamily: fonts.monoBold, fontSize: 9.5, letterSpacing: 1, color: colors.onSurfaceTertiary, marginBottom: spacing.xs },
+  creditText: { fontFamily: fonts.displayReg, fontSize: 11, lineHeight: 16, color: colors.onSurfaceTertiary, marginBottom: spacing.sm },
+  creditCitation: { fontFamily: fonts.mono, fontSize: 10.5, lineHeight: 16, color: colors.onSurface, marginBottom: spacing.sm },
+  creditLink: { fontFamily: fonts.monoBold, fontSize: 10.5, color: colors.brand },
 });
