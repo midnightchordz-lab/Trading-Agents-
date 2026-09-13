@@ -164,7 +164,12 @@ export function setAuthTokenGetter(fn: () => Promise<string | null>) {
   authTokenGetter = fn;
 }
 
-export type WalletBalance = { device_id: string; balance_usd: number; prices: Record<string, number> };
+export type WalletBalance = {
+  device_id: string;
+  balance_usd: number;
+  prices: Record<string, number>;
+  enforcement_enabled: boolean;
+};
 
 export type Analysis = {
   id: string;
@@ -245,6 +250,11 @@ export const api = {
     j<{ token: string; user: SessionUser }>(`/auth/otp/verify`, {
       method: "POST",
       body: JSON.stringify({ identifier, otp, device_id: deviceId }),
+    }),
+  googleSession: (sessionId: string, deviceId?: string) =>
+    j<{ token: string; user: SessionUser }>(`/auth/session`, {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId, device_id: deviceId }),
     }),
   authMe: (token: string) =>
     j<SessionUser>(`/auth/me`, { headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` } }),

@@ -11,14 +11,14 @@ import {
   Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import { MagnifyingGlass, X, ArrowRight, CaretRight, Star, ArrowsLeftRight } from "phosphor-react-native";
 
 import { colors, fonts, spacing, BORDER, changeColor, accentAt, CATEGORY_COLORS, accents, CTA_GRADIENT } from "@/src/theme";
-import { api, Quote, SearchResult } from "@/src/api";
+import { api, Quote, SearchResult, WalletBalance } from "@/src/api";
 import { getWalletDeviceId } from "@/src/wallet";
 import { useTranslation } from "react-i18next";
 import { getCurrentLanguage } from "@/src/i18n";
@@ -53,6 +53,7 @@ export default function AnalyzeScreen() {
   const [loadingCat, setLoadingCat] = useState(true);
 
   const [submitting, setSubmitting] = useState(false);
+  const [wallet, setWallet] = useState<WalletBalance | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadCategory = useCallback(async (cat: string) => {
@@ -168,6 +169,30 @@ export default function AnalyzeScreen() {
   const onExecute = useCallback(() => {
     if (selected) startAnalysis(selected.symbol, selected.name);
   }, [selected, startAnalysis]);
+
+  // Balance check — only meaningful while usage-based pricing is switched on.
+  const analysisPrice = wallet?.prices?.full_analysis ?? 0;
+  const needsFunds =
+    !!wallet?.enforcement_enabled && analysisPrice > 0 && (wallet?.balance_usd ?? 0) < analysisPrice;
+
+  const refreshWallet = useCallback(async () => {
+    try {
+      setWallet(await api.getWalletBalance(await getWalletDeviceId()));
+    } catch {
+      setWallet(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selected) refreshWallet();
+  }, [selected, refreshWallet]);
+
+  // Picking up a top-up made on the Agents tab.
+  useFocusEffect(
+    useCallback(() => {
+      if (selected) refreshWallet();
+    }, [selected, refreshWallet])
+  );
 
   const showResults = !selected && query.trim().length > 0 && (results.length > 0 || searching);
 
@@ -408,20 +433,27 @@ export default function AnalyzeScreen() {
       {selected ? (
         <KeyboardStickyView offset={{ closed: 0, opened: spacing.sm }}>
           <View style={[styles.ctaWrap, { paddingBottom: insets.bottom + spacing.sm }]}>
+            {needsFunds ? (
+              <Text testID="low-balance-note" style={styles.lowBalanceNote}>
+                {`Balance $${(wallet?.balance_usd ?? 0).toFixed(2)} — add funds on the Agents tab to run this.`}
+              </Text>
+            ) : null}
             <Pressable
               testID="execute-analysis-button"
               onPress={onExecute}
-              disabled={submitting}
+              disabled={submitting || needsFunds}
               style={styles.cta}
             >
               <LinearGradient
-                colors={submitting ? ["#D4D4D8", "#D4D4D8"] : (CTA_GRADIENT as unknown as string[])}
+                colors={submitting || needsFunds ? ["#D4D4D8", "#D4D4D8"] : (CTA_GRADIENT as unknown as string[])}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={styles.ctaGrad}
               >
                 {submitting ? (
                   <ActivityIndicator color={colors.onSurfaceInverse} />
+                ) : needsFunds ? (
+                  <Text style={styles.ctaText}>{`ADD FUNDS — $${analysisPrice.toFixed(2)} NEEDED`}</Text>
                 ) : (
                   <>
                     <Text style={styles.ctaText}>{`EXECUTE ANALYSIS · ${selected.symbol}`}</Text>
@@ -572,6 +604,12 @@ const styles = StyleSheet.create({
     borderTopWidth: BORDER,
     borderTopColor: colors.borderStrong,
     backgroundColor: colors.surface,
+  },
+  lowBalanceNote: {
+    fontFamily: fonts.mono,
+    fontSize: 10.5,
+    color: colors.error,
+    marginBottom: spacing.sm,
   },
   cta: {
     height: 56,

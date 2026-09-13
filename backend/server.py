@@ -15,11 +15,13 @@ from typing import Optional
 from datetime import datetime, timezone
 
 import requests
+import httpx
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 import portfolio_optimizer as pfopt
 import wallet as wal
 import auth as au
 import mailer
+import sms
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -886,7 +888,7 @@ class AnalyzeRequest(BaseModel):
 AUTH_REQUIRED_ENABLED = os.environ.get("AUTH_REQUIRED_ENABLED", "false").lower() == "true"
 AUTH_DEBUG_RETURN_OTP = os.environ.get("AUTH_DEBUG_RETURN_OTP", "false").lower() == "true"  # DEV ONLY
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-only-change-me")
-GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")  # unused: Google runs through Emergent managed auth
 APPLE_SERVICES_ID = os.environ.get("APPLE_SERVICES_ID", "")
 
 
@@ -954,7 +956,12 @@ async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] =
     if not key:
         raise HTTPException(status_code=400, detail="device_id is required")
     balance = await get_wallet_balance(key)
-    return {"device_id": key, "balance_usd": round(balance, 4), "prices": wal.PRICES}
+    return {
+        "device_id": key,
+        "balance_usd": round(balance, 4),
+        "prices": wal.PRICES,
+        "enforcement_enabled": WALLET_ENFORCEMENT_ENABLED,
+    }
 
 
 @api_router.post("/wallet/topup")
@@ -978,11 +985,11 @@ async def wallet_topup(body: WalletTopup, user: Optional[dict] = Depends(require
     return {"device_id": key, "balance_usd": new_balance}
 
 
-# --- Auth endpoints. Phone/email OTP + Google/Apple sign-in. Email codes are
-# delivered for real (Emergent managed email); SMS delivery and live
-# Google/Apple token verification are still placeholders pending the app
-# owner's own SMS provider and OAuth client credentials. ---
-SMS_OTP_CONFIGURED = False  # flip once a real SMS provider is wired into auth.send_otp_stub
+# --- Auth endpoints. Phone/email OTP + Google sign-in. Email codes go out via
+# Emergent managed email, SMS via Twilio, and Google sign-in via Emergent
+# managed auth. Apple sign-in is still a placeholder (needs an Apple Services
+# ID from the app owner). ---
+EMERGENT_SESSION_DATA_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
 
 
 class OtpRequest(BaseModel):
@@ -1044,9 +1051,7 @@ async def auth_otp_request(body: OtpRequest):
     if au.is_rate_limited(recent_ts):
         raise HTTPException(status_code=429, detail="Too many attempts — try again later")
 
-    if id_type == "phone" and not SMS_OTP_CONFIGURED:
-        # No SMS provider is wired in yet — say so instead of accepting a code
-        # nobody can receive.
+    if id_type == "phone" and not sms.sms_configured():
         raise HTTPException(
             status_code=503,
             detail="Text messages aren't available yet — sign in with your email address instead",
@@ -1064,12 +1069,15 @@ async def auth_otp_request(body: OtpRequest):
     }
     await db.otp_requests.insert_one({**doc})
 
+    ttl_minutes = au.OTP_TTL_SECONDS // 60
     if id_type == "email":
-        delivered = await mailer.send_otp_email(identifier, otp, au.OTP_TTL_SECONDS // 60)
+        delivered = await mailer.send_otp_email(identifier, otp, ttl_minutes)
         if not delivered and not AUTH_DEBUG_RETURN_OTP:
             raise HTTPException(status_code=502, detail="Couldn't send the code — try again in a moment")
     else:
-        au.send_otp_stub(identifier, id_type, otp)  # placeholder — no SMS provider wired in
+        delivered, err = await sms.send_otp_sms(identifier, otp, ttl_minutes, mailer.EMAIL_FROM_NAME)
+        if not delivered and not AUTH_DEBUG_RETURN_OTP:
+            raise HTTPException(status_code=502, detail=err or "Couldn't send the text — try again")
 
     response = {"identifier": identifier, "identifier_type": id_type, "sent": True}
     if AUTH_DEBUG_RETURN_OTP:
@@ -1103,21 +1111,41 @@ async def auth_otp_verify(body: OtpVerify):
     return {"token": token, "user": {"id": user["id"], "phone": user.get("phone"), "email": user.get("email")}}
 
 
-@api_router.post("/auth/google")
-async def auth_google(body: SocialSignIn):
-    if not GOOGLE_OAUTH_CLIENT_ID:
-        raise HTTPException(status_code=501, detail="Google sign-in is not configured yet (GOOGLE_OAUTH_CLIENT_ID unset)")
-    claims = au.verify_google_id_token_stub(body.token, GOOGLE_OAUTH_CLIENT_ID)
-    if not claims:
-        raise HTTPException(status_code=501, detail="Google sign-in verification is not wired to a real provider yet")
-    user = await db.users.find_one({"google_sub": claims.get("sub")})
+class GoogleSession(BaseModel):
+    session_id: str  # one-time id Emergent appends to the redirect URL
+    device_id: Optional[str] = None
+
+
+@api_router.post("/auth/session")
+async def auth_session(body: GoogleSession):
+    """Exchanges the one-time Emergent session_id for one of our own session
+    tokens, creating/reusing a user keyed on the Google email."""
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(EMERGENT_SESSION_DATA_URL, headers={"X-Session-ID": body.session_id})
+    except Exception as e:
+        logger.warning(f"google session exchange failed: {e}")
+        raise HTTPException(status_code=502, detail="Couldn't reach the sign-in service — try again")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="That sign-in link has expired — try again")
+
+    data = resp.json()
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="Google didn't return an email address")
+
+    user = await db.users.find_one({"email": email})
     if not user:
-        user = {"id": str(uuid.uuid4()), "phone": None, "email": claims.get("email"),
-                "google_sub": claims.get("sub"), "apple_sub": None, "created_at": now_iso()}
+        user = {"id": str(uuid.uuid4()), "phone": None, "email": email, "google_sub": data.get("id"),
+                "apple_sub": None, "name": data.get("name"), "picture": data.get("picture"),
+                "created_at": now_iso()}
         await db.users.insert_one({**user})
+    elif not user.get("google_sub"):
+        await db.users.update_one({"id": user["id"]}, {"$set": {"google_sub": data.get("id")}})
+
     await link_device_wallet_to_user(body.device_id, user["id"])
     token = au.create_session_token(user["id"], JWT_SECRET)
-    return {"token": token, "user": {"id": user["id"], "email": user.get("email")}}
+    return {"token": token, "user": {"id": user["id"], "phone": user.get("phone"), "email": user.get("email")}}
 
 
 @api_router.post("/auth/apple")

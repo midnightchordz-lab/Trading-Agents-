@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { storage } from "@/src/utils/storage";
 import { api, setAuthTokenGetter, SessionUser } from "@/src/api";
+import { consumeGoogleRedirect } from "@/src/googleAuth";
 
 // Session token lives in the secure (Keychain/Keystore) namespace — never in
 // plain AsyncStorage. SecureStore keys allow only alphanumerics, ".", "-", "_".
@@ -31,6 +32,13 @@ export function useAuthGate() {
 
   const check = useCallback(async () => {
     setChecking(true);
+    // A Google redirect (or cold deep link) wins over any stored session.
+    try {
+      const fresh = await consumeGoogleRedirect();
+      if (fresh) await setStoredToken(fresh);
+    } catch {
+      // fall through to the stored session
+    }
     const token = await getStoredToken();
     if (!token) {
       setUser(null);

@@ -1,15 +1,16 @@
 import React, { useState } from "react";
 import { View, Text, TextInput, Pressable, ActivityIndicator, StyleSheet, Alert } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { GoogleLogo } from "phosphor-react-native";
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
 import { api } from "@/src/api";
 import { setStoredToken } from "@/src/auth";
+import { startGoogleSignIn } from "@/src/googleAuth";
 import { getWalletDeviceId } from "@/src/wallet";
 
-// Phone/email OTP login, required before the app renders. Google/Apple
-// buttons are shown but disabled — real sign-in needs a Google OAuth
-// client ID and Apple Services ID configured server-side first (see the
-// integration notes in the spec). Nothing here fakes that working.
+// Phone/email OTP login, required before the app renders. Codes go out by
+// email (Emergent managed email) or text (Twilio). Google runs through
+// Emergent managed auth; Apple is still waiting on an Apple Services ID.
 
 type Step = "identifier" | "otp";
 
@@ -19,11 +20,27 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
   const [identifier, setIdentifier] = useState("");
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [debugOtp, setDebugOtp] = useState<string | null>(null);
+
+  const signInWithGoogle = async () => {
+    setGoogleLoading(true);
+    try {
+      const token = await startGoogleSignIn();
+      if (token) {
+        await setStoredToken(token);
+        onAuthenticated();
+      }
+    } catch (e: any) {
+      Alert.alert("Google sign-in failed", e?.message || "Try again.");
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
 
   const requestCode = async () => {
     if (!identifier.trim()) {
-      Alert.alert("Enter your email address");
+      Alert.alert("Enter your email address or phone number");
       return;
     }
     setLoading(true);
@@ -64,12 +81,12 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
 
       {step === "identifier" ? (
         <View style={styles.card}>
-          <Text style={styles.label}>EMAIL ADDRESS</Text>
+          <Text style={styles.label}>PHONE OR EMAIL</Text>
           <TextInput
             testID="login-identifier-input"
             value={identifier}
             onChangeText={setIdentifier}
-            placeholder="you@example.com"
+            placeholder="you@example.com or +1 415 555 0134"
             placeholderTextColor={colors.onSurfaceTertiary}
             autoCapitalize="none"
             keyboardType="email-address"
@@ -78,7 +95,9 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
           <Pressable testID="login-send-code" onPress={requestCode} disabled={loading} style={styles.primaryBtn}>
             {loading ? <ActivityIndicator color={colors.onSurfaceInverse} /> : <Text style={styles.primaryBtnText}>SEND CODE</Text>}
           </Pressable>
-          <Text style={styles.hint}>We&apos;ll email you a 6-digit code. Phone sign-in is coming soon.</Text>
+          <Text style={styles.hint}>
+            We&apos;ll send a 6-digit code by email, or by text if you enter a number with its country code.
+          </Text>
         </View>
       ) : (
         <View style={styles.card}>
@@ -98,15 +117,27 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
             {loading ? <ActivityIndicator color={colors.onSurfaceInverse} /> : <Text style={styles.primaryBtnText}>VERIFY</Text>}
           </Pressable>
           <Pressable onPress={() => setStep("identifier")} hitSlop={8}>
-            <Text style={styles.linkText}>Use a different email</Text>
+            <Text style={styles.linkText}>Use a different phone or email</Text>
           </Pressable>
         </View>
       )}
 
       <View style={styles.divider} />
 
-      <Pressable disabled style={[styles.socialBtn, styles.socialBtnDisabled]}>
-        <Text style={styles.socialBtnText}>Continue with Google — coming soon</Text>
+      <Pressable
+        testID="login-google"
+        onPress={signInWithGoogle}
+        disabled={googleLoading}
+        style={[styles.socialBtn, styles.googleBtn]}
+      >
+        {googleLoading ? (
+          <ActivityIndicator color={colors.onSurface} />
+        ) : (
+          <>
+            <GoogleLogo size={16} color={colors.onSurface} weight="bold" />
+            <Text style={styles.googleBtnText}>Continue with Google</Text>
+          </>
+        )}
       </Pressable>
       <Pressable disabled style={[styles.socialBtn, styles.socialBtnDisabled]}>
         <Text style={styles.socialBtnText}>Continue with Apple — coming soon</Text>
@@ -140,4 +171,13 @@ const styles = StyleSheet.create({
   socialBtn: { borderWidth: 1, borderColor: colors.border, paddingVertical: spacing.md, alignItems: "center", marginBottom: spacing.sm },
   socialBtnDisabled: { opacity: 0.5 },
   socialBtnText: { fontFamily: fonts.mono, fontSize: 12, color: colors.onSurfaceTertiary },
+  googleBtn: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: spacing.sm,
+    borderWidth: BORDER,
+    borderColor: colors.borderStrong,
+    minHeight: 48,
+  },
+  googleBtnText: { fontFamily: fonts.monoBold, fontSize: 12.5, color: colors.onSurface },
 });
