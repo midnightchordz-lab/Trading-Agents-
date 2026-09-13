@@ -156,6 +156,14 @@ export type Timeframes = {
 
 export type SessionUser = { id: string; phone?: string | null; email?: string | null };
 
+// Every request carries the stored session token. auth.ts registers the
+// getter on import so api.ts stays free of a circular dependency.
+let authTokenGetter: (() => Promise<string | null>) | null = null;
+
+export function setAuthTokenGetter(fn: () => Promise<string | null>) {
+  authTokenGetter = fn;
+}
+
 export type WalletBalance = { device_id: string; balance_usd: number; prices: Record<string, number> };
 
 export type Analysis = {
@@ -177,9 +185,14 @@ export type Analysis = {
 };
 
 async function j<T>(path: string, opts?: RequestInit): Promise<T> {
+  const token = authTokenGetter ? await authTokenGetter() : null;
   const res = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...opts,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(opts?.headers || {}),
+    },
   });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;

@@ -12,7 +12,7 @@ import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { WatchlistProvider } from "@/src/watchlist";
 import { AlertsProvider } from "@/src/alerts";
 import { initLanguage } from "@/src/i18n";
-import { useAuthGate } from "@/src/auth";
+import { useAuthGate, AuthContext } from "@/src/auth";
 import { LoginScreen } from "@/src/components/LoginScreen";
 
 // Login is required before any screen renders — set to false to make it
@@ -42,7 +42,7 @@ export default function RootLayout() {
   });
 
   const ready = (iconsLoaded || iconsError) && (fontsLoaded || fontsError) && langReady;
-  const { checking: authChecking, user, refresh: refreshAuth } = useAuthGate();
+  const { checking: authChecking, user, refresh: refreshAuth, signOut } = useAuthGate();
 
   useEffect(() => {
     initLanguage().finally(() => setLangReady(true));
@@ -73,16 +73,18 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <KeyboardProvider>
-          <WatchlistProvider>
-            <AlertsProvider>
-              <StatusBar style="light" />
-              <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#FFFFFF" } }}>
-                <Stack.Screen name="(tabs)" />
-                <Stack.Screen name="analysis/[id]" />
-                <Stack.Screen name="compare" />
-              </Stack>
-            </AlertsProvider>
-          </WatchlistProvider>
+          <AuthContext.Provider value={{ user, signOut }}>
+            <WatchlistProvider>
+              <AlertsProvider>
+                <StatusBar style="light" />
+                <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#FFFFFF" } }}>
+                  <Stack.Screen name="(tabs)" />
+                  <Stack.Screen name="analysis/[id]" />
+                  <Stack.Screen name="compare" />
+                </Stack>
+              </AlertsProvider>
+            </WatchlistProvider>
+          </AuthContext.Provider>
         </KeyboardProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

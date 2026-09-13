@@ -9,6 +9,8 @@ import pytest
 import requests
 from pathlib import Path
 
+from auth_helper import AUTH_HEADERS
+
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:
     p = Path("/app/frontend/.env")
@@ -24,7 +26,7 @@ API = f"{BASE_URL}/api"
 @pytest.fixture(scope="module")
 def client():
     s = requests.Session()
-    s.headers.update({"Content-Type": "application/json"})
+    s.headers.update(AUTH_HEADERS)
     return s
 
 

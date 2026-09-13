@@ -3,6 +3,8 @@ import os
 import time
 import requests
 
+from auth_helper import AUTH_HEADERS
+
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://trade-agent-app.preview.emergentagent.com").rstrip("/")
 
 
@@ -52,7 +54,7 @@ def test_existing_analysis_has_grounding():
 
 def test_analyze_end_to_end_grounding():
     """Fire a fresh analyze and poll until completed; grounding must be present."""
-    r = requests.post(f"{BASE_URL}/api/analyze", json={"symbol": "AAPL", "name": "Apple Inc."}, timeout=30)
+    r = requests.post(f"{BASE_URL}/api/analyze", json={"symbol": "AAPL", "name": "Apple Inc."}, headers=AUTH_HEADERS, timeout=30)
     assert r.status_code == 200, r.text
     aid = r.json().get("id") or r.json().get("analysis_id")
     assert aid, r.text

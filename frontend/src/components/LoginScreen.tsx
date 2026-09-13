@@ -23,7 +23,7 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
 
   const requestCode = async () => {
     if (!identifier.trim()) {
-      Alert.alert("Enter a phone number or email");
+      Alert.alert("Enter your email address");
       return;
     }
     setLoading(true);
@@ -64,12 +64,12 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
 
       {step === "identifier" ? (
         <View style={styles.card}>
-          <Text style={styles.label}>PHONE OR EMAIL</Text>
+          <Text style={styles.label}>EMAIL ADDRESS</Text>
           <TextInput
             testID="login-identifier-input"
             value={identifier}
             onChangeText={setIdentifier}
-            placeholder="you@example.com or +1 555 0100"
+            placeholder="you@example.com"
             placeholderTextColor={colors.onSurfaceTertiary}
             autoCapitalize="none"
             keyboardType="email-address"
@@ -78,6 +78,7 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
           <Pressable testID="login-send-code" onPress={requestCode} disabled={loading} style={styles.primaryBtn}>
             {loading ? <ActivityIndicator color={colors.onSurfaceInverse} /> : <Text style={styles.primaryBtnText}>SEND CODE</Text>}
           </Pressable>
+          <Text style={styles.hint}>We&apos;ll email you a 6-digit code. Phone sign-in is coming soon.</Text>
         </View>
       ) : (
         <View style={styles.card}>
@@ -97,7 +98,7 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
             {loading ? <ActivityIndicator color={colors.onSurfaceInverse} /> : <Text style={styles.primaryBtnText}>VERIFY</Text>}
           </Pressable>
           <Pressable onPress={() => setStep("identifier")} hitSlop={8}>
-            <Text style={styles.linkText}>Use a different phone or email</Text>
+            <Text style={styles.linkText}>Use a different email</Text>
           </Pressable>
         </View>
       )}
@@ -131,6 +132,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   debugNote: { fontFamily: fonts.mono, fontSize: 10, color: colors.warning, marginBottom: spacing.md },
+  hint: { fontFamily: fonts.mono, fontSize: 10, lineHeight: 15, color: colors.onSurfaceTertiary, marginTop: spacing.xs },
   primaryBtn: { backgroundColor: colors.brand, paddingVertical: spacing.md, alignItems: "center", marginBottom: spacing.sm },
   primaryBtnText: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1, color: colors.onSurfaceInverse },
   linkText: { fontFamily: fonts.mono, fontSize: 11, color: colors.brand, textAlign: "center", marginTop: spacing.xs },

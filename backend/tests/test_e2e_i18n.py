@@ -5,6 +5,8 @@ import re
 import time
 import requests
 
+from auth_helper import AUTH_HEADERS
+
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://trade-agent-app.preview.emergentagent.com").rstrip("/")
 
 DEVANAGARI = re.compile(r"[\u0900-\u097F]")
@@ -17,7 +19,7 @@ def _start_and_poll(lang=None, timeout=180):
     payload = {"symbol": "AAPL", "name": "Apple Inc."}
     if lang is not None:
         payload["language"] = lang
-    r = requests.post(f"{BASE_URL}/api/analyze", json=payload, timeout=30)
+    r = requests.post(f"{BASE_URL}/api/analyze", json=payload, headers=AUTH_HEADERS, timeout=30)
     assert r.status_code == 200, r.text
     aid = r.json()["id"]
     deadline = time.time() + timeout

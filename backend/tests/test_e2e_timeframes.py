@@ -7,12 +7,14 @@ import time
 import requests
 import pytest
 
+from auth_helper import AUTH_HEADERS
+
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://trade-agent-app.preview.emergentagent.com").rstrip("/")
 
 
 @pytest.fixture(scope="module")
 def analysis():
-    r = requests.post(f"{BASE_URL}/api/analyze", json={"symbol": "AAPL", "name": "Apple Inc."}, timeout=30)
+    r = requests.post(f"{BASE_URL}/api/analyze", json={"symbol": "AAPL", "name": "Apple Inc."}, headers=AUTH_HEADERS, timeout=30)
     assert r.status_code == 200, f"POST /api/analyze failed: {r.status_code} {r.text}"
     aid = r.json().get("id")
     assert aid, "No id in analyze response"

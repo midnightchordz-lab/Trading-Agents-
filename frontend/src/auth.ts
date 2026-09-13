@@ -1,23 +1,28 @@
-import { useCallback, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { storage } from "@/src/utils/storage";
-import { api } from "@/src/api";
+import { api, setAuthTokenGetter, SessionUser } from "@/src/api";
 
-const KEY_SESSION_TOKEN = "auth:session_token";
+// Session token lives in the secure (Keychain/Keystore) namespace — never in
+// plain AsyncStorage. SecureStore keys allow only alphanumerics, ".", "-", "_".
+const KEY_SESSION_TOKEN = "auth_session_token";
 
-export type SessionUser = { id: string; phone?: string | null; email?: string | null };
+export type { SessionUser };
 
 export async function getStoredToken(): Promise<string | null> {
-  const t = await storage.getItem<string>(KEY_SESSION_TOKEN, "");
+  const t = await storage.secureGet<string>(KEY_SESSION_TOKEN, "");
   return t || null;
 }
 
 export async function setStoredToken(token: string): Promise<void> {
-  await storage.setItem(KEY_SESSION_TOKEN, token);
+  await storage.secureSet(KEY_SESSION_TOKEN, token);
 }
 
 export async function clearStoredToken(): Promise<void> {
-  await storage.setItem(KEY_SESSION_TOKEN, "");
+  await storage.secureRemove(KEY_SESSION_TOKEN);
 }
+
+// Every api call picks the token up from here.
+setAuthTokenGetter(getStoredToken);
 
 /** Resolves once on mount: is there a still-valid session? */
 export function useAuthGate() {
@@ -47,5 +52,19 @@ export function useAuthGate() {
     check();
   }, [check]);
 
-  return { checking, user, refresh: check };
+  const signOut = useCallback(async () => {
+    await clearStoredToken();
+    setUser(null);
+  }, []);
+
+  return { checking, user, refresh: check, signOut };
+}
+
+export const AuthContext = createContext<{
+  user: SessionUser | null;
+  signOut: () => Promise<void>;
+}>({ user: null, signOut: async () => {} });
+
+export function useAuth() {
+  return useContext(AuthContext);
 }

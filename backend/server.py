@@ -19,6 +19,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 import portfolio_optimizer as pfopt
 import wallet as wal
 import auth as au
+import mailer
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -879,12 +880,55 @@ class AnalyzeRequest(BaseModel):
     device_id: Optional[str] = None  # required only when WALLET_ENFORCEMENT_ENABLED
 
 
+# --- Auth config + session dependencies. Defined here (ahead of the wallet
+# and analyze endpoints) because those endpoints depend on them. The auth
+# endpoints themselves live further down. ---
+AUTH_REQUIRED_ENABLED = os.environ.get("AUTH_REQUIRED_ENABLED", "false").lower() == "true"
+AUTH_DEBUG_RETURN_OTP = os.environ.get("AUTH_DEBUG_RETURN_OTP", "false").lower() == "true"  # DEV ONLY
+JWT_SECRET = os.environ.get("JWT_SECRET", "dev-only-change-me")
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
+APPLE_SERVICES_ID = os.environ.get("APPLE_SERVICES_ID", "")
+
+
+async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
+    """FastAPI dependency for endpoints that always require a valid session."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = authorization.split(" ", 1)[1]
+    payload = au.decode_session_token(token, JWT_SECRET)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    user = await db.users.find_one({"id": payload["sub"]})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+async def require_user(authorization: Optional[str] = Header(None)) -> Optional[dict]:
+    """Session dependency for the priced/user-specific endpoints (analyze,
+    wallet). A token is always honoured when present; it is *mandatory* only
+    when AUTH_REQUIRED_ENABLED is on, so the flag stays a single switch."""
+    if not authorization:
+        if AUTH_REQUIRED_ENABLED:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        return None
+    return await get_current_user(authorization)
+
+
+def wallet_key_for(user: Optional[dict], device_id: Optional[str]) -> Optional[str]:
+    """Signed-in users get an account-keyed wallet so the balance follows them
+    across devices; anonymous callers fall back to their device id."""
+    if user:
+        return f"user:{user['id']}"
+    return device_id
+
+
 # --- Wallet / usage-based pricing (additive; OFF by default — see WALLET_ENFORCEMENT_ENABLED) ---
 WALLET_ENFORCEMENT_ENABLED = os.environ.get("WALLET_ENFORCEMENT_ENABLED", "false").lower() == "true"
 
 
 class WalletTopup(BaseModel):
-    device_id: str
+    device_id: Optional[str] = None  # ignored for signed-in users (account-keyed wallet)
     amount_usd: float
 
 
@@ -905,38 +949,40 @@ async def latest_completed_analysis_for(symbol: str) -> Optional[dict]:
 
 
 @api_router.get("/wallet/balance")
-async def wallet_balance(device_id: str):
-    balance = await get_wallet_balance(device_id)
-    return {"device_id": device_id, "balance_usd": round(balance, 4), "prices": wal.PRICES}
+async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] = Depends(require_user)):
+    key = wallet_key_for(user, device_id)
+    if not key:
+        raise HTTPException(status_code=400, detail="device_id is required")
+    balance = await get_wallet_balance(key)
+    return {"device_id": key, "balance_usd": round(balance, 4), "prices": wal.PRICES}
 
 
 @api_router.post("/wallet/topup")
-async def wallet_topup(body: WalletTopup):
+async def wallet_topup(body: WalletTopup, user: Optional[dict] = Depends(require_user)):
     # PLACEHOLDER — this credits a balance directly and does not charge any
     # real payment method. Wire this to Stripe / Apple In-App Purchase /
     # Google Play Billing (with server-side receipt verification) before
     # this can accept real money. See the integration notes above.
     if body.amount_usd <= 0:
         raise HTTPException(status_code=400, detail="amount_usd must be positive")
-    current = await get_wallet_balance(body.device_id)
+    key = wallet_key_for(user, body.device_id)
+    if not key:
+        raise HTTPException(status_code=400, detail="device_id is required")
+    current = await get_wallet_balance(key)
     new_balance = round(current + body.amount_usd, 4)
     await db.wallets.update_one(
-        {"device_id": body.device_id},
-        {"$set": {"device_id": body.device_id, "balance_usd": new_balance, "updated_at": now_iso()}},
+        {"device_id": key},
+        {"$set": {"device_id": key, "balance_usd": new_balance, "updated_at": now_iso()}},
         upsert=True,
     )
-    return {"device_id": body.device_id, "balance_usd": new_balance}
+    return {"device_id": key, "balance_usd": new_balance}
 
 
-# --- Auth (additive; OFF by default — see AUTH_REQUIRED_ENABLED). ---
-# Phone/email OTP + Google/Apple sign-in. Real OTP delivery and live
-# Google/Apple token verification are placeholders (see auth.py) pending
-# the app owner's own SMS/email provider and OAuth client credentials.
-AUTH_REQUIRED_ENABLED = os.environ.get("AUTH_REQUIRED_ENABLED", "false").lower() == "true"
-AUTH_DEBUG_RETURN_OTP = os.environ.get("AUTH_DEBUG_RETURN_OTP", "true").lower() == "true"  # DISABLE before real production
-JWT_SECRET = os.environ.get("JWT_SECRET", "dev-only-change-me")
-GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
-APPLE_SERVICES_ID = os.environ.get("APPLE_SERVICES_ID", "")
+# --- Auth endpoints. Phone/email OTP + Google/Apple sign-in. Email codes are
+# delivered for real (Emergent managed email); SMS delivery and live
+# Google/Apple token verification are still placeholders pending the app
+# owner's own SMS provider and OAuth client credentials. ---
+SMS_OTP_CONFIGURED = False  # flip once a real SMS provider is wired into auth.send_otp_stub
 
 
 class OtpRequest(BaseModel):
@@ -987,22 +1033,6 @@ async def link_device_wallet_to_user(device_id: Optional[str], user_id: str) -> 
     await db.wallets.update_one({"device_id": device_id}, {"$set": {"balance_usd": 0.0, "updated_at": now_iso()}})
 
 
-async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
-    """FastAPI dependency — use on any endpoint that should require login
-    once AUTH_REQUIRED_ENABLED is on. Not yet applied to any existing
-    endpoint in this pass; see the integration notes for why."""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    token = authorization.split(" ", 1)[1]
-    payload = au.decode_session_token(token, JWT_SECRET)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired session")
-    user = await db.users.find_one({"id": payload["sub"]})
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
-
-
 @api_router.post("/auth/otp/request")
 async def auth_otp_request(body: OtpRequest):
     id_type, identifier = au.normalize_identifier(body.identifier)
@@ -1013,6 +1043,14 @@ async def auth_otp_request(body: OtpRequest):
     recent_ts = [r["created_at"] for r in recent]
     if au.is_rate_limited(recent_ts):
         raise HTTPException(status_code=429, detail="Too many attempts — try again later")
+
+    if id_type == "phone" and not SMS_OTP_CONFIGURED:
+        # No SMS provider is wired in yet — say so instead of accepting a code
+        # nobody can receive.
+        raise HTTPException(
+            status_code=503,
+            detail="Text messages aren't available yet — sign in with your email address instead",
+        )
 
     otp = au.generate_otp()
     doc = {
@@ -1025,13 +1063,18 @@ async def auth_otp_request(body: OtpRequest):
         "created_at": now_iso(),
     }
     await db.otp_requests.insert_one({**doc})
-    au.send_otp_stub(identifier, id_type, otp)  # placeholder — does not actually send anything
+
+    if id_type == "email":
+        delivered = await mailer.send_otp_email(identifier, otp, au.OTP_TTL_SECONDS // 60)
+        if not delivered and not AUTH_DEBUG_RETURN_OTP:
+            raise HTTPException(status_code=502, detail="Couldn't send the code — try again in a moment")
+    else:
+        au.send_otp_stub(identifier, id_type, otp)  # placeholder — no SMS provider wired in
 
     response = {"identifier": identifier, "identifier_type": id_type, "sent": True}
     if AUTH_DEBUG_RETURN_OTP:
-        # DEV/TEST ONLY. Remove AUTH_DEBUG_RETURN_OTP before shipping to
-        # real users — this exists only so the flow is testable end-to-end
-        # before a real SMS/email provider is wired in.
+        # DEV/TEST ONLY, off by default. Never enable this in production —
+        # it puts the code in the API response for anyone to read.
         response["debug_otp"] = otp
     return response
 
@@ -1356,14 +1399,15 @@ async def markets(category: str):
 
 
 @api_router.post("/analyze")
-async def analyze(body: AnalyzeRequest):
+async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_user)):
     symbol = (body.symbol or "").strip().upper()
     if not symbol or not re.match(r'^[A-Z0-9.\-\^=]{1,20}$', symbol):
         raise HTTPException(status_code=400, detail="Invalid ticker symbol")
     language = body.language if body.language in SUPPORTED_LANGUAGES else "en"
 
     if WALLET_ENFORCEMENT_ENABLED:
-        if not body.device_id:
+        wkey = wallet_key_for(user, body.device_id)
+        if not wkey:
             raise HTTPException(status_code=400, detail="device_id is required")
 
         cached = await latest_completed_analysis_for(symbol)
@@ -1381,7 +1425,7 @@ async def analyze(body: AnalyzeRequest):
             # serve it for free. No new analysis document, no LLM calls.
             return {**cached, "served_from_cache": True, "billed": False}
 
-        balance = await get_wallet_balance(body.device_id)
+        balance = await get_wallet_balance(wkey)
         if not wal.has_sufficient_balance(balance, "full_analysis"):
             raise HTTPException(
                 status_code=402,
@@ -1389,7 +1433,7 @@ async def analyze(body: AnalyzeRequest):
             )
         new_balance = wal.new_balance_after_charge(balance, "full_analysis")
         await db.wallets.update_one(
-            {"device_id": body.device_id},
+            {"device_id": wkey},
             {"$set": {"balance_usd": new_balance, "updated_at": now_iso()}},
         )
 

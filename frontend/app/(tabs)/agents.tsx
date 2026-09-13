@@ -19,6 +19,7 @@ import { AGENT_ROSTER, PIPELINE_STEPS } from "@/src/agents";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
 import { LanguagePicker } from "@/src/components/LanguagePicker";
 import { WalletCard } from "@/src/components/WalletCard";
+import { AccountCard } from "@/src/components/AccountCard";
 
 const ICONS: Record<string, any> = {
   ChartLineUp,
@@ -91,6 +92,8 @@ export default function AgentsScreen() {
         <LanguagePicker />
 
         <WalletCard />
+
+        <AccountCard />
 
         <View style={styles.disclaimer}>
           <Text style={styles.disclaimerText}>

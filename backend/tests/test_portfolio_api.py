@@ -5,6 +5,8 @@ import time
 import pytest
 import requests
 
+from auth_helper import AUTH_HEADERS
+
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://trade-agent-app.preview.emergentagent.com").rstrip("/")
 
 HOLDINGS = [
@@ -89,7 +91,7 @@ def test_optimize_duplicate_symbols_rejected():
 
 
 def _run_analysis_for(symbol, name):
-    r = requests.post(f"{BASE_URL}/api/analyze", json={"symbol": symbol, "name": name}, timeout=60)
+    r = requests.post(f"{BASE_URL}/api/analyze", json={"symbol": symbol, "name": name}, headers=AUTH_HEADERS, timeout=60)
     assert r.status_code == 200, r.text
     aid = r.json().get("id") or r.json().get("analysis_id")
     for _ in range(60):
