@@ -156,3 +156,47 @@ async def send_otp_email(to: str, otp: str, ttl_minutes: int) -> bool:
     except Exception as e:
         logger.error(f"OTP email send failed: {e}")
         return False
+
+
+def welcome_email_html() -> str:
+    """Fixed server-side template — no interpolated caller data at all."""
+    brand = escape(EMAIL_FROM_NAME)
+    row = 'style="padding:0 0 10px 0;font-size:14px;line-height:21px;color:#09090B"'
+    return (
+        '<table role="presentation" width="100%"><tr><td style="padding:24px;'
+        'font-family:Arial,Helvetica,sans-serif;color:#09090B">'
+        f'<p style="font-size:18px;font-weight:bold;margin:0 0 16px">Welcome to {brand}</p>'
+        f'<p {row}>Type in any ticker — a stock, a crypto pair, an index or a commodity — and a desk of '
+        '10 AI analysts goes to work on it: technicals, fundamentals, sentiment and news, then a bull '
+        'and a bear argue it out over two rounds before a risk manager and a portfolio manager sign off.</p>'
+        f'<p {row}>You get one clear call — <strong>BUY, SELL or HOLD</strong> — with a confidence score, '
+        'a price target, a stop loss, the key risks, and separate short, medium and long-term views. '
+        'You can read the full debate transcript behind every verdict.</p>'
+        f'<p style="padding:0 0 10px 0;font-size:14px;line-height:21px;color:#09090B">'
+        '<strong>Re-checking a ticker is free when nothing has changed.</strong> If you come back and the '
+        'price has barely moved, you see the same verdict again at no cost. A fresh run only happens when '
+        'something actually changed — the price moved more than 1.5%, or it reached the verdict\'s own '
+        'target or stop, which means the thesis either played out or broke.</p>'
+        f'<p {row}>A few things worth trying: build a watchlist, compare two tickers side by side, set a '
+        'price alert on a target, and switch the desk into Hindi, Spanish or Mandarin.</p>'
+        f'<p style="font-size:12px;color:#888;margin:16px 0 0">{brand} is an AI research tool. Verdicts are '
+        'model-generated and are NOT financial, investment or trading advice — do your own research. '
+        'Sent by {brand}. We will never ask you for your password or payment details by email.</p>'
+        '</td></tr></table>'
+    ).replace("{brand}", brand)
+
+
+async def send_welcome_email(to: str) -> bool:
+    """Sent once, right after a new account is created. Never raises."""
+    if not email_configured():
+        return False
+    try:
+        await send_email(
+            to=to,
+            subject=f"Welcome to {EMAIL_FROM_NAME} — how the desk works",
+            html=welcome_email_html(),
+        )
+        return True
+    except Exception as e:
+        logger.error(f"welcome email send failed: {e}")
+        return False

@@ -47,3 +47,26 @@ def test_gate_rejects_misleading_anchor_text():
 
 def test_email_configured_reflects_key():
     assert m.email_configured() is bool(m.EMAIL_KEY)
+
+
+def test_welcome_template_explains_the_desk_and_free_recheck():
+    html = m.welcome_email_html()
+    assert m.EMAIL_FROM_NAME in html
+    assert "BUY, SELL or HOLD" in html
+    assert "free when nothing has changed" in html
+    assert "1.5%" in html
+    assert "NOT financial, investment or trading advice" in html
+
+
+def test_welcome_template_passes_the_guardrail_gate():
+    m._assert_safe_email(f"Welcome to {m.EMAIL_FROM_NAME} — how the desk works", m.welcome_email_html())
+
+
+def test_welcome_template_has_no_forms_or_links():
+    html = m.welcome_email_html()
+    for bad in ("<form", "<input", "href=", "src="):
+        assert bad not in html
+
+
+def test_welcome_template_has_no_unsubstituted_placeholders():
+    assert "{brand}" not in m.welcome_email_html()

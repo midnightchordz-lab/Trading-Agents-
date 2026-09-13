@@ -1008,6 +1008,23 @@ class SocialSignIn(BaseModel):
     device_id: Optional[str] = None
 
 
+async def send_welcome_if_new(user: dict) -> None:
+    """One welcome email per account, ever. Only for accounts that have an
+    email address (phone-only sign-ups have nowhere to send it)."""
+    email = user.get("email")
+    if not email or user.get("welcome_sent_at"):
+        return
+    # Claim it first so a double sign-in can't send twice.
+    claimed = await db.users.update_one(
+        {"id": user["id"], "welcome_sent_at": {"$in": [None, ""]}},
+        {"$set": {"welcome_sent_at": now_iso()}},
+    )
+    if claimed.modified_count == 0:
+        return
+    if not await mailer.send_welcome_email(email):
+        await db.users.update_one({"id": user["id"]}, {"$set": {"welcome_sent_at": None}})
+
+
 async def find_or_create_user(identifier_type: str, identifier: str) -> dict:
     key = "phone" if identifier_type == "phone" else "email"
     existing = await db.users.find_one({key: identifier})
@@ -1107,6 +1124,7 @@ async def auth_otp_verify(body: OtpVerify):
     await db.otp_requests.update_one({"id": record["id"]}, {"$set": {"verified": True}})
     user = await find_or_create_user(id_type, identifier)
     await link_device_wallet_to_user(body.device_id, user["id"])
+    asyncio.create_task(send_welcome_if_new(user))
     token = au.create_session_token(user["id"], JWT_SECRET)
     return {"token": token, "user": {"id": user["id"], "phone": user.get("phone"), "email": user.get("email")}}
 
@@ -1144,6 +1162,7 @@ async def auth_session(body: GoogleSession):
         await db.users.update_one({"id": user["id"]}, {"$set": {"google_sub": data.get("id")}})
 
     await link_device_wallet_to_user(body.device_id, user["id"])
+    asyncio.create_task(send_welcome_if_new(user))
     token = au.create_session_token(user["id"], JWT_SECRET)
     return {"token": token, "user": {"id": user["id"], "phone": user.get("phone"), "email": user.get("email")}}
 
