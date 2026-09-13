@@ -13,6 +13,7 @@ import { getWalletDeviceId } from "@/src/wallet";
 export function WalletBalanceChip() {
   const router = useRouter();
   const [balance, setBalance] = useState<number | null>(null);
+  const [symbol, setSymbol] = useState("₹");
 
   useEffect(() => {
     let cancelled = false;
@@ -21,9 +22,12 @@ export function WalletBalanceChip() {
         const deviceId = await getWalletDeviceId();
         const res = await api.getWalletBalance(deviceId);
         // With pricing switched off the balance is never spent, so showing
-        // "$0.00" here would be misleading — stay hidden until it matters.
+        // a balance here would be misleading — stay hidden until it matters.
         if (!res.enforcement_enabled) return;
-        if (!cancelled) setBalance(res.balance_usd);
+        if (!cancelled) {
+          setSymbol(res.symbol);
+          setBalance(res.balance);
+        }
       } catch {
         // wallet enforcement may be off, or the fetch failed — stay quiet
       }
@@ -38,7 +42,7 @@ export function WalletBalanceChip() {
   return (
     <Pressable testID="wallet-balance-chip" onPress={() => router.push("/agents")} style={styles.chip}>
       <View style={styles.dot} />
-      <Text style={styles.text}>${balance.toFixed(2)}</Text>
+      <Text style={styles.text}>{`${symbol}${balance.toFixed(2)}`}</Text>
     </Pressable>
   );
 }

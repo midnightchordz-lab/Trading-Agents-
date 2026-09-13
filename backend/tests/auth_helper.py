@@ -35,7 +35,7 @@ _db.users.insert_one({
 # enforcement is switched on.
 _db.wallets.update_one(
     {"device_id": f"user:{_USER_ID}"},
-    {"$set": {"device_id": f"user:{_USER_ID}", "balance_usd": 100.0}},
+    {"$set": {"device_id": f"user:{_USER_ID}", "balance": 100.0}},
     upsert=True,
 )
 

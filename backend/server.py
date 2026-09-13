@@ -1,4 +1,6 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Header, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Header, Depends, Form, Request
+from fastapi.responses import HTMLResponse
+from pymongo.errors import DuplicateKeyError
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -22,6 +24,7 @@ import wallet as wal
 import auth as au
 import mailer
 import sms
+import razorpay_pay as rzp
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -927,16 +930,20 @@ def wallet_key_for(user: Optional[dict], device_id: Optional[str]) -> Optional[s
 
 # --- Wallet / usage-based pricing (additive; OFF by default — see WALLET_ENFORCEMENT_ENABLED) ---
 WALLET_ENFORCEMENT_ENABLED = os.environ.get("WALLET_ENFORCEMENT_ENABLED", "false").lower() == "true"
+ALLOW_DEMO_TOPUP = os.environ.get("ALLOW_DEMO_TOPUP", "false").lower() == "true"
+# Used to build the Razorpay checkout/callback URLs, which must be absolute
+# and publicly reachable over HTTPS.
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 
 
 class WalletTopup(BaseModel):
     device_id: Optional[str] = None  # ignored for signed-in users (account-keyed wallet)
-    amount_usd: float
+    amount: float  # in INR; must match one of wallet.TOPUP_PACKS
 
 
 async def get_wallet_balance(device_id: str) -> float:
     doc = await db.wallets.find_one({"device_id": device_id})
-    return doc["balance_usd"] if doc else 0.0
+    return doc["balance"] if doc else 0.0
 
 
 async def latest_completed_analysis_for(symbol: str) -> Optional[dict]:
@@ -958,31 +965,228 @@ async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] =
     balance = await get_wallet_balance(key)
     return {
         "device_id": key,
-        "balance_usd": round(balance, 4),
+        "balance": round(balance, 2),
+        "currency": wal.CURRENCY,
+        "symbol": wal.CURRENCY_SYMBOL,
         "prices": wal.PRICES,
+        "packs": wal.TOPUP_PACKS,
         "enforcement_enabled": WALLET_ENFORCEMENT_ENABLED,
+        "payments_live": rzp.payments_configured(),
     }
+
+
+async def credit_wallet_once(payment_id: str, order: dict) -> bool:
+    """The only place a balance is ever credited from a payment. The unique
+    index on payment_id is what makes a double credit impossible, whichever
+    of the callback / webhook arrives first (or twice)."""
+    try:
+        await db.wallet_ledger.insert_one({
+            "payment_id": payment_id,
+            "order_id": order["razorpay_order_id"],
+            "wallet_key": order["wallet_key"],
+            "amount": order["amount"],
+            "currency": wal.CURRENCY,
+            "created_at": now_iso(),
+        })
+    except DuplicateKeyError:
+        return False
+    await db.wallets.update_one(
+        {"device_id": order["wallet_key"]},
+        {"$inc": {"balance": order["amount"]},
+         "$set": {"device_id": order["wallet_key"], "updated_at": now_iso()}},
+        upsert=True,
+    )
+    await db.payments.update_one(
+        {"razorpay_order_id": order["razorpay_order_id"]},
+        {"$set": {"status": "captured", "payment_id": payment_id, "updated_at": now_iso()}},
+    )
+    logger.info(f"wallet credited {wal.CURRENCY} {order['amount']} for {order['wallet_key']} ({payment_id})")
+    return True
+
+
+async def settle_payment(order: dict, payment_id: str) -> str:
+    """Confirms with Razorpay that the payment really is captured, then
+    credits. Returns the payment status."""
+    payment = await rzp.fetch_payment(payment_id)
+    if payment.get("order_id") != order["razorpay_order_id"]:
+        raise HTTPException(status_code=400, detail="Order mismatch")
+    if payment.get("amount") != int(round(order["amount"] * 100)):
+        raise HTTPException(status_code=400, detail="Amount mismatch")
+    status = payment.get("status", "unknown")
+    if status == "captured":
+        await credit_wallet_once(payment_id, order)
+    else:
+        await db.payments.update_one(
+            {"razorpay_order_id": order["razorpay_order_id"]},
+            {"$set": {"status": status, "updated_at": now_iso()}},
+        )
+    return status
+
+
+@api_router.post("/pay/order")
+async def create_topup_order(body: WalletTopup, user: Optional[dict] = Depends(require_user)):
+    """Creates a Razorpay order for one of the fixed top-up packs and returns a
+    hosted checkout URL. The amount is validated here — never taken on trust."""
+    if not rzp.payments_configured():
+        raise HTTPException(status_code=503, detail="Payments aren't set up yet")
+    if not wal.is_valid_topup(body.amount):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Choose one of the top-up packs: {', '.join(str(int(p)) for p in wal.TOPUP_PACKS)}",
+        )
+    key = wallet_key_for(user, body.device_id)
+    if not key:
+        raise HTTPException(status_code=400, detail="device_id is required")
+
+    receipt = f"wallet_{uuid.uuid4().hex[:20]}"
+    try:
+        order = await rzp.create_order(body.amount, receipt, {"wallet_key": key, "purpose": "wallet_topup"})
+    except Exception as e:
+        logger.error(f"razorpay order creation failed: {e}")
+        raise HTTPException(status_code=502, detail="Couldn't start checkout — try again")
+
+    await db.payments.insert_one({
+        "razorpay_order_id": order["id"],
+        "wallet_key": key,
+        "amount": body.amount,
+        "currency": wal.CURRENCY,
+        "status": "created",
+        "receipt": receipt,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    })
+    return {
+        "order_id": order["id"],
+        "amount": body.amount,
+        "currency": wal.CURRENCY,
+        "checkout_url": f"{PUBLIC_BASE_URL}/api/pay/checkout/{order['id']}",
+    }
+
+
+@api_router.get("/pay/checkout/{order_id}", response_class=HTMLResponse)
+async def pay_checkout(order_id: str):
+    """Hosted checkout page — opened in a WebView on native, a popup on web.
+    Deliberately unauthenticated: it's a one-time, server-created order id and
+    it carries no balance or account data."""
+    order = await db.payments.find_one({"razorpay_order_id": order_id})
+    if not order:
+        raise HTTPException(status_code=404, detail="Unknown order")
+    return HTMLResponse(rzp.checkout_html(
+        order_id=order_id,
+        amount_paise=int(round(order["amount"] * 100)),
+        callback_url=f"{PUBLIC_BASE_URL}/api/pay/callback",
+        brand=mailer.EMAIL_FROM_NAME,
+    ))
+
+
+@api_router.post("/pay/callback", response_class=HTMLResponse)
+async def pay_callback(
+    razorpay_payment_id: str = Form(...),
+    razorpay_order_id: str = Form(...),
+    razorpay_signature: str = Form(...),
+):
+    """Razorpay redirects the browser/WebView here after payment. Treated as a
+    hint only — the signature is checked and the payment re-fetched from
+    Razorpay before anything is credited."""
+    order = await db.payments.find_one({"razorpay_order_id": razorpay_order_id})
+    if not order or not rzp.verify_checkout_signature(
+        order["razorpay_order_id"], razorpay_payment_id, razorpay_signature
+    ):
+        logger.warning(f"invalid payment signature for order {razorpay_order_id}")
+        return HTMLResponse(rzp.result_html("We couldn't verify that payment.", ok=False), status_code=400)
+    try:
+        status = await settle_payment(order, razorpay_payment_id)
+    except Exception as e:
+        logger.error(f"payment settle failed: {e}")
+        return HTMLResponse(rzp.result_html("Payment received — we're still confirming it.", ok=True))
+    if status == "captured":
+        return HTMLResponse(rzp.result_html(
+            f"Added {wal.CURRENCY_SYMBOL}{order['amount']:.0f} to your wallet.", ok=True))
+    return HTMLResponse(rzp.result_html("That payment didn't go through — nothing was charged.", ok=False))
+
+
+@api_router.post("/pay/webhook")
+async def pay_webhook(request: Request):
+    """Razorpay's server-to-server confirmation. Verified against the raw body
+    and de-duplicated by event id."""
+    raw = await request.body()
+    if not rzp.verify_webhook_signature(raw, request.headers.get("X-Razorpay-Signature", "")):
+        raise HTTPException(status_code=400, detail="Invalid webhook signature")
+
+    event_id = request.headers.get("X-Razorpay-Event-Id", str(uuid.uuid4()))
+    try:
+        await db.webhook_events.insert_one({"event_id": event_id, "received_at": now_iso()})
+    except DuplicateKeyError:
+        return {"ok": True, "duplicate": True}
+
+    event = json.loads(raw or b"{}")
+    entity = (event.get("payload", {}).get("payment", {}) or {}).get("entity", {})
+    payment_id, order_id = entity.get("id"), entity.get("order_id")
+    if not order_id:
+        return {"ok": True}
+
+    order = await db.payments.find_one({"razorpay_order_id": order_id})
+    if not order:
+        return {"ok": True}
+
+    if event.get("event") == "payment.captured" and payment_id:
+        if entity.get("amount") == int(round(order["amount"] * 100)):
+            await credit_wallet_once(payment_id, order)
+    elif event.get("event") == "payment.failed":
+        await db.payments.update_one(
+            {"razorpay_order_id": order_id},
+            {"$set": {"status": "failed", "failure": entity.get("error_description"), "updated_at": now_iso()}},
+        )
+    return {"ok": True}
+
+
+@api_router.get("/pay/status/{order_id}")
+async def pay_status(order_id: str, user: Optional[dict] = Depends(require_user)):
+    """Polled by the app after checkout closes. If the browser callback never
+    made it back (WebView dismissed, network dropped), this asks Razorpay
+    directly and credits then — so a paid top-up is never lost."""
+    order = await db.payments.find_one({"razorpay_order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Unknown order")
+    key = wallet_key_for(user, None)
+    if key and order["wallet_key"] != key:
+        raise HTTPException(status_code=403, detail="Not your order")
+
+    if order["status"] != "captured" and rzp.payments_configured():
+        try:
+            found = await rzp.razorpay_request("GET", f"/orders/{order_id}/payments")
+            for p in found.get("items", []):
+                if p.get("status") == "captured":
+                    await settle_payment(order, p["id"])
+                    order = await db.payments.find_one({"razorpay_order_id": order_id}, {"_id": 0})
+                    break
+        except Exception as e:
+            logger.warning(f"payment status refresh failed: {e}")
+
+    balance = await get_wallet_balance(order["wallet_key"])
+    return {"order_id": order_id, "status": order["status"], "balance": round(balance, 2)}
 
 
 @api_router.post("/wallet/topup")
 async def wallet_topup(body: WalletTopup, user: Optional[dict] = Depends(require_user)):
-    # PLACEHOLDER — this credits a balance directly and does not charge any
-    # real payment method. Wire this to Stripe / Apple In-App Purchase /
-    # Google Play Billing (with server-side receipt verification) before
-    # this can accept real money. See the integration notes above.
-    if body.amount_usd <= 0:
-        raise HTTPException(status_code=400, detail="amount_usd must be positive")
+    """Credits a balance WITHOUT taking payment — only for local testing.
+    Disabled unless ALLOW_DEMO_TOPUP=true, so it can't be used as a free-money
+    endpoint now that real Razorpay payments are live."""
+    if not ALLOW_DEMO_TOPUP:
+        raise HTTPException(status_code=403, detail="Demo top-ups are disabled — use checkout")
+    if body.amount <= 0:
+        raise HTTPException(status_code=400, detail="amount must be positive")
     key = wallet_key_for(user, body.device_id)
     if not key:
         raise HTTPException(status_code=400, detail="device_id is required")
     current = await get_wallet_balance(key)
-    new_balance = round(current + body.amount_usd, 4)
+    new_balance = round(current + body.amount, 2)
     await db.wallets.update_one(
         {"device_id": key},
-        {"$set": {"device_id": key, "balance_usd": new_balance, "updated_at": now_iso()}},
+        {"$set": {"device_id": key, "balance": new_balance, "updated_at": now_iso()}},
         upsert=True,
     )
-    return {"device_id": key, "balance_usd": new_balance}
+    return {"device_id": key, "balance": new_balance}
 
 
 # --- Auth endpoints. Phone/email OTP + Google sign-in. Email codes go out via
@@ -1044,17 +1248,17 @@ async def link_device_wallet_to_user(device_id: Optional[str], user_id: str) -> 
     if not device_id:
         return
     device_wallet = await db.wallets.find_one({"device_id": device_id})
-    if not device_wallet or device_wallet.get("balance_usd", 0) <= 0:
+    if not device_wallet or device_wallet.get("balance", 0) <= 0:
         return
     user_wallet = await db.wallets.find_one({"device_id": f"user:{user_id}"})
-    current = user_wallet["balance_usd"] if user_wallet else 0.0
-    merged = round(current + device_wallet["balance_usd"], 4)
+    current = user_wallet["balance"] if user_wallet else 0.0
+    merged = round(current + device_wallet["balance"], 4)
     await db.wallets.update_one(
         {"device_id": f"user:{user_id}"},
-        {"$set": {"device_id": f"user:{user_id}", "balance_usd": merged, "updated_at": now_iso()}},
+        {"$set": {"device_id": f"user:{user_id}", "balance": merged, "updated_at": now_iso()}},
         upsert=True,
     )
-    await db.wallets.update_one({"device_id": device_id}, {"$set": {"balance_usd": 0.0, "updated_at": now_iso()}})
+    await db.wallets.update_one({"device_id": device_id}, {"$set": {"balance": 0.0, "updated_at": now_iso()}})
 
 
 @api_router.post("/auth/otp/request")
@@ -1476,12 +1680,13 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         if not wal.has_sufficient_balance(balance, "full_analysis"):
             raise HTTPException(
                 status_code=402,
-                detail=f"Insufficient balance: need ${wal.get_price('full_analysis'):.2f}, have ${balance:.2f}",
+                detail=(f"Insufficient balance: need {wal.CURRENCY_SYMBOL}{wal.get_price('full_analysis'):.0f}, "
+                        f"have {wal.CURRENCY_SYMBOL}{balance:.2f}"),
             )
         new_balance = wal.new_balance_after_charge(balance, "full_analysis")
         await db.wallets.update_one(
             {"device_id": wkey},
-            {"$set": {"balance_usd": new_balance, "updated_at": now_iso()}},
+            {"$set": {"balance": new_balance, "updated_at": now_iso()}},
         )
 
     analysis = {
@@ -1544,3 +1749,16 @@ app.add_middleware(
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+
+@app.on_event("startup")
+async def ensure_payment_indexes():
+    """Unique indexes are what keep a top-up from being credited twice."""
+    try:
+        await db.payments.create_index("razorpay_order_id", unique=True)
+        await db.wallet_ledger.create_index("payment_id", unique=True)
+        await db.webhook_events.create_index("event_id", unique=True)
+    except Exception as e:
+        logger.warning(f"payment index setup failed: {e}")
+    if rzp.payments_configured():
+        logger.info(f"razorpay ready ({'LIVE' if rzp.is_live_mode() else 'test'} mode)")

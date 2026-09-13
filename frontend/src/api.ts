@@ -166,10 +166,18 @@ export function setAuthTokenGetter(fn: () => Promise<string | null>) {
 
 export type WalletBalance = {
   device_id: string;
-  balance_usd: number;
+  balance: number;
+  currency: string;
+  symbol: string;
   prices: Record<string, number>;
+  packs: number[];
   enforcement_enabled: boolean;
+  payments_live: boolean;
 };
+
+export type TopupOrder = { order_id: string; amount: number; currency: string; checkout_url: string };
+
+export type PaymentStatus = { order_id: string; status: string; balance: number };
 
 export type Analysis = {
   id: string;
@@ -233,11 +241,14 @@ export const api = {
   analyze: (symbol: string, name?: string, language?: string, deviceId?: string) =>
     j<Analysis>(`/analyze`, { method: "POST", body: JSON.stringify({ symbol, name, language, device_id: deviceId }) }),
   getWalletBalance: (deviceId: string) => j<WalletBalance>(`/wallet/balance?device_id=${encodeURIComponent(deviceId)}`),
-  topUpWallet: (deviceId: string, amountUsd: number) =>
-    j<{ device_id: string; balance_usd: number }>(`/wallet/topup`, {
+  topUpWallet: (deviceId: string, amount: number) =>
+    j<{ device_id: string; balance: number }>(`/wallet/topup`, {
       method: "POST",
-      body: JSON.stringify({ device_id: deviceId, amount_usd: amountUsd }),
+      body: JSON.stringify({ device_id: deviceId, amount }),
     }),
+  createTopupOrder: (deviceId: string, amount: number) =>
+    j<TopupOrder>(`/pay/order`, { method: "POST", body: JSON.stringify({ device_id: deviceId, amount }) }),
+  getPaymentStatus: (orderId: string) => j<PaymentStatus>(`/pay/status/${orderId}`),
   getAnalysis: (id: string) => j<Analysis>(`/analysis/${id}`),
   history: () => j<{ results: Analysis[] }>(`/history`),
   remove: (id: string) => j<{ ok: boolean }>(`/analysis/${id}`, { method: "DELETE" }),

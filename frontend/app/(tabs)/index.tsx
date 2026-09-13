@@ -174,7 +174,7 @@ export default function AnalyzeScreen() {
   // Balance check — only meaningful while usage-based pricing is switched on.
   const analysisPrice = wallet?.prices?.full_analysis ?? 0;
   const needsFunds =
-    !!wallet?.enforcement_enabled && analysisPrice > 0 && (wallet?.balance_usd ?? 0) < analysisPrice;
+    !!wallet?.enforcement_enabled && analysisPrice > 0 && (wallet?.balance ?? 0) < analysisPrice;
 
   const refreshWallet = useCallback(async () => {
     try {
@@ -439,7 +439,7 @@ export default function AnalyzeScreen() {
           <View style={[styles.ctaWrap, { paddingBottom: insets.bottom + spacing.sm }]}>
             {needsFunds ? (
               <Text testID="low-balance-note" style={styles.lowBalanceNote}>
-                {`Balance $${(wallet?.balance_usd ?? 0).toFixed(2)} — add funds on the Agents tab to run this.`}
+                {`Balance ${wallet?.symbol || "₹"}${(wallet?.balance ?? 0).toFixed(2)} — add funds on the Agents tab to run this.`}
               </Text>
             ) : null}
             <Pressable
@@ -457,7 +457,7 @@ export default function AnalyzeScreen() {
                 {submitting ? (
                   <ActivityIndicator color={colors.onSurfaceInverse} />
                 ) : needsFunds ? (
-                  <Text style={styles.ctaText}>{`ADD FUNDS — $${analysisPrice.toFixed(2)} NEEDED`}</Text>
+                  <Text style={styles.ctaText}>{`ADD FUNDS — ${wallet?.symbol || "₹"}${analysisPrice.toFixed(0)} NEEDED`}</Text>
                 ) : (
                   <>
                     <Text style={styles.ctaText}>{`EXECUTE ANALYSIS · ${selected.symbol}`}</Text>
