@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { ChartLineUp, ClockCounterClockwise, UsersThree, Bell } from "phosphor-react-native";
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
-import { colors, fonts, BORDER, accents } from "@/src/theme";
+import { fonts, accents, TERMINAL } from "@/src/theme";
 import { useTranslation } from "react-i18next";
 
 const TABS: Record<string, { labelKey: string; Icon: any; color: string }> = {
@@ -31,7 +31,7 @@ function BrutalTabBar({ state, navigation }: BottomTabBarProps) {
             if (!focused && !event.defaultPrevented) navigation.navigate(route.name);
           };
           const { Icon } = conf;
-          const color = focused ? colors.onSurfaceInverse : colors.onSurface;
+          const color = focused ? TERMINAL.bg : TERMINAL.textMid;
           return (
             <Pressable
               key={route.key}
@@ -40,10 +40,10 @@ function BrutalTabBar({ state, navigation }: BottomTabBarProps) {
               style={[
                 styles.tab,
                 index < state.routes.length - 1 && styles.tabDivider,
-                focused && { backgroundColor: conf.color },
+                focused && { backgroundColor: TERMINAL.lime },
               ]}
             >
-              <Icon size={22} color={color} weight={focused ? "fill" : "regular"} />
+              <Icon size={20} color={color} weight={focused ? "fill" : "regular"} />
               <Text style={[styles.label, { color }]}>{t(conf.labelKey).toUpperCase()}</Text>
             </Pressable>
           );
@@ -70,9 +70,9 @@ export default function TabsLayout() {
 
 const styles = StyleSheet.create({
   bar: {
-    backgroundColor: colors.surface,
-    borderTopWidth: BORDER,
-    borderTopColor: colors.borderStrong,
+    backgroundColor: TERMINAL.panel,
+    borderTopWidth: 0.5,
+    borderTopColor: TERMINAL.line,
   },
   row: { flexDirection: "row" },
   tab: {
@@ -81,9 +81,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 3,
-    backgroundColor: colors.surface,
+    backgroundColor: TERMINAL.panel,
   },
-  tabActive: { backgroundColor: colors.surfaceInverse },
-  tabDivider: { borderRightWidth: BORDER, borderRightColor: colors.borderStrong },
-  label: { fontFamily: fonts.monoBold, fontSize: 10, letterSpacing: 1 },
+  tabActive: { backgroundColor: TERMINAL.lime },
+  tabDivider: { borderRightWidth: 0.5, borderRightColor: TERMINAL.line },
+  label: { fontFamily: fonts.mono, fontSize: 9, letterSpacing: 1 },
 });

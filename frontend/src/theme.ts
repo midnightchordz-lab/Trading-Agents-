@@ -93,6 +93,45 @@ export const fonts = {
 export const RADIUS = 0;
 export const BORDER = 2;
 
+// Soft design tokens — additive, alongside the brutalist ones above.
+// Existing components keep using RADIUS/BORDER/colors.border unchanged;
+// these are opt-in for screens being restyled to the softer look.
+export const RADIUS_SM = 8;
+export const RADIUS_MD = 12;
+export const RADIUS_LG = 20;
+export const RADIUS_PILL = 999;
+export const SOFT_BORDER = 0.5;
+export const SOFT_BORDER_COLOR = "#E4E4E9";
+export const SOFT_SHADOW = {
+  shadowColor: "#0F0F14",
+  shadowOpacity: 0.06,
+  shadowRadius: 10,
+  shadowOffset: { width: 0, height: 4 },
+  elevation: 2,
+} as const;
+
+// Terminal / agent-HUD tokens — additive, alongside the brutalist and soft
+// tokens above. Used for the login screen and the app's persistent shell
+// (tab bar, headers); not yet applied to every screen — extend using these
+// same tokens when ready.
+export const TERMINAL = {
+  bg: "#05070B",
+  panel: "#0B1220",
+  field: "#131A0F",
+  line: "#24301C",
+  lime: "#AEFA3C",
+  textBright: "#EEF7E0",
+  textDim: "#66755A",
+  textMid: "#CBD8BC",
+} as const;
+// Soft pastel tints for the category chips (derived from the accent palette).
+export const SOFT_CATEGORY: Record<string, { bg: string; fg: string }> = {
+  trending: { bg: "#FEF3E2", fg: "#8A5A0A" },
+  stocks: { bg: "#E7EFFE", fg: "#1D4E9B" },
+  crypto: { bg: "#F1ECFE", fg: "#5B3FA0" },
+  commodities: { bg: "#E4F5F1", fg: "#0C6C5C" },
+};
+
 export type Decision = "BUY" | "SELL" | "HOLD";
 export type Sentiment = "bullish" | "bearish" | "neutral" | null | undefined;
 
