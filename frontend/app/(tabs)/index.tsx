@@ -439,7 +439,7 @@ export default function AnalyzeScreen() {
           <View style={[styles.ctaWrap, { paddingBottom: insets.bottom + spacing.sm }]}>
             {needsFunds ? (
               <Text testID="low-balance-note" style={styles.lowBalanceNote}>
-                {`Balance ${wallet?.symbol || "₹"}${(wallet?.balance ?? 0).toFixed(2)} — add funds on the Agents tab to run this.`}
+                {`Balance ${wallet?.symbol || "$"}${(wallet?.balance ?? 0).toFixed(2)} — add funds on the Agents tab to run this.`}
               </Text>
             ) : null}
             <Pressable
@@ -457,7 +457,7 @@ export default function AnalyzeScreen() {
                 {submitting ? (
                   <ActivityIndicator color={colors.onSurfaceInverse} />
                 ) : needsFunds ? (
-                  <Text style={styles.ctaText}>{`ADD FUNDS — ${wallet?.symbol || "₹"}${analysisPrice.toFixed(0)} NEEDED`}</Text>
+                  <Text style={styles.ctaText}>{`ADD FUNDS — ${wallet?.symbol || "$"}${analysisPrice.toFixed(2)} NEEDED`}</Text>
                 ) : (
                   <>
                     <Text style={styles.ctaText}>{`EXECUTE ANALYSIS · ${selected.symbol}`}</Text>

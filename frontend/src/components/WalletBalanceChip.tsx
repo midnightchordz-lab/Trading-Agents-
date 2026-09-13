@@ -13,7 +13,7 @@ import { getWalletDeviceId } from "@/src/wallet";
 export function WalletBalanceChip() {
   const router = useRouter();
   const [balance, setBalance] = useState<number | null>(null);
-  const [symbol, setSymbol] = useState("₹");
+  const [symbol, setSymbol] = useState("$");
 
   useEffect(() => {
     let cancelled = false;

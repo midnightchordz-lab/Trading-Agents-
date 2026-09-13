@@ -20,16 +20,16 @@ from typing import Optional
 # Priced actions. Each one is roughly 3x the measured LLM cost, so margin
 # holds even at high volume (the point of a usage-scaled model instead of
 # a flat lifetime or subscription price).
-# Priced actions, in INR (the wallet's currency — Razorpay settles in INR).
-# Each one is a healthy multiple of the measured LLM cost, so margin holds
-# even at high volume (the point of a usage-scaled model instead of a flat
-# lifetime or subscription price).
-CURRENCY = "INR"
-CURRENCY_SYMBOL = "₹"
+# Priced actions, in USD (the wallet's currency; Razorpay charges in USD too).
+# Each one is roughly 3x the measured LLM cost, so margin holds even at high
+# volume (the point of a usage-scaled model instead of a flat lifetime or
+# subscription price).
+CURRENCY = "USD"
+CURRENCY_SYMBOL = "$"
 PRICES = {
-    "full_analysis": 20.0,   # measured cost ~$0.081 (~₹7)
-    "compare": 32.0,         # two analyses bundled, cheaper than 2x full_analysis
-    "portfolio_optimize": 4.0,  # no new LLM calls (reads cached verdicts only)
+    "full_analysis": 0.25,   # measured cost ~$0.081
+    "compare": 0.39,         # two analyses bundled, cheaper than 2x full_analysis
+    "portfolio_optimize": 0.05,  # no new LLM calls (reads cached verdicts only)
 }
 
 # Top-up packs a user may buy. Amounts are validated server-side against this

@@ -19,6 +19,8 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
+import wallet as wal
+
 load_dotenv(Path(__file__).parent / ".env")
 
 logger = logging.getLogger(__name__)
@@ -45,13 +47,14 @@ async def razorpay_request(method: str, path: str, **kwargs) -> dict:
 
 
 async def create_order(amount_rupees: float, receipt: str, notes: dict) -> dict:
-    """Amounts go to Razorpay in paise (smallest unit), as integers."""
+    """Amount goes to Razorpay in the smallest currency unit (cents), as an
+    integer. Currency follows the wallet's own currency."""
     return await razorpay_request(
         "POST",
         "/orders",
         json={
             "amount": int(round(amount_rupees * 100)),
-            "currency": "INR",
+            "currency": wal.CURRENCY,
             "receipt": receipt,
             "payment_capture": 1,
             "notes": notes,
@@ -98,7 +101,7 @@ display:flex;align-items:center;justify-content:center;height:100vh;text-align:c
   var options = {{
     key: "{escape(KEY_ID, quote=True)}",
     amount: {amount_paise},
-    currency: "INR",
+    currency: "{wal.CURRENCY}",
     name: "{escape(brand, quote=True)}",
     description: "Wallet top-up",
     order_id: "{escape(order_id, quote=True)}",

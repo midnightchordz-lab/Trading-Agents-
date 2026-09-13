@@ -7,15 +7,15 @@ import wallet as w
 
 
 def test_price_lookup():
-    assert w.get_price("full_analysis") == 20.0
-    assert w.get_price("compare") == 32.0
-    assert w.get_price("portfolio_optimize") == 4.0
+    assert w.get_price("full_analysis") == 0.25
+    assert w.get_price("compare") == 0.39
+    assert w.get_price("portfolio_optimize") == 0.05
     assert w.get_price("unknown_action") == 0.0
 
 
 def test_sufficient_balance():
-    assert w.has_sufficient_balance(20.0, "full_analysis") is True
-    assert w.has_sufficient_balance(19.99, "full_analysis") is False
+    assert w.has_sufficient_balance(0.25, "full_analysis") is True
+    assert w.has_sufficient_balance(0.24, "full_analysis") is False
     assert w.has_sufficient_balance(0.0, "full_analysis") is False
 
 
@@ -67,6 +67,6 @@ def test_hold_with_no_levels_only_uses_price_move():
 
 
 def test_new_balance_after_charge_never_negative():
-    assert w.new_balance_after_charge(20.0, "full_analysis") == 0.0
-    assert w.new_balance_after_charge(5.0, "full_analysis") == 0.0
-    assert w.new_balance_after_charge(50.0, "full_analysis") == 30.0
+    assert w.new_balance_after_charge(0.25, "full_analysis") == 0.0
+    assert w.new_balance_after_charge(0.10, "full_analysis") == 0.0
+    assert w.new_balance_after_charge(1.00, "full_analysis") == 0.75

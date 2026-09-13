@@ -50,7 +50,7 @@ export function WalletCard() {
           const res = await api.getPaymentStatus(orderId);
           if (res.status === "captured") {
             if (deviceId) await refresh(deviceId);
-            Alert.alert("Wallet topped up", `Your balance is now ${wallet?.symbol || "₹"}${res.balance.toFixed(2)}.`);
+            Alert.alert("Wallet topped up", `Your balance is now ${wallet?.symbol || "$"}${res.balance.toFixed(2)}.`);
             return;
           }
           if (res.status === "failed") {
@@ -97,7 +97,7 @@ export function WalletCard() {
     if (orderId) settle(orderId);
   };
 
-  const symbol = wallet?.symbol || "₹";
+  const symbol = wallet?.symbol || "$";
   const price = wallet?.prices?.full_analysis;
   const packs = wallet?.packs || [];
 
@@ -112,7 +112,7 @@ export function WalletCard() {
 
       {price ? (
         <Text style={styles.priceNote}>
-          {`Full analysis: ${symbol}${price.toFixed(0)} · re-checking an unchanged verdict is free`}
+          {`Full analysis: ${symbol}${price.toFixed(2)} · re-checking an unchanged verdict is free`}
         </Text>
       ) : (
         <Text style={styles.priceNote}>Usage-based pricing isn&apos;t active in this build yet.</Text>

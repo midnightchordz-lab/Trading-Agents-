@@ -24,10 +24,10 @@ def test_topup_packs_validation():
     assert w.is_valid_topup(2500.0) is False
 
 
-def test_prices_are_inr():
-    assert w.CURRENCY == "INR"
-    assert w.CURRENCY_SYMBOL == "₹"
-    assert w.PRICES["full_analysis"] == 20.0
+def test_prices_are_usd():
+    assert w.CURRENCY == "USD"
+    assert w.CURRENCY_SYMBOL == "$"
+    assert w.PRICES["full_analysis"] == 0.25
 
 
 def test_checkout_signature_accepts_the_real_one():
@@ -69,7 +69,7 @@ def test_checkout_html_never_leaks_the_secret():
     assert rzp.KEY_SECRET not in html
     assert "order_ABC" in html
     assert "500" in html
-    assert 'currency: "INR"' in html
+    assert 'currency: "USD"' in html
 
 
 def test_checkout_html_escapes_the_brand():
