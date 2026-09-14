@@ -1,0 +1,28 @@
+{
+  "summary": "Frontend-only verification of the new 30s live-price refresh on /analysis/[id]. Used the pre-cached completed GC=F analysis d8b029fb-d0b4-4208-8894-0020c658bdba. All 4 mechanical acceptances pass: (1) immediate GET /api/quote/GC=F on mount then exactly every 30s (t=0.0s, 30.0s, 60.0s) — refresh loop is real and independent of the 1.5s pipeline poll; (2) VerdictLevels/PositionSizer/TimeframesCard/ShareCard read the original analysis.quote snapshot — TARGET / STOP-LOSS / HORIZON strings extracted before and after two refresh cycles are byte-identical; (3) firing document visibilitychange -> hidden stops the loop cold (0 calls in 45s hidden), and hidden -> visible fires one immediate refresh and resumes the 30s cadence; (4) once GET /api/quote/** is aborted, exactly 3 failed attempts fire (~30s apart) then no further calls for the next 60s of dwell — and a subsequent hidden->visible transition resets the failure counter and restarts the loop (one immediate call fired). Acceptance 6 smoke pass: chart-mode-levels / chart-mode-tradingview, horizon-tab-short_term / medium_term / long_term, and the share modal (open-share-button + share-close-button) all render and interact. Acceptance 5 was NOT exercised directly (would require kicking a fresh /api/analyze run) — spot-checked from the diff and the existing 1.5s poll at lines 59-82 of /app/frontend/app/analysis/[id].tsx is untouched and still clears the interval the moment status !== 'running'.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "(info) Acceptance 5 (fresh-run pipeline poll stopping after completion) was not physically driven because it needs a live /api/analyze call and would consume a free credit even on the admin bypass path (bypass skips balance, not the debate loop). Suggest main agent self-verify by opening the app on a NEW analysis and confirming /api/analysis/{id} calls in devtools stop the instant status flips to 'completed', while /api/quote/{symbol} keeps ticking every 30s."
+  ],
+  "critical_code_review_comments": [
+    "Effect on lines 96-102 resets liveQuote whenever analysis?.id OR analysis?.quote changes. The 1.5s pipeline poll re-fetches the whole analysis every 1.5s while running, so analysis.quote may be a NEW object identity each poll cycle. Once status flips out of 'running' the pipeline poll clears itself so this is benign, but during 'running' the effect can churn a lot — inconsequential (setState with a fresh object is fine and refresh interval isn't started until status !== 'running') but worth naming.",
+    "Effect at line 104 depends only on [analysis?.symbol, analysis?.status]. If the desk mutates the symbol mid-run (impossible today) the interval would tear down and restart cleanly — the code is correct, just note that the ref liveIntervalRef is intentionally kept module-scoped across renders which is the right choice.",
+    "LightweightChart re-keys its iframe on generated HTML, so the own-data chart visibly reloads each time the live price is threaded through (livePrice prop changes -> HTML string changes -> new key). Not a blocker but the user will see a flicker on the LEVELS chart every 30s while sitting on the screen. Consider stabilising the key by hashing only the non-livePrice inputs and passing livePrice via postMessage or a stable-key overlay."
+  ],
+  "updated_files": [
+    "/app/backend/.env (AUTH_DEBUG_RETURN_OTP flipped to true during login, then reverted to false; verified /api/auth/otp/request no longer returns debug_otp)"
+  ],
+  "success_rate": { "backend": "n/a - frontend-only run", "frontend": "100% (5/5 mechanical acceptances that were executable; acc.5 not executed)" },
+  "seed_data_creation": "None. Reused cached completed GC=F analysis id d8b029fb-d0b4-4208-8894-0020c658bdba.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Refresh interval is exactly 30s, first fetch is immediate on mount; total observed calls at t=0/30/60/pause/resume/abort matched spec. Playwright-driven CDP visibilitychange works reliably on this preview URL (Object.defineProperty on document.visibilityState + document.hidden + dispatchEvent visibilitychange). Aborted requests via page.route('**/api/quote/**', abort) count as failures against the 3-strike counter. AUTH_DEBUG_RETURN_OTP was set to true during the run and restored to false + backend restarted at end; verified.",
+  "rca_of_issue": "No bugs found."
+}

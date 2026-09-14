@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator, StyleSheet, Modal } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator, StyleSheet, Modal, AppState } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
@@ -80,6 +80,77 @@ export default function AnalysisScreen() {
       if (interval) clearInterval(interval);
     };
   }, [id]);
+
+  // Live price refresh — independent of the analysis poll above, which
+  // correctly stops once the pipeline finishes. The verdict, target, stop,
+  // and grounding result are a snapshot from when the desk actually
+  // reasoned and must never move after the fact — only the "current price"
+  // reference shown alongside them should keep ticking while someone sits
+  // on this screen reading. Scoped to QuoteCard and the chart's live-price
+  // line only; VerdictLevels, PositionSizer, and ShareCard intentionally
+  // keep reading the untouched original snapshot (analysis.quote).
+  const [liveQuote, setLiveQuote] = useState<Quote | null>(null);
+  const liveFailures = useRef(0);
+  const liveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    // Resetting the displayed price to the freshly polled snapshot is the
+    // point of this effect — the compiler rule can't see that.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLiveQuote(analysis?.quote ?? null);
+    liveFailures.current = 0;
+  }, [analysis?.id, analysis?.quote]);
+
+  useEffect(() => {
+    const symbol = analysis?.symbol;
+    const canRefresh = !!symbol && analysis?.status && analysis.status !== "running";
+    if (!canRefresh) return;
+
+    const refresh = async () => {
+      try {
+        const fresh = await api.quote(symbol!);
+        liveFailures.current = 0;
+        setLiveQuote((prev) =>
+          prev ? { ...prev, price: fresh.price, changePercent: fresh.changePercent, sparkline: fresh.sparkline } : fresh,
+        );
+      } catch {
+        liveFailures.current += 1;
+        // Three consecutive misses is a real signal (rate limit, outage) —
+        // stop rather than keep hammering an endpoint that's failing.
+        if (liveFailures.current >= 3 && liveIntervalRef.current) {
+          clearInterval(liveIntervalRef.current);
+          liveIntervalRef.current = null;
+        }
+      }
+    };
+
+    const start = () => {
+      if (liveIntervalRef.current) return;
+      refresh();
+      liveIntervalRef.current = setInterval(refresh, 30000);
+    };
+    const stop = () => {
+      if (liveIntervalRef.current) {
+        clearInterval(liveIntervalRef.current);
+        liveIntervalRef.current = null;
+      }
+    };
+
+    start();
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        liveFailures.current = 0; // give it a fresh chance after being backgrounded
+        start();
+      } else {
+        stop();
+      }
+    });
+
+    return () => {
+      stop();
+      sub.remove();
+    };
+  }, [analysis?.symbol, analysis?.status]);
 
   // Blinking terminal cursor.
   useEffect(() => {
@@ -224,7 +295,7 @@ export default function AnalysisScreen() {
       >
         {analysis.quote ? (
           <View style={{ marginBottom: spacing.lg }}>
-            <QuoteCard quote={analysis.quote} showRanges />
+            <QuoteCard quote={liveQuote ?? analysis.quote} showRanges />
           </View>
         ) : null}
 
@@ -237,7 +308,15 @@ export default function AnalysisScreen() {
         ) : tab === "debate" ? (
           <DebateView analysis={analysis} running={running} blink={blink} currentAgent={currentAgent} />
         ) : (
-          <VerdictView analysis={analysis} grouped={grouped} expanded={expanded} toggle={toggle} running={running} onShare={onShare} />
+          <VerdictView
+            analysis={analysis}
+            grouped={grouped}
+            expanded={expanded}
+            toggle={toggle}
+            running={running}
+            onShare={onShare}
+            livePrice={(liveQuote ?? analysis.quote)?.price ?? null}
+          />
         )}
       </ScrollView>
 
@@ -329,6 +408,7 @@ function VerdictView({
   toggle,
   running,
   onShare,
+  livePrice,
 }: {
   analysis: Analysis;
   grouped: Record<string, AgentMessageT[]>;
@@ -336,6 +416,8 @@ function VerdictView({
   toggle: (p: string) => void;
   running: boolean;
   onShare: () => void;
+  /** Refreshed price used only for the chart's live reference line. */
+  livePrice: number | null;
 }) {
   const verdict = analysis.verdict;
   const currency = analysis.quote?.currency;
@@ -397,6 +479,7 @@ function VerdictView({
         chartLevels={chartLevels}
         levelsLabel={call ? HORIZON_LABEL[horizon] : null}
         quote={analysis.quote}
+        livePrice={livePrice}
       />
 
       <NewsList symbol={analysis.symbol} />
@@ -519,6 +602,7 @@ function TvSection({
   chartLevels,
   levelsLabel,
   quote,
+  livePrice,
 }: {
   symbol: string;
   name: string;
@@ -527,6 +611,7 @@ function TvSection({
   chartLevels: Verdict | null;
   levelsLabel?: string | null;
   quote?: Quote | null;
+  livePrice: number | null;
 }) {
   const [range, setRange] = useState<string>("1M");
   const [showLevels, setShowLevels] = useState<boolean>(!!chartLevels);
@@ -593,7 +678,7 @@ function TvSection({
         height={ownChart ? 460 : 360}
         levels={chartLevels}
         levelsLabel={levelsLabel}
-        livePrice={quote?.price ?? null}
+        livePrice={livePrice}
         preferOwnChart={showLevels}
       />
       <VerdictLevels verdict={verdict} quote={quote} symbol={symbol} name={name} />

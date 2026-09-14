@@ -169,3 +169,21 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
 - **Free credits re-verify**: the two concurrency tests in `tests/test_free_credits.py` were flaky (cached
   ORCL/IBM/INTC/AMD analyses are served free, so no credit is spent); they now clear those cached analyses
   first. 9/9 pass. Testing agent (iteration_12) also added `tests/test_wallet_sanity_iter12.py` (4/4).
+
+## Live price refresh on the analysis screen (2026-06-19, session 9, LIVE_PRICE_REFRESH.md) — DONE
+- Implemented exactly as specced; `git diff` limited to `frontend/app/analysis/[id].tsx` (+89/-4).
+- `AnalysisScreen` now runs a second, independent loop: `liveQuote` state + `liveFailures` /
+  `liveIntervalRef` refs, one effect resetting `liveQuote` whenever a new analysis snapshot arrives,
+  and one effect keyed on `[analysis?.symbol, analysis?.status]` that fires an immediate
+  `api.quote(symbol)` then every 30s, pauses on `AppState` != "active", resumes (with the failure
+  count reset) on foreground, and clears the interval permanently after 3 consecutive failures.
+- Only `QuoteCard` (`liveQuote ?? analysis.quote`) and the chart's `livePrice` prop (threaded
+  VerdictView -> TvSection -> TradingViewChart) use the refreshed value. `VerdictLevels`,
+  `PositionSizer`, `ShareCard` and `TimeframesCard` still read the frozen `analysis.quote`
+  snapshot, and the 1.5s pipeline poll (lines 59-82) is untouched — it still stops at completion.
+- Verified by testing agent (iteration_13): quote calls at t=0/30/60s, verdict + target/stop/horizon
+  byte-identical across two refresh cycles, 0 calls while the tab is hidden and an immediate call on
+  foreground, exactly 3 failed attempts then a full stop (restarts only on the next foreground).
+- Known trade-off: `LightweightChart` re-keys its WebView/iframe on the generated HTML, so the
+  own-data LEVELS chart reloads (mild flicker) on each 30s tick. Fixing it needs a price-line
+  injection path inside `LightweightChart`, which this spec's diff scope excluded.
