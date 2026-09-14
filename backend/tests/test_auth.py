@@ -81,3 +81,44 @@ def test_placeholders_return_none():
     assert auth.send_otp_stub("+14155550134", "phone", "123456") is None
     assert auth.verify_google_id_token_stub("fake", "client-id") is None
     assert auth.verify_apple_id_token_stub("fake", "service-id") is None
+
+
+def test_parse_admin_identifiers_normalizes_phone():
+    ids = auth.parse_admin_identifiers("+91 8446307145")
+    assert "+918446307145" in ids
+
+
+def test_parse_admin_identifiers_handles_multiple_and_mixed():
+    ids = auth.parse_admin_identifiers("+918446307145, ops@example.com , +1 (415) 555-0134")
+    assert ids == {"+918446307145", "ops@example.com", "+14155550134"}
+
+
+def test_parse_admin_identifiers_empty_input():
+    assert auth.parse_admin_identifiers("") == set()
+    assert auth.parse_admin_identifiers(None) == set()
+    assert auth.parse_admin_identifiers(",,,") == set()
+
+
+def test_is_admin_matches_phone():
+    ids = auth.parse_admin_identifiers("+918446307145")
+    assert auth.is_admin({"phone": "+918446307145", "email": None}, ids) is True
+
+
+def test_is_admin_matches_email():
+    ids = auth.parse_admin_identifiers("ops@example.com")
+    assert auth.is_admin({"phone": None, "email": "ops@example.com"}, ids) is True
+
+
+def test_is_admin_false_for_non_admin():
+    ids = auth.parse_admin_identifiers("+918446307145")
+    assert auth.is_admin({"phone": "+919999999999", "email": "someone@else.com"}, ids) is False
+
+
+def test_is_admin_false_with_empty_allowlist():
+    assert auth.is_admin({"phone": "+918446307145", "email": None}, set()) is False
+
+
+def test_is_admin_handles_missing_user_fields():
+    ids = auth.parse_admin_identifiers("+918446307145")
+    assert auth.is_admin({}, ids) is False
+    assert auth.is_admin(None, ids) is False

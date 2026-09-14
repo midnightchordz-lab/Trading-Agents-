@@ -124,6 +124,32 @@ def decode_session_token(token: str, secret: str) -> Optional[dict]:
         return None
 
 
+# --- Admin allowlist (additive; configured via env, not hardcoded) ---
+
+def parse_admin_identifiers(raw: str) -> set:
+    """Comma-separated phone/email allowlist, normalized the same way as
+    login identifiers so formatting differences (spacing, missing +) don't
+    cause a false negative."""
+    out: set = set()
+    for piece in (raw or "").split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        _id_type, normalized = normalize_identifier(piece)
+        if normalized:
+            out.add(normalized)
+    return out
+
+
+def is_admin(user: Optional[dict], admin_identifiers: set) -> bool:
+    """True if the user's phone or email is in the admin allowlist."""
+    if not admin_identifiers or not user:
+        return False
+    phone = user.get("phone")
+    email = user.get("email")
+    return bool((phone and phone in admin_identifiers) or (email and email in admin_identifiers))
+
+
 # --- Placeholders requiring real provider credentials ---
 
 def send_otp_stub(identifier: str, identifier_type: IdentifierType, otp: str) -> None:

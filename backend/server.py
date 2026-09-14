@@ -946,6 +946,10 @@ class AnalyzeRequest(BaseModel):
 AUTH_REQUIRED_ENABLED = os.environ.get("AUTH_REQUIRED_ENABLED", "false").lower() == "true"
 AUTH_DEBUG_RETURN_OTP = os.environ.get("AUTH_DEBUG_RETURN_OTP", "false").lower() == "true"  # DEV ONLY
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-only-change-me")
+# Comma-separated phone/email allowlist — NOT hardcoded in source. Ships
+# with one default so the requested super-user works immediately; change
+# or extend via the real env var in your deployment, not by editing this line.
+ADMIN_IDENTIFIERS = au.parse_admin_identifiers(os.environ.get("ADMIN_IDENTIFIERS", "+918446307145"))
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")  # unused: Google runs through Emergent managed auth
 APPLE_SERVICES_ID = os.environ.get("APPLE_SERVICES_ID", "")
 
@@ -961,6 +965,17 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     user = await db.users.find_one({"id": payload["sub"]})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+async def require_admin(authorization: Optional[str] = Header(None)) -> dict:
+    """FastAPI dependency for admin-only endpoints. Requires a valid
+    session AND that the account's phone/email is in ADMIN_IDENTIFIERS.
+    Intentionally unused in this pass — it exists for a future,
+    narrowly-scoped admin endpoint that exposes no individual user data."""
+    user = await get_current_user(authorization)
+    if not au.is_admin(user, ADMIN_IDENTIFIERS):
+        raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
 
@@ -987,12 +1002,16 @@ ADMIN_PHONES = [p for p in os.environ.get("ADMIN_PHONES", "").split(",") if p.st
 
 
 def is_admin(user: Optional[dict]) -> bool:
-    return bool(user) and wal.is_admin_phone(user.get("phone"), ADMIN_PHONES)
+    """Admin allowlist now lives in ADMIN_IDENTIFIERS (phone OR email,
+    normalized); ADMIN_PHONES is still honoured so an existing deployment's
+    env keeps working."""
+    return au.is_admin(user, ADMIN_IDENTIFIERS) or (
+        bool(user) and wal.is_admin_phone(user.get("phone"), ADMIN_PHONES)
+    )
 
 
 # --- Wallet / usage-based pricing (additive; OFF by default — see WALLET_ENFORCEMENT_ENABLED) ---
 WALLET_ENFORCEMENT_ENABLED = os.environ.get("WALLET_ENFORCEMENT_ENABLED", "false").lower() == "true"
-ALLOW_DEMO_TOPUP = os.environ.get("ALLOW_DEMO_TOPUP", "false").lower() == "true"
 # Used to build the Razorpay checkout/callback URLs, which must be absolute
 # and publicly reachable over HTTPS.
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
@@ -1231,28 +1250,6 @@ async def pay_status(order_id: str, user: Optional[dict] = Depends(require_user)
 
     balance = await get_wallet_balance(order["wallet_key"])
     return {"order_id": order_id, "status": order["status"], "balance": round(balance, 2)}
-
-
-@api_router.post("/wallet/topup")
-async def wallet_topup(body: WalletTopup, user: Optional[dict] = Depends(require_user)):
-    """Credits a balance WITHOUT taking payment — only for local testing.
-    Disabled unless ALLOW_DEMO_TOPUP=true, so it can't be used as a free-money
-    endpoint now that real Razorpay payments are live."""
-    if not ALLOW_DEMO_TOPUP:
-        raise HTTPException(status_code=403, detail="Demo top-ups are disabled — use checkout")
-    if body.amount <= 0:
-        raise HTTPException(status_code=400, detail="amount must be positive")
-    key = wallet_key_for(user, body.device_id)
-    if not key:
-        raise HTTPException(status_code=400, detail="device_id is required")
-    current = await get_wallet_balance(key)
-    new_balance = round(current + body.amount, 2)
-    await db.wallets.update_one(
-        {"device_id": key},
-        {"$set": {"device_id": key, "balance": new_balance, "updated_at": now_iso()}},
-        upsert=True,
-    )
-    return {"device_id": key, "balance": new_balance}
 
 
 # --- Auth endpoints. Phone/email OTP + Google sign-in. Email codes go out via
@@ -1722,7 +1719,8 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         raise HTTPException(status_code=400, detail="Invalid ticker symbol")
     language = body.language if body.language in SUPPORTED_LANGUAGES else "en"
 
-    billed = WALLET_ENFORCEMENT_ENABLED and not is_admin(user)
+    admin_bypass = is_admin(user)
+    billed = WALLET_ENFORCEMENT_ENABLED and not admin_bypass
     if billed:
         wkey = wallet_key_for(user, body.device_id)
         if not wkey:
@@ -1772,6 +1770,7 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         "error": None,
         "billed": billed,
         "price_charged": wal.get_price("full_analysis") if billed else None,
+        "admin_bypass": admin_bypass if WALLET_ENFORCEMENT_ENABLED else False,
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }
@@ -1816,6 +1815,26 @@ app.add_middleware(
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+
+@app.on_event("startup")
+async def migrate_legacy_wallet_field():
+    """One-time: wallet rows written before the field rename carry
+    `balance_usd`, which reads as $0 today. Takes the higher of the two so
+    no row with a real balance can read as empty, then drops the old field."""
+    try:
+        migrated = 0
+        async for doc in db.wallets.find({"balance_usd": {"$exists": True}}):
+            merged = max(float(doc.get("balance") or 0), float(doc.get("balance_usd") or 0))
+            await db.wallets.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {"balance": merged}, "$unset": {"balance_usd": ""}},
+            )
+            migrated += 1
+        if migrated:
+            logger.info(f"migrated {migrated} legacy wallet rows (balance_usd -> balance)")
+    except Exception as e:
+        logger.warning(f"legacy wallet migration failed: {e}")
 
 
 @app.on_event("startup")
