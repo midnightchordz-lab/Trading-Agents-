@@ -85,3 +85,16 @@ def test_admin_phone_matching():
 def test_no_admins_configured_means_nobody_is_admin():
     assert w.is_admin_phone("+918446307145", []) is False
     assert w.is_admin_phone("+918446307145", ["", "  "]) is False
+
+
+def test_should_use_free_credit():
+    assert w.should_use_free_credit(10) is True
+    assert w.should_use_free_credit(1) is True
+    assert w.should_use_free_credit(0) is False
+    assert w.should_use_free_credit(-3) is False
+    assert w.should_use_free_credit(None) is False
+    assert w.should_use_free_credit("garbage") is False
+
+
+def test_free_credits_on_signup_is_ten():
+    assert w.FREE_CREDITS_ON_SIGNUP == 10

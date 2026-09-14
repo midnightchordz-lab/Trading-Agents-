@@ -36,6 +36,18 @@ PRICES = {
 # list — a client can never name its own price.
 TOPUP_PACKS = [5.0, 10.0, 25.0]
 
+# Every new account gets this many analyses before the wallet is needed.
+FREE_CREDITS_ON_SIGNUP = 10
+
+
+def should_use_free_credit(free_credits_remaining: Optional[int]) -> bool:
+    """Free credits are spent before any money is. Treated as 0 when the
+    value is missing or nonsense, so a bad value can never grant runs."""
+    try:
+        return int(free_credits_remaining or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
 
 def is_valid_topup(amount: float) -> bool:
     return any(abs(amount - p) < 0.001 for p in TOPUP_PACKS)

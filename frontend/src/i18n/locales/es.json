@@ -56,5 +56,13 @@
     "title": "Ajustes",
     "language": "Idioma",
     "language_hint": "Se aplica a la app y a los nuevos análisis"
+  },
+  "share": {
+    "ai_desk": "// MESA IA",
+    "desk_says": "LA MESA DICE",
+    "confidence": "CONFIANZA",
+    "thesis": "TESIS",
+    "agents_analysis": "ANÁLISIS DE 10 AGENTES",
+    "disclaimer": "NO ES ASESORAMIENTO FINANCIERO"
   }
 }

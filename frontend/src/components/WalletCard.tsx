@@ -100,6 +100,7 @@ export function WalletCard() {
   const symbol = wallet?.symbol || "$";
   const price = wallet?.prices?.full_analysis;
   const packs = wallet?.packs || [];
+  const freeCredits = wallet?.free_credits_remaining ?? 0;
 
   return (
     <View testID="wallet-card" style={styles.card}>
@@ -112,7 +113,9 @@ export function WalletCard() {
 
       {price ? (
         <Text style={styles.priceNote}>
-          {`Full analysis: ${symbol}${price.toFixed(2)} · re-checking an unchanged verdict is free`}
+          {freeCredits > 0
+            ? `${freeCredits} free ${freeCredits === 1 ? "analysis" : "analyses"} left — no payment needed yet. After that, ${symbol}${price.toFixed(2)} each.`
+            : `Full analysis: ${symbol}${price.toFixed(2)} · re-checking an unchanged verdict is free`}
         </Text>
       ) : (
         <Text style={styles.priceNote}>Usage-based pricing isn&apos;t active in this build yet.</Text>

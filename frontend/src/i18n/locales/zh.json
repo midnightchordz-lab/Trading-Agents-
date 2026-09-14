@@ -56,5 +56,13 @@
     "title": "设置",
     "language": "语言",
     "language_hint": "适用于应用及新分析"
+  },
+  "share": {
+    "ai_desk": "// AI 交易台",
+    "desk_says": "交易台结论",
+    "confidence": "信心度",
+    "thesis": "投资逻辑",
+    "agents_analysis": "10 位智能体分析",
+    "disclaimer": "非投资建议"
   }
 }

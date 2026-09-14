@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import { View, Text, Pressable, StyleSheet } from "react-native";
 import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
 import type { Timeframes, TimeframeCall } from "@/src/api";
@@ -8,11 +8,12 @@ import type { Timeframes, TimeframeCall } from "@/src/api";
 // tab expands that horizon's thesis and levels.
 
 const ORDER: (keyof Timeframes)[] = ["short_term", "medium_term", "long_term"];
-const SHORT_LABEL: Record<keyof Timeframes, string> = {
+export const HORIZON_LABEL: Record<keyof Timeframes, string> = {
   short_term: "1-2 WEEKS",
   medium_term: "1-3 MONTHS",
   long_term: "6-12 MONTHS",
 };
+const SHORT_LABEL = HORIZON_LABEL;
 
 function fmt(n: number | null, currency?: string): string {
   if (n == null) return "—";
@@ -20,8 +21,17 @@ function fmt(n: number | null, currency?: string): string {
   return currency && currency !== "USD" ? `${v} ${currency}` : `$${v}`;
 }
 
-export function TimeframesCard({ timeframes, currency }: { timeframes: Timeframes; currency?: string }) {
-  const [active, setActive] = useState<keyof Timeframes>("short_term");
+export function TimeframesCard({
+  timeframes,
+  currency,
+  active,
+  onChange,
+}: {
+  timeframes: Timeframes;
+  currency?: string;
+  active: keyof Timeframes;
+  onChange: (key: keyof Timeframes) => void;
+}) {
   const call: TimeframeCall = timeframes[active];
   const { bg, fg } = verdictColors(call.decision);
   const isFallback = !!call.thesis?.toLowerCase().includes("unavailable");
@@ -39,7 +49,8 @@ export function TimeframesCard({ timeframes, currency }: { timeframes: Timeframe
           return (
             <Pressable
               key={key}
-              onPress={() => setActive(key)}
+              testID={`horizon-tab-${key}`}
+              onPress={() => onChange(key)}
               style={[styles.tab, isActive && { backgroundColor: tabColors.bg }]}
             >
               <Text style={[styles.tabLabel, isActive && { color: tabColors.fg }]}>{SHORT_LABEL[key]}</Text>
@@ -70,6 +81,10 @@ export function TimeframesCard({ timeframes, currency }: { timeframes: Timeframe
               <Text style={[styles.levelValue, { color: colors.error }]}>{fmt(call.stop_loss, currency)}</Text>
             </View>
           </View>
+        ) : null}
+
+        {call.target_price != null || call.stop_loss != null ? (
+          <Text style={styles.chartHint}>These levels are drawn on the chart below.</Text>
         ) : null}
 
         {isFallback ? (
@@ -104,5 +119,6 @@ const styles = StyleSheet.create({
   levelBox: { flex: 1 },
   levelLabel: { fontFamily: fonts.monoBold, fontSize: 9, color: colors.onSurfaceTertiary },
   levelValue: { fontFamily: fonts.mono, fontSize: 13, marginTop: 2 },
+  chartHint: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary, marginTop: spacing.sm, letterSpacing: 0.3 },
   fallbackNote: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary, marginTop: spacing.sm },
 });

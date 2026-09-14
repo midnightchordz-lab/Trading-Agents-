@@ -138,3 +138,34 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
   entirely (no charge, no 402, always a fresh run — no cached free re-check), and
   `/api/wallet/balance` reports `enforcement_enabled: false, is_admin: true` so the frontend
   gate and balance chip hide themselves with no client-side admin logic.
+
+## Free trial credits (2026-06-18)
+- 10 free analyses per new account. `wallet.FREE_CREDITS_ON_SIGNUP=10`, `wallet.should_use_free_credit()`,
+  `server.get_free_credits_remaining()` (backfills legacy accounts) and `server.consume_free_credit()`
+  (atomic `$inc -1` guarded by `free_credits_remaining > 0`, so concurrent runs can't double-spend the last one).
+- Precedence in /analyze: admin bypass -> free cached re-check -> free credit -> wallet charge -> 402.
+- `/api/wallet/balance` adds `free_credits_remaining` and reports `enforcement_enabled: false` while credits
+  remain, so the frontend paywall/chip hide themselves with no client-side logic. /analyze response adds
+  `used_free_credit` and `free_credits_remaining`.
+
+## Chart overlay + alert history + localized verdict card (2026-06-19, session 9) — DONE
+- **Chart overlay**: `TimeframesCard` is now a controlled component (`active` / `onChange`); the analysis
+  screen owns the selected horizon and derives the chart's levels from it, so switching the MULTI-HORIZON
+  tabs redraws TARGET / STOP price lines on the candles (titles prefixed with the horizon, e.g.
+  `1-3 MONTHS TARGET`; chart header reads `CHART · <HORIZON> LEVELS`). Horizon levels fall back to the
+  primary verdict's when a horizon has none; levels are suppressed when grounding failed.
+  Because the free TradingView widget can't draw price lines, `TradingViewChart` gained
+  `preferOwnChart` + `levelsLabel`: widget-supported symbols show a `LEVELS · <HORIZON>` / `TRADINGVIEW`
+  toggle (testIDs `chart-mode-levels`, `chart-mode-tradingview`), defaulting to LEVELS (our own OHLC chart).
+  The 1D/1W/1M/1Y widget range chips only show in TRADINGVIEW mode.
+- **Alert history**: `src/alerts.tsx` writes a permanent `FiredAlert` log (`alert_history_v1`, capped at 100)
+  the moment an alert fires — symbol, label, alert price, price at fire, timestamps — exposed as
+  `history` / `clearHistory`. The Alerts tab has an `ACTIVE · n` / `HISTORY · n` segmented control
+  (testIDs `alerts-tab-active`, `alerts-tab-history`); history rows tag the outcome `TARGET HIT` /
+  `STOP HIT` and survive CLEAR FIRED (separate store). `CLEAR LOG` (testID `clear-history`) wipes it.
+- **Localized verdict card**: `ShareCard` uses react-i18next; new `share.*` keys in all four locales
+  (en/hi/es/zh) cover `// AI DESK`, `THE DESK SAYS`, `CONFIDENCE`, `THESIS`, `10-AGENT ANALYSIS`,
+  `NOT FINANCIAL ADVICE`; the date formats with the active locale. BUY/SELL/HOLD stays English by design.
+- **Free credits re-verify**: the two concurrency tests in `tests/test_free_credits.py` were flaky (cached
+  ORCL/IBM/INTC/AMD analyses are served free, so no credit is spent); they now clear those cached analyses
+  first. 9/9 pass. Testing agent (iteration_12) also added `tests/test_wallet_sanity_iter12.py` (4/4).

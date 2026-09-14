@@ -1,5 +1,6 @@
 import React from "react";
 import { View, Text, StyleSheet } from "react-native";
+import { useTranslation } from "react-i18next";
 import { colors, fonts, spacing, BORDER, verdictColors, changeColor } from "@/src/theme";
 import { Sparkline } from "@/src/components/Sparkline";
 import { Quote, Verdict } from "@/src/api";
@@ -21,15 +22,20 @@ export function ShareCard({
   verdict: Verdict;
   quote: Quote | null;
 }) {
+  const { t, i18n } = useTranslation();
   const { bg, fg } = verdictColors(verdict.decision);
   const cColor = changeColor(quote?.changePercent);
-  const date = new Date().toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" });
+  const date = new Date().toLocaleDateString(i18n.language || "en", {
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+  });
 
   return (
     <View style={styles.card}>
       <View style={styles.brandRow}>
         <Text style={styles.brand}>TRADINGAGENTS</Text>
-        <Text style={styles.brandSub}>{"// AI DESK"}</Text>
+        <Text style={styles.brandSub}>{t("share.ai_desk")}</Text>
       </View>
 
       <View style={styles.body}>
@@ -60,10 +66,12 @@ export function ShareCard({
       </View>
 
       <View style={[styles.verdictBlock, { backgroundColor: bg }]}>
-        <Text style={[styles.verdictLabel, { color: fg }]}>THE DESK SAYS</Text>
-        <Text style={[styles.verdictDecision, { color: fg }]}>{verdict.decision}</Text>
+        <Text style={[styles.verdictLabel, { color: fg }]}>{t("share.desk_says")}</Text>
+        <Text style={[styles.verdictDecision, { color: fg }]}>
+          {t(`verdict.${verdict.decision.toLowerCase()}`, { defaultValue: verdict.decision })}
+        </Text>
         <View style={styles.confRow}>
-          <Text style={[styles.confText, { color: fg }]}>CONFIDENCE</Text>
+          <Text style={[styles.confText, { color: fg }]}>{t("share.confidence")}</Text>
           <Text style={[styles.confVal, { color: fg }]}>{verdict.confidence}%</Text>
         </View>
         <View style={[styles.confTrack, { borderColor: fg }]}>
@@ -72,15 +80,17 @@ export function ShareCard({
       </View>
 
       <View style={styles.thesisWrap}>
-        <Text style={styles.thesisLabel}>THESIS</Text>
+        <Text style={styles.thesisLabel}>{t("share.thesis")}</Text>
         <Text style={styles.thesis} numberOfLines={4}>
           {verdict.summary}
         </Text>
       </View>
 
       <View style={styles.footer}>
-        <Text style={styles.footerText}>{date} · 10-AGENT ANALYSIS</Text>
-        <Text style={styles.footerText}>NOT FINANCIAL ADVICE</Text>
+        <Text style={styles.footerText}>
+          {date} · {t("share.agents_analysis")}
+        </Text>
+        <Text style={styles.footerText}>{t("share.disclaimer")}</Text>
       </View>
     </View>
   );

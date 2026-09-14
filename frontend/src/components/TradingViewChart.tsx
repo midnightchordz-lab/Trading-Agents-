@@ -22,6 +22,10 @@ type Props = {
   levels?: Verdict | null;
   /** Live price used for the entry line on the fallback chart. */
   livePrice?: number | null;
+  /** Horizon label drawn next to the target / stop lines on the fallback chart. */
+  levelsLabel?: string | null;
+  /** Use our own OHLC chart (which can draw levels) even when the widget supports the symbol. */
+  preferOwnChart?: boolean;
 };
 
 function buildHtml(opts: {
@@ -84,6 +88,8 @@ export function TradingViewChart({
   compact = false,
   levels,
   livePrice,
+  levelsLabel,
+  preferOwnChart = false,
 }: Props) {
   const [loading, setLoading] = useState(true);
   const supported = useMemo(() => widgetSupports(symbol), [symbol]);
@@ -93,9 +99,18 @@ export function TradingViewChart({
     [tvSymbol, interval, studies, theme, compact],
   );
 
-  if (!supported) {
-    // NSE / BSE data is not licensed for the free widget — use our own OHLC chart.
-    return <LightweightChart symbol={symbol} height={height} levels={levels} livePrice={livePrice} />;
+  if (!supported || preferOwnChart) {
+    // NSE / BSE data is not licensed for the free widget — use our own OHLC
+    // chart. It's also what we use when the agents' levels must be drawn.
+    return (
+      <LightweightChart
+        symbol={symbol}
+        height={height}
+        levels={levels}
+        livePrice={livePrice}
+        levelsLabel={levelsLabel}
+      />
+    );
   }
 
   return (

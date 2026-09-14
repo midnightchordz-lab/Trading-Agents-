@@ -8,7 +8,7 @@ import ViewShot from "react-native-view-shot";
 import { CaretDown, CaretRight, Warning, Star, ShareNetwork } from "phosphor-react-native";
 
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
-import { api, Analysis, AgentMessageT, Verdict, Quote } from "@/src/api";
+import { api, Analysis, AgentMessageT, Verdict, Quote, Timeframes } from "@/src/api";
 import { QuoteCard } from "@/src/components/QuoteCard";
 import { AgentMessage } from "@/src/components/AgentMessage";
 import { VerdictBlock } from "@/src/components/VerdictBadge";
@@ -19,7 +19,7 @@ import { VerdictLevels } from "@/src/components/VerdictLevels";
 import { FearGreedGauge } from "@/src/components/FearGreedGauge";
 import { GroundingBadge } from "@/src/components/GroundingBadge";
 import { PositionSizer } from "@/src/components/PositionSizer";
-import { TimeframesCard } from "@/src/components/TimeframesCard";
+import { TimeframesCard, HORIZON_LABEL } from "@/src/components/TimeframesCard";
 import { NewsList } from "@/src/components/NewsList";
 import { rangeToInterval, widgetSupports } from "@/src/tv";
 import { PHASE_LABEL, PHASE_ORDER, PhaseKey } from "@/src/agents";
@@ -339,6 +339,7 @@ function VerdictView({
 }) {
   const verdict = analysis.verdict;
   const currency = analysis.quote?.currency;
+  const [horizon, setHorizon] = useState<keyof Timeframes>("short_term");
 
   if (!verdict) {
     return (
@@ -351,6 +352,21 @@ function VerdictView({
     );
   }
 
+  // The chart mirrors whichever horizon is selected above — switching the
+  // MULTI-HORIZON tabs redraws the target / stop lines on the candles.
+  const call = analysis.timeframes ? analysis.timeframes[horizon] : null;
+  const chartLevels: Verdict | null =
+    analysis.grounding?.status === "failed"
+      ? null
+      : call
+        ? {
+            ...verdict,
+            decision: call.decision,
+            target_price: call.target_price ?? verdict.target_price,
+            stop_loss: call.stop_loss ?? verdict.stop_loss,
+          }
+        : verdict;
+
   return (
     <View>
       <VerdictBlock decision={verdict.decision} confidence={verdict.confidence} />
@@ -359,7 +375,17 @@ function VerdictView({
 
       <PositionSizer verdict={verdict} quote={analysis.quote} grounding={analysis.grounding} />
 
-      {analysis.timeframes ? <TimeframesCard timeframes={analysis.timeframes} currency={analysis.quote?.currency} /> : null}
+      {analysis.timeframes ? (
+        <TimeframesCard
+          timeframes={analysis.timeframes}
+          currency={analysis.quote?.currency}
+          active={horizon}
+          onChange={(k) => {
+            Haptics.selectionAsync();
+            setHorizon(k);
+          }}
+        />
+      ) : null}
 
       <FearGreedGauge analysis={analysis} />
 
@@ -368,7 +394,8 @@ function VerdictView({
         name={analysis.name}
         exchange={analysis.quote?.exchange}
         verdict={verdict}
-        chartLevels={analysis.grounding?.status === "failed" ? null : analysis.verdict}
+        chartLevels={chartLevels}
+        levelsLabel={call ? HORIZON_LABEL[horizon] : null}
         quote={analysis.quote}
       />
 
@@ -490,6 +517,7 @@ function TvSection({
   exchange,
   verdict,
   chartLevels,
+  levelsLabel,
   quote,
 }: {
   symbol: string;
@@ -497,15 +525,48 @@ function TvSection({
   exchange?: string;
   verdict: Verdict;
   chartLevels: Verdict | null;
+  levelsLabel?: string | null;
   quote?: Quote | null;
 }) {
   const [range, setRange] = useState<string>("1M");
+  const [showLevels, setShowLevels] = useState<boolean>(!!chartLevels);
   const ranges = ["1D", "1W", "1M", "1Y"];
   const widgetChart = widgetSupports(symbol);
+  // Our own OHLC chart is the only one we can draw the agents' levels on, so
+  // the toggle swaps between "levels" and the richer TradingView widget.
+  const ownChart = !widgetChart || showLevels;
   return (
     <View style={styles.tvSection}>
-      {widgetChart ? (
+      {widgetChart && chartLevels ? (
         <View style={styles.rangeBar}>
+          <Pressable
+            testID="chart-mode-levels"
+            onPress={() => {
+              Haptics.selectionAsync();
+              setShowLevels(true);
+            }}
+            style={[styles.rangeBtn, showLevels && styles.rangeActive]}
+          >
+            <Text style={[styles.rangeText, { color: showLevels ? colors.onSurfaceInverse : colors.onSurface }]}>
+              LEVELS{levelsLabel ? ` · ${levelsLabel}` : ""}
+            </Text>
+          </Pressable>
+          <Pressable
+            testID="chart-mode-tradingview"
+            onPress={() => {
+              Haptics.selectionAsync();
+              setShowLevels(false);
+            }}
+            style={[styles.rangeBtn, styles.rangeDivider, !showLevels && styles.rangeActive]}
+          >
+            <Text style={[styles.rangeText, { color: !showLevels ? colors.onSurfaceInverse : colors.onSurface }]}>
+              TRADINGVIEW
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
+      {!ownChart ? (
+        <View style={[styles.rangeBar, styles.rangeBarStacked]}>
           {ranges.map((r, i) => {
             const active = range === r;
             return (
@@ -529,9 +590,11 @@ function TvSection({
         exchange={exchange}
         interval={rangeToInterval(range)}
         theme="light"
-        height={widgetChart ? 360 : 460}
+        height={ownChart ? 460 : 360}
         levels={chartLevels}
+        levelsLabel={levelsLabel}
         livePrice={quote?.price ?? null}
+        preferOwnChart={showLevels}
       />
       <VerdictLevels verdict={verdict} quote={quote} symbol={symbol} name={name} />
     </View>
@@ -615,6 +678,7 @@ const styles = StyleSheet.create({
     borderColor: colors.borderStrong,
   },
   rangeBtn: { flex: 1, height: 38, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
+  rangeBarStacked: { borderTopWidth: 0 },
   rangeDivider: { borderLeftWidth: 1.5, borderLeftColor: colors.border },
   rangeActive: { backgroundColor: colors.brand },
   rangeText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1 },

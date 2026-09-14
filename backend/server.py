@@ -1022,6 +1022,33 @@ class WalletTopup(BaseModel):
     amount: float  # in INR; must match one of wallet.TOPUP_PACKS
 
 
+async def get_free_credits_remaining(user: Optional[dict]) -> int:
+    """Accounts created before free credits existed are backfilled on first
+    read, so nobody is worse off than a brand-new signup."""
+    if not user:
+        return 0
+    if "free_credits_remaining" not in user:
+        await db.users.update_one(
+            {"id": user["id"], "free_credits_remaining": {"$exists": False}},
+            {"$set": {"free_credits_remaining": wal.FREE_CREDITS_ON_SIGNUP}},
+        )
+        return wal.FREE_CREDITS_ON_SIGNUP
+    try:
+        return max(0, int(user.get("free_credits_remaining") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+async def consume_free_credit(user: dict) -> bool:
+    """Atomically spends one free credit. The `$gt: 0` guard is what stops
+    two concurrent analyses from spending the same last credit twice."""
+    res = await db.users.update_one(
+        {"id": user["id"], "free_credits_remaining": {"$gt": 0}},
+        {"$inc": {"free_credits_remaining": -1}},
+    )
+    return res.modified_count == 1
+
+
 async def get_wallet_balance(device_id: str) -> float:
     doc = await db.wallets.find_one({"device_id": device_id})
     return doc["balance"] if doc else 0.0
@@ -1046,6 +1073,7 @@ async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] =
         raise HTTPException(status_code=400, detail="device_id is required")
     balance = await get_wallet_balance(key)
     admin = is_admin(user)
+    free_credits = await get_free_credits_remaining(user)
     return {
         "device_id": key,
         "balance": round(balance, 2),
@@ -1053,8 +1081,10 @@ async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] =
         "symbol": wal.CURRENCY_SYMBOL,
         "prices": wal.PRICES,
         "packs": wal.TOPUP_PACKS,
-        # Admins are never billed, so the app shows them no balance gate.
-        "enforcement_enabled": WALLET_ENFORCEMENT_ENABLED and not admin,
+        "free_credits_remaining": free_credits,
+        # Admins are never billed, and neither is anyone with free credits
+        # left — so the app shows them no balance gate.
+        "enforcement_enabled": WALLET_ENFORCEMENT_ENABLED and not admin and free_credits <= 0,
         "is_admin": admin,
         "payments_live": rzp.payments_configured(),
     }
@@ -1298,7 +1328,8 @@ async def find_or_create_user(identifier_type: str, identifier: str) -> dict:
     if existing:
         return existing
     user = {"id": str(uuid.uuid4()), "phone": None, "email": None, "google_sub": None,
-            "apple_sub": None, "created_at": now_iso()}
+            "apple_sub": None, "free_credits_remaining": wal.FREE_CREDITS_ON_SIGNUP,
+            "created_at": now_iso()}
     user[key] = identifier
     await db.users.insert_one({**user})
     return user
@@ -1423,7 +1454,7 @@ async def auth_session(body: GoogleSession):
     if not user:
         user = {"id": str(uuid.uuid4()), "phone": None, "email": email, "google_sub": data.get("id"),
                 "apple_sub": None, "name": data.get("name"), "picture": data.get("picture"),
-                "created_at": now_iso()}
+                "free_credits_remaining": wal.FREE_CREDITS_ON_SIGNUP, "created_at": now_iso()}
         await db.users.insert_one({**user})
     elif not user.get("google_sub"):
         await db.users.update_one({"id": user["id"]}, {"$set": {"google_sub": data.get("id")}})
@@ -1444,7 +1475,8 @@ async def auth_apple(body: SocialSignIn):
     user = await db.users.find_one({"apple_sub": claims.get("sub")})
     if not user:
         user = {"id": str(uuid.uuid4()), "phone": None, "email": claims.get("email"),
-                "google_sub": None, "apple_sub": claims.get("sub"), "created_at": now_iso()}
+                "google_sub": None, "apple_sub": claims.get("sub"),
+                "free_credits_remaining": wal.FREE_CREDITS_ON_SIGNUP, "created_at": now_iso()}
         await db.users.insert_one({**user})
     await link_device_wallet_to_user(body.device_id, user["id"])
     token = au.create_session_token(user["id"], JWT_SECRET)
@@ -1720,6 +1752,7 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
     language = body.language if body.language in SUPPORTED_LANGUAGES else "en"
 
     admin_bypass = is_admin(user)
+    used_free_credit = False
     billed = WALLET_ENFORCEMENT_ENABLED and not admin_bypass
     if billed:
         wkey = wallet_key_for(user, body.device_id)
@@ -1739,20 +1772,32 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         if not wal.should_charge_for_recheck(cached_verdict, live_price, reference_price):
             # Nothing has meaningfully changed since the cached verdict —
             # serve it for free. No new analysis document, no LLM calls.
-            return {**cached, "served_from_cache": True, "billed": False}
+            # Billing fields must describe THIS request, not the original
+            # run's (which may have been another account or an admin).
+            return {**cached, "served_from_cache": True, "billed": False,
+                    "price_charged": None, "admin_bypass": admin_bypass,
+                    "used_free_credit": False,
+                    "free_credits_remaining": await get_free_credits_remaining(user)}
 
-        balance = await get_wallet_balance(wkey)
-        if not wal.has_sufficient_balance(balance, "full_analysis"):
-            raise HTTPException(
-                status_code=402,
-                detail=(f"Insufficient balance: need {wal.CURRENCY_SYMBOL}{wal.get_price('full_analysis'):.0f}, "
-                        f"have {wal.CURRENCY_SYMBOL}{balance:.2f}"),
+        # Free signup credits are spent before any money is. Only reached
+        # when a fresh run is actually needed, so an unchanged re-check
+        # never burns one.
+        if wal.should_use_free_credit(await get_free_credits_remaining(user)) and await consume_free_credit(user):
+            used_free_credit = True
+            billed = False
+        else:
+            balance = await get_wallet_balance(wkey)
+            if not wal.has_sufficient_balance(balance, "full_analysis"):
+                raise HTTPException(
+                    status_code=402,
+                    detail=(f"Insufficient balance: need {wal.CURRENCY_SYMBOL}{wal.get_price('full_analysis'):.2f}, "
+                            f"have {wal.CURRENCY_SYMBOL}{balance:.2f}"),
+                )
+            new_balance = wal.new_balance_after_charge(balance, "full_analysis")
+            await db.wallets.update_one(
+                {"device_id": wkey},
+                {"$set": {"balance": new_balance, "updated_at": now_iso()}},
             )
-        new_balance = wal.new_balance_after_charge(balance, "full_analysis")
-        await db.wallets.update_one(
-            {"device_id": wkey},
-            {"$set": {"balance": new_balance, "updated_at": now_iso()}},
-        )
 
     analysis = {
         "id": str(uuid.uuid4()),
@@ -1771,6 +1816,10 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         "billed": billed,
         "price_charged": wal.get_price("full_analysis") if billed else None,
         "admin_bypass": admin_bypass if WALLET_ENFORCEMENT_ENABLED else False,
+        "used_free_credit": used_free_credit,
+        "free_credits_remaining": await get_free_credits_remaining(
+            await db.users.find_one({"id": user["id"]}, {"_id": 0}) if user else None
+        ),
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }

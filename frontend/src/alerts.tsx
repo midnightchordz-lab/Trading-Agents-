@@ -24,13 +24,32 @@ export type PriceAlert = {
 };
 
 const KEY = "price_alerts_v1";
+const HISTORY_KEY = "alert_history_v1";
+const HISTORY_LIMIT = 100;
+
+/** Permanent log entry written the moment an alert fires, so the user can
+ *  look back at which calls actually played out. */
+export type FiredAlert = {
+  id: string;
+  symbol: string;
+  name: string;
+  label: string;
+  price: number;
+  direction: "above" | "below";
+  currency?: string;
+  createdAt: string;
+  firedAt: string;
+  priceAtFire: number;
+};
 
 type AlertsCtx = {
   items: PriceAlert[];
+  history: FiredAlert[];
   ready: boolean;
   add: (a: Omit<PriceAlert, "id" | "createdAt" | "triggered" | "triggeredAt">) => void;
   remove: (id: string) => void;
   clearTriggered: () => void;
+  clearHistory: () => void;
   findActive: (symbol: string, price: number, direction: "above" | "below") => PriceAlert | undefined;
   evaluate: (symbol: string, price?: number | null) => void;
 };
@@ -45,11 +64,18 @@ async function save(items: PriceAlert[]) {
   await storage.setItem(KEY, JSON.stringify(items));
 }
 
+async function saveHistory(items: FiredAlert[]) {
+  await storage.setItem(HISTORY_KEY, JSON.stringify(items));
+}
+
 export function AlertsProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<PriceAlert[]>([]);
+  const [history, setHistory] = useState<FiredAlert[]>([]);
   const [ready, setReady] = useState(false);
   const itemsRef = useRef<PriceAlert[]>([]);
   itemsRef.current = items;
+  const historyRef = useRef<FiredAlert[]>([]);
+  historyRef.current = history;
 
   useEffect(() => {
     (async () => {
@@ -57,6 +83,13 @@ export function AlertsProvider({ children }: { children: React.ReactNode }) {
       try {
         const parsed = raw ? JSON.parse(raw) : [];
         if (Array.isArray(parsed)) setItems(parsed);
+      } catch {
+        // ignore malformed cache
+      }
+      const rawHist = await storage.getItem(HISTORY_KEY, "");
+      try {
+        const parsed = rawHist ? JSON.parse(rawHist) : [];
+        if (Array.isArray(parsed)) setHistory(parsed);
       } catch {
         // ignore malformed cache
       }
@@ -96,6 +129,13 @@ export function AlertsProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const clearHistory = useCallback(() => {
+    setHistory(() => {
+      saveHistory([]);
+      return [];
+    });
+  }, []);
+
   const findActive = useCallback(
     (symbol: string, price: number, direction: "above" | "below") =>
       itemsRef.current.find(
@@ -121,6 +161,25 @@ export function AlertsProvider({ children }: { children: React.ReactNode }) {
     if (fired.length === 0) return;
     setItems(next);
     save(next);
+
+    // Permanent log — kept even after the user clears fired alerts.
+    const firedAt = new Date().toISOString();
+    const logged: FiredAlert[] = fired.map((a) => ({
+      id: a.id,
+      symbol: a.symbol,
+      name: a.name,
+      label: a.label,
+      price: a.price,
+      direction: a.direction,
+      currency: a.currency,
+      createdAt: a.createdAt,
+      firedAt,
+      priceAtFire: price,
+    }));
+    const nextHistory = [...logged, ...historyRef.current].slice(0, HISTORY_LIMIT);
+    setHistory(nextHistory);
+    saveHistory(nextHistory);
+
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     const a = fired[0];
     const cur = a.currency && a.currency !== "USD" ? ` ${a.currency}` : "";
@@ -133,7 +192,7 @@ export function AlertsProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <Ctx.Provider value={{ items, ready, add, remove, clearTriggered, findActive, evaluate }}>
+    <Ctx.Provider value={{ items, history, ready, add, remove, clearTriggered, clearHistory, findActive, evaluate }}>
       {children}
     </Ctx.Provider>
   );

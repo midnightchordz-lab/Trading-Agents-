@@ -18,12 +18,20 @@ type Props = {
   height?: number;
   levels?: Verdict | null;
   livePrice?: number | null;
+  /** Horizon label shown on the target / stop price lines, e.g. "1-2 WEEKS". */
+  levelsLabel?: string | null;
 };
 
-function buildHtml(data: OhlcData, levels: Verdict | null | undefined, livePrice: number | null | undefined): string {
+function buildHtml(
+  data: OhlcData,
+  levels: Verdict | null | undefined,
+  livePrice: number | null | undefined,
+  levelsLabel?: string | null,
+): string {
   const payload = JSON.stringify({
     bars: data.bars,
     intraday: data.range === "1D" || data.range === "1W",
+    levelsLabel: levelsLabel || "",
     levels: levels
       ? {
           decision: levels.decision,
@@ -101,10 +109,11 @@ function buildHtml(data: OhlcData, levels: Verdict | null | undefined, livePrice
 
   if (P.levels) {
     var L = P.levels, isHold = L.decision === 'HOLD';
+    var pfx = P.levelsLabel ? P.levelsLabel + ' ' : '';
     var entryColor = L.decision === 'BUY' ? C.buy : (L.decision === 'SELL' ? C.sell : C.hold);
     if (L.entry != null) candles.createPriceLine({price:L.entry, color:entryColor, lineWidth:2, lineStyle:0, axisLabelVisible:true, title: isHold ? 'HOLD' : L.decision + ' ENTRY'});
-    if (L.target != null) candles.createPriceLine({price:L.target, color:C.buy, lineWidth:2, lineStyle:2, axisLabelVisible:true, title:'TARGET'});
-    if (L.stop != null) candles.createPriceLine({price:L.stop, color:C.sell, lineWidth:2, lineStyle:2, axisLabelVisible:true, title:'STOP LOSS'});
+    if (L.target != null) candles.createPriceLine({price:L.target, color:C.buy, lineWidth:2, lineStyle:2, axisLabelVisible:true, title:pfx + 'TARGET'});
+    if (L.stop != null) candles.createPriceLine({price:L.stop, color:C.sell, lineWidth:2, lineStyle:2, axisLabelVisible:true, title:pfx + 'STOP LOSS'});
   }
 
   var rsiChart = LightweightCharts.createChart(document.getElementById('rsi'), Object.assign({height:subH}, common));
@@ -129,7 +138,7 @@ function buildHtml(data: OhlcData, levels: Verdict | null | undefined, livePrice
 </body></html>`;
 }
 
-export function LightweightChart({ symbol, height = 380, levels, livePrice }: Props) {
+export function LightweightChart({ symbol, height = 380, levels, livePrice, levelsLabel }: Props) {
   const [range, setRange] = useState("1M");
   const [data, setData] = useState<OhlcData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -155,13 +164,16 @@ export function LightweightChart({ symbol, height = 380, levels, livePrice }: Pr
     };
   }, [symbol, range]);
 
-  const html = useMemo(() => (data ? buildHtml(data, levels, livePrice) : ""), [data, levels, livePrice]);
+  const html = useMemo(
+    () => (data ? buildHtml(data, levels, livePrice, levelsLabel) : ""),
+    [data, levels, livePrice, levelsLabel],
+  );
   const chartHeight = height - 34 - 36; // header + range chips
 
   return (
     <View testID="lightweight-chart" style={[styles.card, { height }]}>
       <View style={styles.header}>
-        <Text style={styles.headerText}>CHART · OWN DATA</Text>
+        <Text style={styles.headerText}>{levelsLabel ? `CHART · ${levelsLabel} LEVELS` : "CHART · OWN DATA"}</Text>
         <Text style={styles.headerSymbol} numberOfLines={1}>
           {symbol}
         </Text>

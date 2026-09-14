@@ -56,5 +56,13 @@
     "title": "Settings",
     "language": "Language",
     "language_hint": "Applies to the app and to new analyses"
+  },
+  "share": {
+    "ai_desk": "// AI DESK",
+    "desk_says": "THE DESK SAYS",
+    "confidence": "CONFIDENCE",
+    "thesis": "THESIS",
+    "agents_analysis": "10-AGENT ANALYSIS",
+    "disclaimer": "NOT FINANCIAL ADVICE"
   }
 }

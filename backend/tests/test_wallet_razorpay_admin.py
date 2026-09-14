@@ -160,6 +160,12 @@ class TestAdminBypass:
     def test_non_admin_with_zero_balance_gets_402(self):
         uid, headers = _mk_user(phone="+919999000111")
         _set_balance(uid, 0.0)
+        # New accounts now start with free signup credits — spend them all
+        # first, otherwise there is nothing to pay for yet.
+        _db.users.update_one({"id": uid}, {"$set": {"free_credits_remaining": 0}})
+        # An unchanged cached verdict would legitimately be served free, so
+        # clear any cache for this symbol to force the paid path.
+        _db.analyses.delete_many({"symbol": "GOOGL", "language": "en"})
         try:
             r = requests.post(f"{BASE_URL}/api/analyze",
                               headers=headers,

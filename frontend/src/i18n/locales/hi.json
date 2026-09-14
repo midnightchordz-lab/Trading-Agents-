@@ -56,5 +56,13 @@
     "title": "सेटिंग्स",
     "language": "भाषा",
     "language_hint": "ऐप और नए विश्लेषणों पर लागू होता है"
+  },
+  "share": {
+    "ai_desk": "// AI डेस्क",
+    "desk_says": "डेस्क का फैसला",
+    "confidence": "विश्वास",
+    "thesis": "थीसिस",
+    "agents_analysis": "10-एजेंट विश्लेषण",
+    "disclaimer": "यह निवेश सलाह नहीं है"
   }
 }

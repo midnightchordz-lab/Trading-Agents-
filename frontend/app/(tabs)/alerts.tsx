@@ -3,11 +3,11 @@ import { View, Text, Pressable, FlatList, RefreshControl, StyleSheet } from "rea
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { Trash, BellRinging, BellSlash, ArrowUp, ArrowDown } from "phosphor-react-native";
+import { Trash, BellRinging, BellSlash, ArrowUp, ArrowDown, ClockCounterClockwise } from "phosphor-react-native";
 
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
 import { api } from "@/src/api";
-import { useAlerts, PriceAlert } from "@/src/alerts";
+import { useAlerts, PriceAlert, FiredAlert } from "@/src/alerts";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
 
 function fmt(n?: number | null, currency?: string): string {
@@ -16,10 +16,24 @@ function fmt(n?: number | null, currency?: string): string {
   return currency && currency !== "USD" ? `${v} ${currency}` : `$${v}`;
 }
 
+function whenText(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-US", {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+type AlertsView = "active" | "history";
+
 export default function AlertsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { items, remove, clearTriggered, evaluate } = useAlerts();
+  const { items, history, remove, clearTriggered, clearHistory, evaluate } = useAlerts();
+  const [view, setView] = useState<AlertsView>("active");
   const [refreshing, setRefreshing] = useState(false);
   const [prices, setPrices] = useState<Record<string, number | null>>({});
 
@@ -112,22 +126,96 @@ export default function AlertsScreen() {
     [prices, remove, router],
   );
 
+  const renderHistoryItem = useCallback(({ item }: { item: FiredAlert }) => {
+    const isStop = item.label === "STOP LOSS";
+    const barColor = isStop ? colors.error : colors.success;
+    const outcome = isStop ? "STOP HIT" : item.label === "TARGET" ? "TARGET HIT" : "LEVEL HIT";
+    return (
+      <View testID={`alert-history-${item.symbol}`} style={[styles.row, { borderLeftWidth: 5, borderLeftColor: barColor }]}>
+        <View style={styles.rowMain}>
+          <View style={styles.rowTop}>
+            <Text style={styles.rowSymbol}>{item.symbol}</Text>
+            <View style={[styles.tag, { backgroundColor: barColor }]}>
+              <Text style={styles.tagText}>{outcome}</Text>
+            </View>
+          </View>
+          <View style={styles.condRow}>
+            {item.direction === "above" ? (
+              <ArrowUp size={13} color={colors.onSurfaceTertiary} weight="bold" />
+            ) : (
+              <ArrowDown size={13} color={colors.onSurfaceTertiary} weight="bold" />
+            )}
+            <Text style={styles.condText}>
+              {fmt(item.price, item.currency)} · hit at {fmt(item.priceAtFire, item.currency)}
+            </Text>
+          </View>
+          <Text style={styles.whenText}>{whenText(item.firedAt)}</Text>
+        </View>
+      </View>
+    );
+  }, []);
+
   return (
     <View style={styles.root}>
       <ScreenHeader
         title="PRICE ALERTS"
-        subtitle={`// ${items.length} ALERT${items.length === 1 ? "" : "S"} · ${triggeredCount} FIRED`}
+        subtitle={`// ${items.length} ALERT${items.length === 1 ? "" : "S"} · ${history.length} FIRED ALL-TIME`}
         insetsTop={insets.top}
         right={
-          triggeredCount > 0 ? (
+          view === "active" && triggeredCount > 0 ? (
             <Pressable testID="clear-triggered" onPress={clearTriggered} hitSlop={8} style={styles.clearBtn}>
               <Text style={styles.clearText}>CLEAR FIRED</Text>
+            </Pressable>
+          ) : view === "history" && history.length > 0 ? (
+            <Pressable testID="clear-history" onPress={clearHistory} hitSlop={8} style={styles.clearBtn}>
+              <Text style={styles.clearText}>CLEAR LOG</Text>
             </Pressable>
           ) : undefined
         }
       />
 
-      {items.length === 0 ? (
+      <View style={styles.segment}>
+        {(["active", "history"] as AlertsView[]).map((v, i) => {
+          const active = view === v;
+          return (
+            <Pressable
+              key={v}
+              testID={`alerts-tab-${v}`}
+              onPress={() => {
+                Haptics.selectionAsync();
+                setView(v);
+              }}
+              style={[styles.segBtn, i === 0 && styles.segDivider, active && styles.segActive]}
+            >
+              <Text style={[styles.segText, { color: active ? colors.onSurfaceInverse : colors.onSurface }]}>
+                {v === "active" ? `ACTIVE · ${items.length}` : `HISTORY · ${history.length}`}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {view === "history" ? (
+        history.length === 0 ? (
+          <View style={styles.emptyWrap}>
+            <View style={styles.emptyBox}>
+              <ClockCounterClockwise size={40} color={colors.onSurface} weight="regular" />
+              <Text style={styles.emptyTitle}>NO FIRED ALERTS YET</Text>
+              <Text style={styles.emptyBody}>
+              Every time one of your alerts fires it gets logged here, so you can see which calls played out.
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <FlatList
+            data={history}
+            keyExtractor={(x, i) => `${x.id}-${x.firedAt}-${i}`}
+            renderItem={renderHistoryItem}
+            contentContainerStyle={{ paddingBottom: spacing.xl }}
+            ItemSeparatorComponent={() => <View style={styles.sep} />}
+          />
+        )
+      ) : items.length === 0 ? (
         <View style={styles.emptyWrap}>
           <View style={styles.emptyBox}>
             <BellSlash size={40} color={colors.onSurface} weight="regular" />
@@ -153,6 +241,12 @@ export default function AlertsScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
+  segment: { flexDirection: "row", borderBottomWidth: BORDER, borderBottomColor: colors.borderStrong },
+  segBtn: { flex: 1, height: 44, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
+  segDivider: { borderRightWidth: BORDER, borderRightColor: colors.borderStrong },
+  segActive: { backgroundColor: colors.brand },
+  segText: { fontFamily: fonts.monoBold, fontSize: 11.5, letterSpacing: 1 },
+  whenText: { fontFamily: fonts.mono, fontSize: 10.5, color: colors.onSurfaceTertiary, marginTop: 4 },
   clearBtn: { paddingHorizontal: spacing.sm, paddingVertical: 6, borderWidth: 1.5, borderColor: "#FFFFFF" },
   clearText: { fontFamily: fonts.monoBold, fontSize: 10, letterSpacing: 0.5, color: "#FFFFFF" },
 

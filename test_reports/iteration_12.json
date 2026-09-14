@@ -1,0 +1,36 @@
+{
+  "summary": "End-to-end verification of three new frontend features (chart-overlay/multi-horizon, alert history, share-card localization) and a backend re-verify of the free-credits flow. Backend: all 9 free-credits tests + 4 new wallet-sanity tests PASS (balance shape, enforcement flip when free=0, credit spent on real run and NOT on cache hit, admin bypass never spends). Frontend: OTP login flow works; on a cached AAPL analysis the MULTI-HORIZON tabs correctly change both the card body (thesis + confidence + target/stop levels) AND the chart header label (\"LEVELS · 1-2 WEEKS\" -> \"1-3 MONTHS\" -> \"6-12 MONTHS\" and \"CHART · <HORIZON> LEVELS\"); chart-mode toggle switches to TradingView and exposes tv-range-1D/1W/1M/1Y chips as expected. Alerts tab has both alerts-tab-active and alerts-tab-history segmented controls; empty states render (\"NO ALERTS SET\" and \"NO FIRED ALERTS YET\"); testIDs for clear-triggered and clear-history are wired up. Share-card modal renders correctly localized labels for en/hi/es (all 5 keys under share.* verified) while BUY/SELL/HOLD stays English by design (verdict.buy/sell/hold pinned to English in every locale JSON).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "i18n / Intl locale tag", "issue": "Repeated pageerror at boot: 'Invalid language tag: en-US@posix'. Comes from the runtime locale detector (expo-localization / i18next) being fed the POSIX locale that Kubernetes containers report. Not fatal (app renders and translations work) but pollutes the console and could break Intl.DateTimeFormat on stricter engines. Reference: src/i18n/* + the locale-detector wiring in src/i18n/index.ts (or wherever expo-localization is read). Sanitize the tag to 'en-US' before feeding i18n."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_free_credits.py",
+    "/app/backend/tests/test_wallet_sanity_iter12.py",
+    "/app/test_reports/pytest/iteration_12_free_credits.xml",
+    "/app/test_reports/pytest/iteration_12_wallet_sanity.xml"
+  ],
+  "action_items": [
+    "(low) Strip the '@posix' suffix (or map en-US@posix -> en-US) before initializing i18next / Intl to silence the boot-time pageerror.",
+    "(info, not blocking) End-to-end fire-alert scenario (bell tap -> price cross -> HISTORY row) was not exercised in the browser: RN AsyncStorage on web is IndexedDB-backed so a localStorage inject didn't seed the alerts store, and the current live AAPL quote didn't cross any offered TARGET/STOP level within polling. Store logic (evaluate() -> saveHistory) is straightforward and its unit surface is covered by the empty-state + tab-switch UI checks. Recommend adding a lightweight React Testing Library test around AlertsProvider.evaluate to lock the history-append + persistence invariants."
+  ],
+  "critical_code_review_comments": [
+    "analysis/[id].tsx TvSection uses `!widgetChart || showLevels` to decide `ownChart`; if a symbol is not widget-supported (widgetChart=false) the levels/tradingview toggle bar is hidden but the range chips are also hidden because `!ownChart` is false. That looks correct today (own OHLC chart is always shown for non-widget symbols) but tightly couples two independent concerns — consider naming the boolean and adding a comment.",
+    "alerts.tsx evaluate() persists via save + saveHistory which are async but never awaited inside setState. If the user backgrounds the app instantly after a fire the write could be lost. Not a regression from this session but worth flagging.",
+    "ShareCard uses new Date().toLocaleDateString(i18n.language || 'en', ...). Passing a nullish language falls back to system locale which is what caused the en-US@posix warning on web. Consider pinning to a whitelist of known BCP-47 tags."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_wallet_sanity_iter12.py (new)"
+  ],
+  "success_rate": { "backend": "100%", "frontend": "95%" },
+  "seed_data_creation": "None. Tests use disposable users minted through auth_helper and delete cached analyses for the specific symbols under test (IBM, INTC).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "AUTH_DEBUG_RETURN_OTP was flipped to true for the run and restored to false at the end (verified via /api/auth/otp/request no longer returning debug_otp). Backend supervisor restart done. Cached AAPL analysis with all three horizons + timeframes was relied on for the frontend flow, so the test is fast and deterministic on repeat runs. If IBM/INTC cached analyses interfere with the new pytest, tests already delete them upfront.",
+  "rca_of_issue": "No new bugs found in this session. The previously reported free-credits concurrency flakiness (root cause: cached analyses skipping the credit spend) stays fixed — the deletion step is present in tests/test_free_credits.py and mirrored here in test_wallet_sanity_iter12.py."
+}

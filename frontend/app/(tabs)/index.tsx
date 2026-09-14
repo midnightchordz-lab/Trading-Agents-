@@ -173,6 +173,7 @@ export default function AnalyzeScreen() {
 
   // Balance check — only meaningful while usage-based pricing is switched on.
   const analysisPrice = wallet?.prices?.full_analysis ?? 0;
+  const freeCredits = wallet?.free_credits_remaining ?? 0;
   const needsFunds =
     !!wallet?.enforcement_enabled && analysisPrice > 0 && (wallet?.balance ?? 0) < analysisPrice;
 
@@ -441,6 +442,10 @@ export default function AnalyzeScreen() {
               <Text testID="low-balance-note" style={styles.lowBalanceNote}>
                 {`Balance ${wallet?.symbol || "$"}${(wallet?.balance ?? 0).toFixed(2)} — add funds on the Agents tab to run this.`}
               </Text>
+            ) : freeCredits > 0 ? (
+              <Text testID="free-credits-note" style={styles.freeCreditsNote}>
+                {`${freeCredits} free ${freeCredits === 1 ? "analysis" : "analyses"} left`}
+              </Text>
             ) : null}
             <Pressable
               testID="execute-analysis-button"
@@ -614,6 +619,12 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 10.5,
     color: colors.error,
+    marginBottom: spacing.sm,
+  },
+  freeCreditsNote: {
+    fontFamily: fonts.mono,
+    fontSize: 10.5,
+    color: colors.onSurfaceTertiary,
     marginBottom: spacing.sm,
   },
   cta: {
