@@ -983,6 +983,13 @@ def wallet_key_for(user: Optional[dict], device_id: Optional[str]) -> Optional[s
     return device_id
 
 
+ADMIN_PHONES = [p for p in os.environ.get("ADMIN_PHONES", "").split(",") if p.strip()]
+
+
+def is_admin(user: Optional[dict]) -> bool:
+    return bool(user) and wal.is_admin_phone(user.get("phone"), ADMIN_PHONES)
+
+
 # --- Wallet / usage-based pricing (additive; OFF by default — see WALLET_ENFORCEMENT_ENABLED) ---
 WALLET_ENFORCEMENT_ENABLED = os.environ.get("WALLET_ENFORCEMENT_ENABLED", "false").lower() == "true"
 ALLOW_DEMO_TOPUP = os.environ.get("ALLOW_DEMO_TOPUP", "false").lower() == "true"
@@ -1019,6 +1026,7 @@ async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] =
     if not key:
         raise HTTPException(status_code=400, detail="device_id is required")
     balance = await get_wallet_balance(key)
+    admin = is_admin(user)
     return {
         "device_id": key,
         "balance": round(balance, 2),
@@ -1026,7 +1034,9 @@ async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] =
         "symbol": wal.CURRENCY_SYMBOL,
         "prices": wal.PRICES,
         "packs": wal.TOPUP_PACKS,
-        "enforcement_enabled": WALLET_ENFORCEMENT_ENABLED,
+        # Admins are never billed, so the app shows them no balance gate.
+        "enforcement_enabled": WALLET_ENFORCEMENT_ENABLED and not admin,
+        "is_admin": admin,
         "payments_live": rzp.payments_configured(),
     }
 
@@ -1712,7 +1722,8 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         raise HTTPException(status_code=400, detail="Invalid ticker symbol")
     language = body.language if body.language in SUPPORTED_LANGUAGES else "en"
 
-    if WALLET_ENFORCEMENT_ENABLED:
+    billed = WALLET_ENFORCEMENT_ENABLED and not is_admin(user)
+    if billed:
         wkey = wallet_key_for(user, body.device_id)
         if not wkey:
             raise HTTPException(status_code=400, detail="device_id is required")
@@ -1759,8 +1770,8 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         "current_step": 0,
         "total_steps": TOTAL_STEPS,
         "error": None,
-        "billed": WALLET_ENFORCEMENT_ENABLED,
-        "price_charged": wal.get_price("full_analysis") if WALLET_ENFORCEMENT_ENABLED else None,
+        "billed": billed,
+        "price_charged": wal.get_price("full_analysis") if billed else None,
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }

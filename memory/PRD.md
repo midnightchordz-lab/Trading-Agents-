@@ -131,3 +131,10 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
 - Demo free top-up (`/api/wallet/topup`) is now **disabled** unless `ALLOW_DEMO_TOPUP=true`.
 - UI: terminal-themed login screen, dark `ScreenHeader` + tab bar (`TERMINAL` tokens in theme.ts), `WalletCard` (balance, ₹ packs, Razorpay checkout), `WalletBalanceChip` in the Analyze header (hidden while pricing is off), `AccountCard` (identity + two-tap sign out), low-balance gate on the Execute button, news sentiment badges, welcome email on first sign-up, TradingAgents paper citation on the Agents tab.
 - Tests: 135 passing (`backend/tests/`, incl. test_auth, test_wallet, test_mailer, test_sms, test_razorpay, test_news_sentiment).
+
+## Admin bypass (2026-06-18)
+- `ADMIN_PHONES` in backend/.env (currently `+918446307145`). `server.is_admin(user)` →
+  `wallet.is_admin_phone(phone, ADMIN_PHONES)`. Admins: `/analyze` skips wallet enforcement
+  entirely (no charge, no 402, always a fresh run — no cached free re-check), and
+  `/api/wallet/balance` reports `enforcement_enabled: false, is_admin: true` so the frontend
+  gate and balance chip hide themselves with no client-side admin logic.

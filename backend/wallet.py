@@ -40,6 +40,16 @@ TOPUP_PACKS = [5.0, 10.0, 25.0]
 def is_valid_topup(amount: float) -> bool:
     return any(abs(amount - p) < 0.001 for p in TOPUP_PACKS)
 
+
+def is_admin_phone(phone: Optional[str], admin_phones: list) -> bool:
+    """Admins (the app owner's own accounts) skip billing entirely — no
+    charge, no balance gate. Matched on the E.164 phone number the account
+    signed in with, compared against the ADMIN_PHONES env list."""
+    if not phone:
+        return False
+    normalized = phone.strip()
+    return any(normalized == a.strip() for a in admin_phones if a.strip())
+
 # How far the price can move from the cached verdict's reference price
 # before a re-check is considered "something actually changed" and gets
 # billed again. Expressed as a fraction (0.015 = 1.5%).

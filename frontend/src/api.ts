@@ -172,6 +172,7 @@ export type WalletBalance = {
   prices: Record<string, number>;
   packs: number[];
   enforcement_enabled: boolean;
+  is_admin?: boolean;
   payments_live: boolean;
 };
 

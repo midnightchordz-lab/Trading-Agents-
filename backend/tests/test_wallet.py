@@ -70,3 +70,18 @@ def test_new_balance_after_charge_never_negative():
     assert w.new_balance_after_charge(0.25, "full_analysis") == 0.0
     assert w.new_balance_after_charge(0.10, "full_analysis") == 0.0
     assert w.new_balance_after_charge(1.00, "full_analysis") == 0.75
+
+
+def test_admin_phone_matching():
+    admins = ["+918446307145"]
+    assert w.is_admin_phone("+918446307145", admins) is True
+    assert w.is_admin_phone(" +918446307145 ", admins) is True
+    assert w.is_admin_phone("+918446307146", admins) is False
+    assert w.is_admin_phone("918446307145", admins) is False  # must be E.164
+    assert w.is_admin_phone(None, admins) is False
+    assert w.is_admin_phone("", admins) is False
+
+
+def test_no_admins_configured_means_nobody_is_admin():
+    assert w.is_admin_phone("+918446307145", []) is False
+    assert w.is_admin_phone("+918446307145", ["", "  "]) is False
