@@ -21,6 +21,7 @@ import httpx
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 import portfolio_optimizer as pfopt
 import wallet as wal
+import fundamentals as fund
 import auth as au
 import mailer
 import sms
@@ -69,6 +70,49 @@ COMMODITY_NAMES = {
 }
 _market_cache: dict = {}
 _news_cache: dict = {}
+
+
+_yf_session: Optional[requests.Session] = None
+_yf_crumb: Optional[str] = None
+
+
+def _yf_authed_session() -> tuple:
+    """Yahoo's quoteSummary endpoint now returns 401 unless the request
+    carries a consent cookie plus the matching 'crumb' token (the plain GET
+    the other endpoints use still works fine). Fetched once and reused; any
+    failure re-fetches next call."""
+    global _yf_session, _yf_crumb
+    if _yf_session is not None and _yf_crumb:
+        return _yf_session, _yf_crumb
+    s = requests.Session()
+    try:
+        s.get("https://fc.yahoo.com", headers=YF_HEADERS, timeout=10)
+    except Exception:
+        pass  # this call is only here to set the cookie; it often 404s
+    r = s.get("https://query1.finance.yahoo.com/v1/test/getcrumb", headers=YF_HEADERS, timeout=10)
+    r.raise_for_status()
+    crumb = (r.text or "").strip()
+    if not crumb:
+        raise RuntimeError("no crumb returned")
+    _yf_session, _yf_crumb = s, crumb
+    return s, crumb
+
+
+def fetch_fundamentals_sync(symbol: str) -> Optional[dict]:
+    url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
+    params = {"modules": fund.FUNDAMENTALS_MODULES}
+    for attempt in (1, 2):
+        session, crumb = _yf_authed_session()
+        r = session.get(url, params={**params, "crumb": crumb}, headers=YF_HEADERS, timeout=15)
+        if r.status_code in (401, 403) and attempt == 1:
+            global _yf_session, _yf_crumb
+            _yf_session, _yf_crumb = None, None  # stale cookie/crumb — get a fresh pair
+            continue
+        r.raise_for_status()
+        data = r.json()
+        results = (data.get("quoteSummary") or {}).get("result") or []
+        return results[0] if results else None
+    return None
 
 
 def _yf_get(url: str, params: dict):
@@ -642,7 +686,7 @@ def fallback_timeframes(verdict: dict) -> dict:
     }
 
 
-def build_context(symbol: str, quote: Optional[dict]) -> str:
+def build_context(symbol: str, quote: Optional[dict], fundamentals_summary: Optional[str] = None) -> str:
     if symbol.endswith("=F"):
         asset_class = "Commodity / futures contract"
     elif symbol.endswith("-USD") or symbol.endswith("=X"):
@@ -665,6 +709,10 @@ def build_context(symbol: str, quote: Optional[dict]) -> str:
             lines.append(f"Exchange: {quote.get('exchange')}")
     else:
         lines.append("Live price data is unavailable — reason qualitatively from known fundamentals and general market knowledge.")
+    if fundamentals_summary:
+        lines.append("")
+        lines.append("FUNDAMENTALS (source: latest available data, may lag real-time filings):")
+        lines.append(fundamentals_summary)
     return "\n".join(lines)
 
 
@@ -705,7 +753,14 @@ async def run_analysis(analysis_id: str, symbol: str, language: str = "en"):
         except Exception as e:
             logger.warning(f"quote fetch failed for {symbol}: {e}")
 
-        ctx = build_context(symbol, quote)
+        fundamentals_summary = None
+        try:
+            raw_fundamentals = await asyncio.to_thread(fetch_fundamentals_sync, symbol)
+            fundamentals_summary = fund.summarize(fund.parse_fundamentals(raw_fundamentals))
+        except Exception as e:
+            logger.warning(f"fundamentals unavailable for {symbol}: {e}")
+
+        ctx = build_context(symbol, quote, fundamentals_summary)
         step = 0
         lang_directive = language_directive(language if language in SUPPORTED_LANGUAGES else "en")
 
