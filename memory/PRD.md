@@ -239,3 +239,17 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
   frontend confirmed opening a real Razorpay-hosted link, no payment completed (LIVE keys).
 - Webhook events to enable in the dashboard are now `payment_link.paid` (plus optionally
   `payment_link.expired` / `payment_link.cancelled`); `RAZORPAY_WEBHOOK_SECRET` is still unset.
+
+### Deployed-vs-preview payment 502 (same session) — ROOT CAUSED
+- The user's "Couldn't start checkout · HTTP 502" on their phone came from the **deployed** container, whose
+  logs show Razorpay replying **401 "The api key provided by you has expired and cannot be used"** — the
+  deployed image still holds the OLD key pair. The preview backend creates links fine (verified three real
+  links for the user's own `admin-+918446307145` account). Only a redeploy can fix the deployed env.
+- The root `.gitignore` `.env` / `.env.*` / `*.env` rules had **reappeared** and were stripping env files
+  from the deploy build context again — removed (verify with `git check-ignore -v backend/.env`). If a
+  deploy ever ships without secrets, check this first.
+- Diagnostics added so this is never guesswork again: `rzp.RazorpayError` carries Razorpay's own
+  description, `/pay/order` now returns `detail: "Razorpay: <description>"` (the app shows it verbatim
+  instead of "HTTP 502"), and startup probes the credentials once, logging
+  `RAZORPAY CREDENTIALS REJECTED [code]: description` when they're stale.
+- 84/84 payment + wallet + free-credit tests pass.

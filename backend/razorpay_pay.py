@@ -45,10 +45,31 @@ def is_live_mode() -> bool:
     return KEY_ID.startswith("rzp_live_")
 
 
+class RazorpayError(RuntimeError):
+    """Carries Razorpay's own description so failures are diagnosable from the
+    logs (and so the app can show the customer something actionable) instead of
+    a bare 'Client error 400'."""
+
+    def __init__(self, status_code: int, description: str, code: str = ""):
+        self.status_code = status_code
+        self.description = description
+        self.code = code
+        super().__init__(f"razorpay {status_code} {code}: {description}")
+
+
 async def razorpay_request(method: str, path: str, **kwargs) -> dict:
     async with httpx.AsyncClient(base_url=RAZORPAY_API, auth=(KEY_ID, KEY_SECRET), timeout=20) as c:
         r = await c.request(method, path, **kwargs)
-        r.raise_for_status()
+        if r.status_code >= 400:
+            try:
+                err = r.json().get("error", {}) or {}
+            except Exception:
+                err = {}
+            raise RazorpayError(
+                r.status_code,
+                err.get("description") or r.text[:300],
+                err.get("code") or "",
+            )
         return r.json()
 
 

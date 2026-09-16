@@ -1223,9 +1223,14 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
             description=f"{wal.CURRENCY_SYMBOL}{body.amount:.0f} wallet top-up",
             customer=customer,
         )
+    except rzp.RazorpayError as e:
+        logger.error(f"razorpay payment link creation failed [{e.code}]: {e.description}")
+        # Razorpay's own wording is the only useful thing here — a generic
+        # "try again" sent the user round the same loop three times.
+        raise HTTPException(status_code=502, detail=f"Razorpay: {e.description}")
     except Exception as e:
         logger.error(f"razorpay payment link creation failed: {e}")
-        raise HTTPException(status_code=502, detail="Couldn't start checkout — try again")
+        raise HTTPException(status_code=502, detail="Couldn't reach Razorpay — try again")
 
     await db.payments.insert_one({
         "razorpay_payment_link_id": link["id"],
@@ -2095,3 +2100,12 @@ async def ensure_payment_indexes():
         logger.warning(f"payment index setup failed: {e}")
     if rzp.payments_configured():
         logger.info(f"razorpay ready ({'LIVE' if rzp.is_live_mode() else 'test'} mode)")
+        # Prove the keys actually authenticate. A deployed image carrying stale
+        # keys otherwise looks fine until a customer taps top-up and gets a 502.
+        try:
+            await rzp.razorpay_request("GET", "/payments?count=1")
+            logger.info("razorpay credentials authenticated")
+        except rzp.RazorpayError as e:
+            logger.error(f"RAZORPAY CREDENTIALS REJECTED [{e.code}]: {e.description} — top-ups will fail")
+        except Exception as e:
+            logger.warning(f"razorpay credential check skipped: {e}")
