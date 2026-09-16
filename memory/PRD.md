@@ -253,3 +253,29 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
   instead of "HTTP 502"), and startup probes the credentials once, logging
   `RAZORPAY CREDENTIALS REJECTED [code]: description` when they're stale.
 - 84/84 payment + wallet + free-credit tests pass.
+
+## Launch-free month (2026-06-19, session 9, LAUNCH_FREE_MONTH.md) — DONE
+- `wallet.is_launch_free_period(launch_free_until, now)` added verbatim from the spec (date-based,
+  auto-expiring; empty/garbage value => no free period, so billing can never be freed by accident).
+  The spec's `FREE_TRIAL_CREDITS = 5` / `PRICE_MOVE_THRESHOLD` snippet was NOT applied — both already
+  exist in this codebase (`FREE_CREDITS_ON_SIGNUP = 10`, `PRICE_MOVE_THRESHOLD = 0.015`) and changing
+  them would have silently cut the shipped free-credit allowance in half.
+- `server.py`: `LAUNCH_FREE_UNTIL = os.environ.get("LAUNCH_FREE_UNTIL", "")` (next to
+  `WALLET_ENFORCEMENT_ENABLED`, since this repo has no `REVIEWER_FIXED_OTP`); `/analyze` computes
+  `launch_free_now` and ORs it into `admin_bypass`, and the analysis doc carries `launch_free_active`.
+  `/wallet/balance` returns `launch_free_active`.
+- **One deliberate addition beyond the spec**: `enforcement_enabled` is now also false while the window
+  is open. Without it the home screen's `needsFunds` check (`app/(tabs)/index.tsx:178`) greys out the
+  ANALYZE button for a drained wallet that the backend would have run for free — acceptance criterion 2
+  would have passed on the API and failed in the product.
+- `WalletCard`: reads `launch_free_active` and renders a `FREE DURING LAUNCH` banner
+  (testID `launch-free-banner`) *instead of* the +$5/+$10/+$25 buttons (now testIDs `topup-5|10|25`),
+  and hides the Razorpay note. Not platform-branched, so iOS is covered — which is the actual
+  requirement for Apple 3.1.1: the external purchase path must not be reachable, not merely un-charged.
+- Verified: window on -> banner present, `topup-*` count 0, Razorpay note gone; window off -> buttons
+  back, banner gone (screenshots + rendered-tree assertions). Suite: 230 passed / 4 skipped with the
+  default parallel config; `RUN_LAUNCH_FREE_E2E=1 pytest tests/test_launch_free.py -o addopts=""` runs
+  the 3 env-flipping e2e tests (10/10) — they're skipped in the default run because they restart the
+  backend and would disturb the other xdist worker.
+- **To go live**: set `LAUNCH_FREE_UNTIL=YYYY-MM-DD` in `backend/.env` and redeploy. Currently UNSET,
+  so billing is exactly as before.

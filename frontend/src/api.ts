@@ -175,6 +175,10 @@ export type WalletBalance = {
   enforcement_enabled: boolean;
   is_admin?: boolean;
   payments_live: boolean;
+  /** Launch promotion — everything is free until the configured date, so no
+   *  purchase UI may be shown (an external payment path for digital content
+   *  is what Apple's 3.1.1 prohibits, whether or not it charges today). */
+  launch_free_active?: boolean;
 };
 
 export type TopupOrder = { order_id: string; amount: number; currency: string; checkout_url: string };

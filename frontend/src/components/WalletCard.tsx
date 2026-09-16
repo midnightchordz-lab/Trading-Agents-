@@ -146,6 +146,7 @@ export function WalletCard() {
   const price = wallet?.prices?.full_analysis;
   const packs = wallet?.packs || [];
   const freeCredits = wallet?.free_credits_remaining ?? 0;
+  const launchFree = wallet?.launch_free_active === true;
 
   return (
     <View testID="wallet-card" style={styles.card}>
@@ -156,7 +157,9 @@ export function WalletCard() {
         </Text>
       </View>
 
-      {price ? (
+      {launchFree ? (
+        <Text style={styles.priceNote}>Every analysis is free during launch — no payment needed.</Text>
+      ) : price ? (
         <Text style={styles.priceNote}>
           {freeCredits > 0
             ? `${freeCredits} free ${freeCredits === 1 ? "analysis" : "analyses"} left — no payment needed yet. After that, ${symbol}${price.toFixed(2)} each.`
@@ -166,29 +169,41 @@ export function WalletCard() {
         <Text style={styles.priceNote}>Usage-based pricing isn&apos;t active in this build yet.</Text>
       )}
 
-      <View style={styles.topUpRow}>
-        {packs.map((amt) => (
-          <Pressable
-            key={amt}
-            disabled={busy || !wallet?.payments_live}
-            onPress={() => topUp(amt)}
-            style={[styles.topUpBtn, (busy || !wallet?.payments_live) && styles.topUpBtnDisabled]}
-          >
-            <Text style={styles.topUpText}>{`+${symbol}${amt.toFixed(0)}`}</Text>
-          </Pressable>
-        ))}
-      </View>
+      {launchFree ? (
+        // No top-up buttons at all while the launch window is open: an
+        // external purchase path for digital content is the thing Apple
+        // rejects, even when nothing is actually being charged.
+        <View testID="launch-free-banner" style={styles.launchFreeBox}>
+          <Text style={styles.launchFreeText}>FREE DURING LAUNCH</Text>
+        </View>
+      ) : (
+        <View style={styles.topUpRow}>
+          {packs.map((amt) => (
+            <Pressable
+              key={amt}
+              testID={`topup-${amt}`}
+              disabled={busy || !wallet?.payments_live}
+              onPress={() => topUp(amt)}
+              style={[styles.topUpBtn, (busy || !wallet?.payments_live) && styles.topUpBtnDisabled]}
+            >
+              <Text style={styles.topUpText}>{`+${symbol}${amt.toFixed(0)}`}</Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
       {busy ? (
         <View style={styles.busyRow}>
           <ActivityIndicator size="small" color={colors.onSurfaceTertiary} />
           <Text style={styles.busyText}>Confirming payment…</Text>
         </View>
       ) : null}
-      <Text style={styles.placeholderNote}>
-        {wallet?.payments_live
-          ? "Secure payment page hosted by Razorpay."
-          : "Payments aren't switched on yet."}
-      </Text>
+      {launchFree ? null : (
+        <Text style={styles.placeholderNote}>
+          {wallet?.payments_live
+            ? "Secure payment page hosted by Razorpay."
+            : "Payments aren't switched on yet."}
+        </Text>
+      )}
 
       <Modal visible={!!needContact} animationType="slide" transparent onRequestClose={() => setNeedContact(null)}>
         <KeyboardAvoidingView
@@ -313,6 +328,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.onSurface,
   },
+  launchFreeBox: {
+    marginTop: spacing.md,
+    borderWidth: BORDER,
+    borderColor: colors.borderStrong,
+    backgroundColor: TERMINAL.bg,
+    paddingVertical: spacing.md,
+    alignItems: "center",
+  },
+  launchFreeText: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1.5, color: TERMINAL.lime },
   contactError: { fontFamily: fonts.mono, fontSize: 11, color: colors.error, marginTop: spacing.sm },
   contactBtn: {    marginTop: spacing.md,
     backgroundColor: colors.surfaceInverse,

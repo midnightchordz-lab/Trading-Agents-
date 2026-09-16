@@ -26,6 +26,33 @@ from typing import Optional
 # subscription price).
 CURRENCY = "USD"
 CURRENCY_SYMBOL = "$"
+def is_launch_free_period(launch_free_until: str, now: "datetime") -> bool:
+    """True if `now` is still before the configured launch-free cutoff
+    date. Deliberately date-based, not a manual flag someone has to
+    remember to flip — a launch promotion that depends on a human
+    remembering to change something weeks later, while busy firefighting
+    other post-launch issues, is exactly the kind of thing that quietly
+    slips. `launch_free_until` is an ISO date string (e.g. "2026-10-16");
+    an empty/missing/unparseable value means no free period is configured
+    at all, so billing behaves exactly as it always has — this function
+    can never accidentally make something free that wasn't explicitly
+    configured to be."""
+    if not launch_free_until:
+        return False
+    try:
+        from datetime import datetime as _dt
+        cutoff = _dt.fromisoformat(launch_free_until)
+        if cutoff.tzinfo is None:
+            from datetime import timezone as _tz
+            cutoff = cutoff.replace(tzinfo=_tz.utc)
+        if now.tzinfo is None:
+            from datetime import timezone as _tz
+            now = now.replace(tzinfo=_tz.utc)
+        return now < cutoff
+    except (ValueError, TypeError):
+        return False
+
+
 PRICES = {
     "full_analysis": 0.25,   # measured cost ~$0.081
     "compare": 0.39,         # two analyses bundled, cheaper than 2x full_analysis

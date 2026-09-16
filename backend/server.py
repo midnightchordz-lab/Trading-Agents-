@@ -1012,6 +1012,10 @@ def is_admin(user: Optional[dict]) -> bool:
 
 # --- Wallet / usage-based pricing (additive; OFF by default — see WALLET_ENFORCEMENT_ENABLED) ---
 WALLET_ENFORCEMENT_ENABLED = os.environ.get("WALLET_ENFORCEMENT_ENABLED", "false").lower() == "true"
+# Launch promotion: everyone bypasses billing until this date, automatically
+# — no manual flag to remember to flip weeks later. Empty by default (no
+# free period unless explicitly configured). ISO date, e.g. "2026-10-16".
+LAUNCH_FREE_UNTIL = os.environ.get("LAUNCH_FREE_UNTIL", "")
 # Used to build the Razorpay checkout/callback URLs, which must be absolute
 # and publicly reachable over HTTPS.
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
@@ -1091,6 +1095,7 @@ async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] =
     balance = await get_wallet_balance(key)
     admin = is_admin(user)
     free_credits = await get_free_credits_remaining(user)
+    launch_free = wal.is_launch_free_period(LAUNCH_FREE_UNTIL, datetime.now(timezone.utc))
     return {
         "device_id": key,
         "balance": round(balance, 2),
@@ -1100,10 +1105,15 @@ async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] =
         "packs": wal.TOPUP_PACKS,
         "free_credits_remaining": free_credits,
         # Admins are never billed, and neither is anyone with free credits
-        # left — so the app shows them no balance gate.
-        "enforcement_enabled": WALLET_ENFORCEMENT_ENABLED and not admin and free_credits <= 0,
+        # left — so the app shows them no balance gate. Nor is anyone during
+        # the launch-free window, otherwise the app would grey out the analyze
+        # button for a drained wallet that the backend would happily run free.
+        "enforcement_enabled": (
+            WALLET_ENFORCEMENT_ENABLED and not admin and not launch_free and free_credits <= 0
+        ),
         "is_admin": admin,
         "payments_live": rzp.payments_configured(),
+        "launch_free_active": launch_free,
     }
 
 
@@ -1937,7 +1947,10 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         raise HTTPException(status_code=400, detail="Invalid ticker symbol")
     language = body.language if body.language in SUPPORTED_LANGUAGES else "en"
 
-    admin_bypass = is_admin(user)
+    # During a configured launch-free window, EVERYONE gets this same
+    # bypass — auto-expires on its own, no flag to remember to flip.
+    launch_free_now = wal.is_launch_free_period(LAUNCH_FREE_UNTIL, datetime.now(timezone.utc))
+    admin_bypass = is_admin(user) or launch_free_now
     used_free_credit = False
     billed = WALLET_ENFORCEMENT_ENABLED and not admin_bypass
     if billed:
@@ -2002,6 +2015,7 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         "billed": billed,
         "price_charged": wal.get_price("full_analysis") if billed else None,
         "admin_bypass": admin_bypass if WALLET_ENFORCEMENT_ENABLED else False,
+        "launch_free_active": launch_free_now if WALLET_ENFORCEMENT_ENABLED else False,
         "used_free_credit": used_free_credit,
         "free_credits_remaining": await get_free_credits_remaining(
             await db.users.find_one({"id": user["id"]}, {"_id": 0}) if user else None
