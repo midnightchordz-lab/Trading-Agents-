@@ -108,8 +108,10 @@ class TestPaymentsRoutes:
         j = r.json()
         for k in ("balance", "currency", "packs", "is_admin", "enforcement_enabled", "iap_enabled"):
             assert k in j, f"missing {k}"
-        # Refactor must not have flipped IAP on: key is empty.
-        assert j["iap_enabled"] is False
+        # Follows the deployment's own config rather than pinning a value, so
+        # switching the iOS purchase path on isn't a test failure.
+        import iap
+        assert j["iap_enabled"] is iap.configured()
 
     def test_pay_order_amount_validation(self):
         r = requests.post(
@@ -145,9 +147,12 @@ class TestPaymentsRoutes:
     def test_iap_config_shape(self):
         r = requests.get(f"{BASE_URL}/api/pay/iap/config", timeout=10)
         assert r.status_code == 200
+        import iap
         j = r.json()
-        assert j["enabled"] is False
-        assert j["ios_api_key"] == ""
+        assert j["enabled"] is iap.configured()
+        # The key is served only when the path is fully configured — an empty
+        # key would fail inside StoreKit instead of showing "not switched on".
+        assert j["ios_api_key"] == (iap.IOS_PUBLIC_KEY if iap.configured() else "")
         assert [p["product_id"] for p in j["packs"]] == ["credits_5", "credits_10", "credits_25"]
         assert j["currency"] == "USD"
         # Never leak the webhook secret.

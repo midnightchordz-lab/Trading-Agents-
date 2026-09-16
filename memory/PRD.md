@@ -462,3 +462,13 @@ Pure structural move, no behaviour change (all 312 tests green before and after)
 xdist: ~1-2 of them fail in a different place on each full run and every one of them passes in
 isolation. Cause is external rate limiting (Yahoo + the LLM + Razorpay) when 380 tests fire real
 analyses in parallel, not app behaviour. Re-run the failing file alone before investigating.
+
+### RevenueCat key received (2026-06-20)
+`REVENUECAT_IOS_KEY=appl_PdgYyIGhXzhIdLrwVzBbWOCwaPO` is now in `backend/.env`, so
+`/api/pay/iap/config` returns `enabled: true` and `/api/wallet/balance` returns
+`iap_enabled: true` — the iOS wallet card renders the StoreKit packs instead of the
+"not switched on" line. Two regression assertions that pinned `False` now follow
+`iap.configured()` instead, so flipping the path on is not a test failure.
+Remaining owner-side steps before a real purchase can succeed: the three Consumable products
+in App Store Connect imported into RevenueCat, and an App Store Connect In-App Purchase `.p8`
+uploaded to RevenueCat (Emergent does not store that file). Needs a real iOS build to test.
