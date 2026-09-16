@@ -1,5 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { View, Text, Pressable, StyleSheet, Alert, Platform, Modal, ActivityIndicator } from "react-native";
+import {
+  View,
+  Text,
+  TextInput,
+  Pressable,
+  StyleSheet,
+  Alert,
+  Platform,
+  Modal,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+} from "react-native";
 import { WebView } from "react-native-webview";
 import { useFocusEffect } from "expo-router";
 import { colors, fonts, spacing, BORDER, TERMINAL } from "@/src/theme";
@@ -7,8 +18,8 @@ import { api, WalletBalance } from "@/src/api";
 import { getWalletDeviceId } from "@/src/wallet";
 
 // Real Razorpay top-ups. The app never sees the key secret and never credits
-// anything itself: it asks the backend for an order, opens the backend-hosted
-// checkout page, then polls the backend, which verifies with Razorpay before
+// anything itself: it asks the backend for a Razorpay-hosted payment link,
+// opens it, then polls the backend, which verifies with Razorpay before
 // crediting.
 
 export function WalletCard() {
@@ -16,6 +27,13 @@ export function WalletCard() {
   const [wallet, setWallet] = useState<WalletBalance | null>(null);
   const [busy, setBusy] = useState(false);
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
+  // Razorpay requires both an email and a phone number on every payment link,
+  // but an account only has the one it signed in with — so the missing one is
+  // asked for here, once.
+  const [needContact, setNeedContact] = useState<{ fields: string[]; amount: number } | null>(null);
+  const [emailInput, setEmailInput] = useState("");
+  const [phoneInput, setPhoneInput] = useState("");
+  const [contactError, setContactError] = useState<string | null>(null);
   const pendingOrder = useRef<string | null>(null);
 
   const refresh = useCallback(async (id: string) => {
@@ -70,11 +88,12 @@ export function WalletCard() {
     [deviceId, refresh, wallet?.symbol]
   );
 
-  const topUp = async (amount: number) => {
+  const topUp = async (amount: number, contact?: { email?: string; phone?: string }) => {
     if (!deviceId) return;
     setBusy(true);
     try {
-      const order = await api.createTopupOrder(deviceId, amount);
+      const order = await api.createTopupOrder(deviceId, amount, contact);
+      setNeedContact(null);
       pendingOrder.current = order.order_id;
       if (Platform.OS === "web") {
         window.open(order.checkout_url, "razorpay_checkout", "width=480,height=760");
@@ -87,8 +106,34 @@ export function WalletCard() {
       }
     } catch (e: any) {
       setBusy(false);
-      Alert.alert("Couldn't start checkout", e?.message || "Try again.");
+      const msg: string = e?.message || "Try again.";
+      if (msg.startsWith("contact_required:")) {
+        setNeedContact({ fields: msg.split(":")[1].split(","), amount });
+        return;
+      }
+      Alert.alert("Couldn't start checkout", msg);
     }
+  };
+
+  const submitContact = () => {
+    if (!needContact) return;
+    const contact: { email?: string; phone?: string } = {};
+    if (needContact.fields.includes("email")) {
+      if (!emailInput.trim().includes("@")) {
+        setContactError("Enter a valid email address for the receipt.");
+        return;
+      }
+      contact.email = emailInput.trim();
+    }
+    if (needContact.fields.includes("phone")) {
+      if (phoneInput.replace(/\D/g, "").length < 8) {
+        setContactError("Enter your phone number with country code, e.g. +1…");
+        return;
+      }
+      contact.phone = phoneInput.trim();
+    }
+    setContactError(null);
+    topUp(needContact.amount, contact);
   };
 
   const closeCheckout = () => {
@@ -141,9 +186,68 @@ export function WalletCard() {
       ) : null}
       <Text style={styles.placeholderNote}>
         {wallet?.payments_live
-          ? "Secure payment by Razorpay. Cards, UPI and netbanking."
+          ? "Secure payment page hosted by Razorpay."
           : "Payments aren't switched on yet."}
       </Text>
+
+      <Modal visible={!!needContact} animationType="slide" transparent onRequestClose={() => setNeedContact(null)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.contactBackdrop}
+        >
+          <View testID="contact-prompt" style={styles.contactCard}>
+            <Text style={styles.contactTitle}>ONE-TIME DETAIL</Text>
+            <Text style={styles.contactBody}>
+              Razorpay needs both an email and a phone number to issue your payment receipt. We only ask once.
+            </Text>
+            {needContact?.fields.includes("email") ? (
+              <View style={styles.fieldBlock}>
+                <Text style={styles.fieldLabel}>&gt; EMAIL</Text>
+                <TextInput
+                  testID="contact-email-input"
+                  value={emailInput}
+                  onChangeText={setEmailInput}
+                  placeholder="you@example.com"
+                  placeholderTextColor={colors.onSurfaceTertiary}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="email-address"
+                  style={styles.input}
+                />
+              </View>
+            ) : null}
+            {needContact?.fields.includes("phone") ? (
+              <View style={styles.fieldBlock}>
+                <Text style={styles.fieldLabel}>&gt; PHONE (WITH COUNTRY CODE)</Text>
+                <TextInput
+                  testID="contact-phone-input"
+                  value={phoneInput}
+                  onChangeText={setPhoneInput}
+                  placeholder="+1 555 000 1234"
+                  placeholderTextColor={colors.onSurfaceTertiary}
+                  keyboardType="phone-pad"
+                  style={styles.input}
+                />
+              </View>
+            ) : null}
+            {contactError ? (
+              <Text testID="contact-error" style={styles.contactError}>
+                {contactError}
+              </Text>
+            ) : null}
+            <Pressable testID="contact-continue" onPress={submitContact} disabled={busy} style={styles.contactBtn}>
+              {busy ? (
+                <ActivityIndicator color={colors.onSurfaceInverse} />
+              ) : (
+                <Text style={styles.contactBtnText}>CONTINUE TO PAYMENT →</Text>
+              )}
+            </Pressable>
+            <Pressable onPress={() => setNeedContact(null)} hitSlop={8}>
+              <Text style={styles.contactCancel}>CANCEL</Text>
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       <Modal visible={!!checkoutUrl} animationType="slide" onRequestClose={closeCheckout}>
         <View style={styles.modalRoot}>
@@ -188,6 +292,42 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
   },
   modalRoot: { flex: 1, backgroundColor: TERMINAL.bg },
+  contactBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.55)" },
+  contactCard: {
+    backgroundColor: colors.surface,
+    borderTopWidth: BORDER,
+    borderTopColor: colors.borderStrong,
+    padding: spacing.lg,
+    gap: spacing.sm,
+  },
+  contactTitle: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1, color: colors.onSurface },
+  contactBody: { fontFamily: fonts.mono, fontSize: 11, lineHeight: 16, color: colors.onSurfaceTertiary },
+  fieldBlock: { gap: 4, marginTop: spacing.sm },
+  fieldLabel: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 0.5, color: colors.onSurfaceTertiary },
+  input: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    minHeight: 46,
+    fontFamily: fonts.mono,
+    fontSize: 13,
+    color: colors.onSurface,
+  },
+  contactError: { fontFamily: fonts.mono, fontSize: 11, color: colors.error, marginTop: spacing.sm },
+  contactBtn: {    marginTop: spacing.md,
+    backgroundColor: colors.surfaceInverse,
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  contactBtnText: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1, color: colors.onSurfaceInverse },
+  contactCancel: {
+    fontFamily: fonts.mono,
+    fontSize: 11,
+    color: colors.onSurfaceTertiary,
+    textAlign: "center",
+    paddingVertical: spacing.md,
+  },
   modalBar: {
     flexDirection: "row",
     justifyContent: "space-between",

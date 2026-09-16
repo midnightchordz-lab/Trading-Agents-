@@ -74,18 +74,27 @@ class TestCallbackStillRejectsForgeries:
         assert r.status_code == 400, r.text
 
 
-class TestCheckoutPageContract:
-    def test_checkout_page_sets_redirect_and_order_id_on_the_callback(self):
-        # Any existing order id works — the page is intentionally unauthenticated.
-        from pymongo import MongoClient
-
-        db = MongoClient(os.environ["MONGO_URL"])[os.environ.get("DB_NAME", "test_database")]
-        order = db.payments.find_one({}, sort=[("created_at", -1)])
-        if not order:
-            import pytest
-
-            pytest.skip("no orders in the database to render a checkout page for")
-        r = requests.get(f"{BASE_URL}/api/pay/checkout/{order['razorpay_order_id']}", timeout=15)
+class TestPaymentLinkCallback:
+    def test_link_callback_without_success_params_is_handled(self):
+        r = requests.get(
+            CALLBACK,
+            params={"razorpay_payment_link_id": "plink_unknown", "razorpay_payment_link_status": "cancelled"},
+            timeout=15,
+        )
         assert r.status_code == 200, r.text
-        assert "redirect: true" in r.text
-        assert f"order_id={order['razorpay_order_id']}" in r.text
+        assert "nothing was charged" in r.text
+
+    def test_link_callback_with_forged_signature_is_rejected(self):
+        r = requests.get(
+            CALLBACK,
+            params={
+                "razorpay_payment_id": "pay_forged",
+                "razorpay_payment_link_id": "plink_forged",
+                "razorpay_payment_link_reference_id": "wallet_forged",
+                "razorpay_payment_link_status": "paid",
+                "razorpay_signature": "deadbeef",
+            },
+            timeout=15,
+        )
+        assert r.status_code == 400, r.text
+        assert "verify" in r.text.lower()

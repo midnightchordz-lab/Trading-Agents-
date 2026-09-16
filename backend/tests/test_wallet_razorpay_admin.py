@@ -203,16 +203,19 @@ class TestRazorpayOrder:
             bogus = "device-bogus-should-be-ignored-XYZ"
             r = requests.post(f"{BASE_URL}/api/pay/order",
                               headers=headers,
-                              json={"amount": 5, "device_id": bogus},
+                              json={"amount": 5, "device_id": bogus, "phone": "+15550001234"},
                               timeout=15)
             assert r.status_code == 200, r.text
             body = r.json()
             assert body["amount"] == 5
             assert body["currency"] == "USD"
-            assert body["order_id"].startswith("order_")
-            assert body["checkout_url"].startswith("https://") and "/api/pay/checkout/" in body["checkout_url"]
+            assert body["order_id"].startswith("plink_")
+            assert body["checkout_url"].startswith("https://")
+            # Razorpay-hosted: never our own domain (that's what triggered the
+            # "website does not match registered website(s)" block).
+            assert "razorpay" in body["checkout_url"] or "rzp.io" in body["checkout_url"]
 
-            pay = _db.payments.find_one({"razorpay_order_id": body["order_id"]})
+            pay = _db.payments.find_one({"razorpay_payment_link_id": body["order_id"]})
             assert pay is not None
             assert pay["wallet_key"] == f"user:{uid}", (
                 f"expected user:{uid}, got {pay['wallet_key']} — device_id from body was NOT ignored"
@@ -221,17 +224,43 @@ class TestRazorpayOrder:
         finally:
             _cleanup_user(uid)
 
-    def test_checkout_html_returns_html_200(self):
+    def test_missing_contact_is_asked_for_once_then_remembered(self):
+        # Razorpay links need BOTH email and phone; an email-only account must
+        # be asked for the phone, and never asked again afterwards.
         uid, headers = _mk_user()
         try:
             r = requests.post(f"{BASE_URL}/api/pay/order",
-                              headers=headers, json={"amount": 10}, timeout=15)
-            assert r.status_code == 200
-            oid = r.json()["order_id"]
-            r2 = requests.get(f"{BASE_URL}/api/pay/checkout/{oid}", timeout=10)
-            assert r2.status_code == 200
-            assert "text/html" in r2.headers.get("content-type", "")
-            assert "checkout" in r2.text.lower() or "razorpay" in r2.text.lower()
+                              headers=headers, json={"amount": 5}, timeout=15)
+            assert r.status_code == 400, r.text
+            assert r.json()["detail"] == "contact_required:phone"
+
+            r2 = requests.post(f"{BASE_URL}/api/pay/order", headers=headers,
+                               json={"amount": 5, "phone": "+15550001234"}, timeout=20)
+            assert r2.status_code == 200, r2.text
+            assert _db.users.find_one({"id": uid})["phone"] == "+15550001234"
+
+            # Remembered: no contact needed on the next top-up.
+            r3 = requests.post(f"{BASE_URL}/api/pay/order", headers=headers,
+                               json={"amount": 5}, timeout=20)
+            assert r3.status_code == 200, r3.text
+        finally:
+            _cleanup_user(uid)
+
+    def test_status_endpoint_accepts_the_payment_link_id(self):
+        uid, headers = _mk_user()
+        try:
+            r = requests.post(f"{BASE_URL}/api/pay/order",
+                              headers=headers,
+                              json={"amount": 10, "phone": "+15550001234"}, timeout=15)
+            assert r.status_code == 200, r.text
+            link_id = r.json()["order_id"]
+            r2 = requests.get(f"{BASE_URL}/api/pay/status/{link_id}", headers=headers, timeout=20)
+            assert r2.status_code == 200, r2.text
+            body = r2.json()
+            assert body["order_id"] == link_id
+            # Nothing paid yet, so nothing credited.
+            assert body["status"] != "captured"
+            assert body["balance"] == 0.0
         finally:
             _cleanup_user(uid)
 
@@ -241,7 +270,9 @@ class TestPaymentSecurity:
         uid, headers = _mk_user()
         try:
             r = requests.post(f"{BASE_URL}/api/pay/order",
-                              headers=headers, json={"amount": 5}, timeout=15)
+                              headers=headers,
+                              json={"amount": 5, "phone": "+15550001234"}, timeout=15)
+            assert r.status_code == 200, r.text
             oid = r.json()["order_id"]
             before = _get_balance(uid)
             forged = requests.post(

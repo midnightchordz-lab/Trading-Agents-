@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 14 — Razorpay Payment Link migration verified end-to-end. Ran all 5 pre-existing pytest suites (test_pay_callback, test_razorpay, test_wallet, test_wallet_razorpay_admin, test_free_credits) with 68/68 passing. Wrote a new suite (test_pay_links_iter14.py, 16 new tests) covering the plink_ id + rzp.io URL contract, contact_required:email and contact_required:phone flows, contact persistence, removed self-hosted /api/pay/checkout/{id} (404), /pay/status auth+scope, link callback (cancel 200, forged 400, validly-signed-fake-payment 200 'still confirming', never 422), and webhook rejection. All 16 pass. Frontend: signed in via AUTH_DEBUG_RETURN_OTP, opened Agents tab, WALLET card renders with 10 free credits; tapping +$5 opens contact-prompt with only contact-phone-input (correct for email-only account) and no contact-email-input; invalid 'abc' keeps prompt open (validation blocked); CANCEL dismisses; +$10 + valid +15551234567 opens a Razorpay-hosted popup at https://razorpay.com/payment-link/plink_TcZtppwp6AwzJ3 — Razorpay-hosted URL confirmed, NOT self-hosted; the prompt is dismissed and 'Confirming payment…' spinner starts polling via getPaymentStatus(plink_id). AUTH_DEBUG_RETURN_OTP set back to false and backend restarted.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_pay_links_iter14.py",
+    "/app/test_reports/pytest/iteration_14_results.xml",
+    "/app/test_reports/pytest/iteration_14_paylinks.xml"
+  ],
+  "action_items": [
+    "Optional: server.py is 2098 lines — consider splitting payments (create_topup_order, callbacks, webhook, status) into a dedicated module. Not blocking, but past the 700-line guideline.",
+    "Optional: Alert.alert() for invalid phone/email is a no-op on react-native-web, so on web preview users get no visible error message when validation fails — the sheet just doesn't advance. On native this is fine; on the web preview an inline error line under the field would be friendlier. Not blocking for the mobile app."
+  ],
+  "critical_code_review_comments": [
+    "server.py exceeds the 700-line size guideline (currently 2098 lines).",
+    "razorpay_pay.result_html sends a full-page HTML response — good UX inside the WebView; verified across cancel/forged/validly-signed paths and it never 422s.",
+    "resolve_payment_customer correctly persists email/phone on the users doc only when values are non-empty and actually changed (verified by test_supplying_missing_contact_persists_and_next_call_needs_none).",
+    "bind_order_id bridges the plink_… id to razorpay_order_id lazily, keeping the sparse unique index consistent with the spec.",
+    "webhook handler correctly gates payment_link.paid on amount_paid + currency parity before crediting; payment_link.expired/cancelled only marks failed if not captured (idempotent).",
+    "pay_status uses $or over both link id and order id — proper 404/403 semantics observed."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_pay_links_iter14.py (new)",
+    "/app/backend/.env (AUTH_DEBUG_RETURN_OTP toggled true->false during frontend test; restored)"
+  ],
+  "success_rate": {
+    "backend": "100%",
+    "frontend": "100%"
+  },
+  "seed_data_creation": "test_pay_links_iter14.py creates throwaway users (id prefix 'test-') and cleans them up in each test's finally block. No production data touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Payment Links migration is stable. /api/pay/order returns {order_id: plink_..., checkout_url: Razorpay-hosted URL, amount, currency:'USD'}. contact_required:phone/email is the exact detail string. GET /api/pay/checkout/{id} is 404 (endpoint deleted). Payment link callback signature = HMAC-SHA256(link_id|reference_id|status|payment_id, KEY_SECRET). /pay/status accepts both plink_ and order_ ids. Do NOT attempt to complete a real payment — Razorpay is in LIVE mode; only create links + poll. To auth in tests: import AUTH_HEADERS from /app/backend/tests/auth_helper.py (creates a fresh user + JWT). For frontend testing: set AUTH_DEBUG_RETURN_OTP=true, restart backend, read the code off the login screen or from the /api/auth/otp/request response, then restore false.",
+  "rca_of_issue": "N/A — this iteration is a feature verification pass; the underlying live-payment failure ('website does not match registered website(s)') was already fixed in this session by moving from self-hosted Standard Checkout to Razorpay-hosted Payment Links. Verified via test_returns_plink_id_and_rzp_hosted_url_and_usd and by opening a real link in the browser (host = razorpay.com, not our preview domain)."
+}

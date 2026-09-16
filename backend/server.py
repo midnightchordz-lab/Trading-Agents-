@@ -1031,7 +1031,12 @@ def public_base(request: Request) -> str:
 
 class WalletTopup(BaseModel):
     device_id: Optional[str] = None  # ignored for signed-in users (account-keyed wallet)
-    amount: float  # in INR; must match one of wallet.TOPUP_PACKS
+    amount: float  # must match one of wallet.TOPUP_PACKS
+    # Razorpay's payment links require BOTH an email and a phone number, but an
+    # account only has whichever one was used to sign in. The app asks for the
+    # missing one once and it's stored on the account from then on.
+    email: Optional[str] = None
+    phone: Optional[str] = None
 
 
 async def get_free_credits_remaining(user: Optional[dict]) -> int:
@@ -1150,10 +1155,48 @@ async def settle_payment(order: dict, payment_id: str) -> str:
     return status
 
 
+async def bind_order_id(record: dict, payment_id: str) -> dict:
+    """A Payment Link's underlying Razorpay order only exists once the customer
+    actually starts paying, so the stored record is created without one and the
+    id is bound here — before the normal order-based verification runs."""
+    payment = await rzp.fetch_payment(payment_id)
+    order_id = payment.get("order_id")
+    if order_id and record.get("razorpay_order_id") != order_id:
+        await db.payments.update_one(
+            {"reference_id": record["reference_id"]},
+            {"$set": {"razorpay_order_id": order_id, "updated_at": now_iso()}},
+        )
+        record = {**record, "razorpay_order_id": order_id}
+    return record
+
+
+async def resolve_payment_customer(user: Optional[dict], body: "WalletTopup") -> tuple[dict, list]:
+    """Razorpay rejects a payment link unless it carries a customer email AND
+    contact number. Users sign in with only one of the two, so this fills in
+    what's known, accepts whatever the app just asked for, remembers it on the
+    account, and reports what's still missing."""
+    email = (user or {}).get("email")
+    phone = (user or {}).get("phone")
+    for raw in (body.email, body.phone):
+        if not raw:
+            continue
+        kind, normalized = au.normalize_identifier(raw)
+        if kind == "email":
+            email = normalized
+        elif kind == "phone":
+            phone = normalized
+    missing = [name for name, value in (("email", email), ("phone", phone)) if not value]
+    if not missing and user and (email != user.get("email") or phone != user.get("phone")):
+        await db.users.update_one({"id": user["id"]}, {"$set": {"email": email, "phone": phone}})
+    customer = {"name": (user or {}).get("name") or "TradingAgents user", "email": email, "contact": phone}
+    return customer, missing
+
+
 @api_router.post("/pay/order")
 async def create_topup_order(body: WalletTopup, request: Request, user: Optional[dict] = Depends(require_user)):
-    """Creates a Razorpay order for one of the fixed top-up packs and returns a
-    hosted checkout URL. The amount is validated here — never taken on trust."""
+    """Creates a Razorpay Payment Link for one of the fixed top-up packs and
+    returns its hosted checkout URL. The amount is validated here — never taken
+    on trust."""
     if not rzp.payments_configured():
         raise HTTPException(status_code=503, detail="Payments aren't set up yet")
     if not wal.is_valid_topup(body.amount):
@@ -1165,53 +1208,55 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
     if not key:
         raise HTTPException(status_code=400, detail="device_id is required")
 
-    receipt = f"wallet_{uuid.uuid4().hex[:20]}"
+    customer, missing = await resolve_payment_customer(user, body)
+    if missing:
+        # Machine-readable so the app can ask for exactly what's missing.
+        raise HTTPException(status_code=400, detail=f"contact_required:{','.join(missing)}")
+
+    reference_id = f"wallet_{uuid.uuid4().hex[:20]}"
     try:
-        order = await rzp.create_order(body.amount, receipt, {"wallet_key": key, "purpose": "wallet_topup"})
+        link = await rzp.create_payment_link(
+            amount=body.amount,
+            reference_id=reference_id,
+            notes={"wallet_key": key, "purpose": "wallet_topup"},
+            callback_url=f"{public_base(request)}/api/pay/callback",
+            description=f"{wal.CURRENCY_SYMBOL}{body.amount:.0f} wallet top-up",
+            customer=customer,
+        )
     except Exception as e:
-        logger.error(f"razorpay order creation failed: {e}")
+        logger.error(f"razorpay payment link creation failed: {e}")
         raise HTTPException(status_code=502, detail="Couldn't start checkout — try again")
 
     await db.payments.insert_one({
-        "razorpay_order_id": order["id"],
+        "razorpay_payment_link_id": link["id"],
+        # A link's underlying order only exists once the customer starts paying.
+        # The field is omitted (not null) so the unique sparse index ignores it.
+        **({"razorpay_order_id": link["order_id"]} if link.get("order_id") else {}),
+        "reference_id": reference_id,
         "wallet_key": key,
         "amount": body.amount,
         "currency": wal.CURRENCY,
         "status": "created",
-        "receipt": receipt,
+        "receipt": reference_id,
+        "short_url": link["short_url"],
         "created_at": now_iso(),
         "updated_at": now_iso(),
     })
     return {
-        "order_id": order["id"],
+        # The app polls /pay/status with whatever id it gets back.
+        "order_id": link["id"],
         "amount": body.amount,
         "currency": wal.CURRENCY,
-        "checkout_url": f"{public_base(request)}/api/pay/checkout/{order['id']}",
+        "checkout_url": link["short_url"],
     }
-
-
-@api_router.get("/pay/checkout/{order_id}", response_class=HTMLResponse)
-async def pay_checkout(order_id: str, request: Request):
-    """Hosted checkout page — opened in a WebView on native, a popup on web.
-    Deliberately unauthenticated: it's a one-time, server-created order id and
-    it carries no balance or account data."""
-    order = await db.payments.find_one({"razorpay_order_id": order_id})
-    if not order:
-        raise HTTPException(status_code=404, detail="Unknown order")
-    return HTMLResponse(rzp.checkout_html(
-        order_id=order_id,
-        amount_paise=int(round(order["amount"] * 100)),
-        callback_url=f"{public_base(request)}/api/pay/callback",
-        brand=mailer.EMAIL_FROM_NAME,
-    ))
 
 
 @api_router.api_route("/pay/callback", methods=["POST", "GET"], response_class=HTMLResponse)
 async def pay_callback(request: Request):
-    """Razorpay returns the customer here after checkout. The documented
-    contract is a form POST carrying the three razorpay_* fields — but only on
-    a successful authorisation. Cancels, failures and some bank / UPI redirect
-    chains arrive with no body at all, or as a GET with query params, so every
+    """Razorpay redirects the customer back here after the hosted payment page.
+    Payment Links arrive as a GET with the razorpay_payment_link_* params; the
+    older self-hosted checkout arrived as a form POST. Cancels, failures and
+    some bank / UPI redirect chains arrive with no fields at all, so every
     field is read defensively (a strict Form(...) signature 422s the user
     mid-payment). Whatever arrives is a hint only: the signature is checked and
     the payment re-fetched from Razorpay before anything is credited."""
@@ -1226,6 +1271,10 @@ async def pay_callback(request: Request):
             except Exception:
                 fields = {}
     q = request.query_params
+    link_id = fields.get("razorpay_payment_link_id") or q.get("razorpay_payment_link_id")
+    if link_id:
+        return await link_callback(fields, q, link_id)
+
     razorpay_payment_id = fields.get("razorpay_payment_id") or q.get("razorpay_payment_id")
     razorpay_order_id = (
         fields.get("razorpay_order_id") or q.get("razorpay_order_id") or q.get("order_id")
@@ -1264,6 +1313,46 @@ async def pay_callback(request: Request):
     return HTMLResponse(rzp.result_html("That payment didn't go through — nothing was charged.", ok=False))
 
 
+async def link_callback(fields: dict, q, link_id: str) -> HTMLResponse:
+    """Payment Link return leg. Signature message differs from checkout's:
+    link_id|reference_id|status|payment_id."""
+    def val(name: str) -> str:
+        return fields.get(name) or q.get(name) or ""
+
+    payment_id = val("razorpay_payment_id")
+    reference_id = val("razorpay_payment_link_reference_id")
+    link_status = val("razorpay_payment_link_status")
+    signature = val("razorpay_signature")
+
+    record = await db.payments.find_one({"razorpay_payment_link_id": link_id})
+    if not payment_id or not signature:
+        logger.info(f"payment link callback without success fields for {link_id}")
+        if record:
+            await db.payments.update_one(
+                {"reference_id": record["reference_id"], "status": {"$ne": "captured"}},
+                {"$set": {"status": "failed", "updated_at": now_iso()}},
+            )
+        return HTMLResponse(rzp.result_html("Payment wasn't completed — nothing was charged.", ok=False))
+
+    if not record or record["reference_id"] != reference_id or not rzp.verify_link_signature(
+        link_id=link_id, reference_id=reference_id, status=link_status,
+        payment_id=payment_id, supplied=signature,
+    ):
+        logger.warning(f"invalid payment link signature for {link_id}")
+        return HTMLResponse(rzp.result_html("We couldn't verify that payment.", ok=False), status_code=400)
+
+    try:
+        record = await bind_order_id(record, payment_id)
+        status = await settle_payment(record, payment_id)
+    except Exception as e:
+        logger.error(f"payment link settle failed: {e}")
+        return HTMLResponse(rzp.result_html("Payment received — we're still confirming it.", ok=True))
+    if status == "captured":
+        return HTMLResponse(rzp.result_html(
+            f"Added {wal.CURRENCY_SYMBOL}{record['amount']:.0f} to your wallet.", ok=True))
+    return HTMLResponse(rzp.result_html("That payment didn't go through — nothing was charged.", ok=False))
+
+
 @api_router.post("/pay/webhook")
 async def pay_webhook(request: Request):
     """Razorpay's server-to-server confirmation. Verified against the raw body
@@ -1279,8 +1368,30 @@ async def pay_webhook(request: Request):
         return {"ok": True, "duplicate": True}
 
     event = json.loads(raw or b"{}")
-    entity = (event.get("payload", {}).get("payment", {}) or {}).get("entity", {})
+    name = event.get("event")
+    payload = event.get("payload", {}) or {}
+    entity = (payload.get("payment", {}) or {}).get("entity", {})
     payment_id, order_id = entity.get("id"), entity.get("order_id")
+
+    # Payment Links carry their own entity and are the authoritative event for
+    # the top-up flow — the underlying order id may not be on our record yet.
+    link_entity = (payload.get("payment_link", {}) or {}).get("entity", {})
+    if link_entity.get("id"):
+        record = await db.payments.find_one({"razorpay_payment_link_id": link_entity["id"]})
+        if not record:
+            return {"ok": True}
+        if name == "payment_link.paid" and payment_id:
+            expected = int(round(record["amount"] * 100))
+            if link_entity.get("amount_paid") == expected and link_entity.get("currency") == record["currency"]:
+                record = await bind_order_id(record, payment_id)
+                await settle_payment(record, payment_id)
+        elif name in ("payment_link.expired", "payment_link.cancelled"):
+            await db.payments.update_one(
+                {"reference_id": record["reference_id"], "status": {"$ne": "captured"}},
+                {"$set": {"status": "failed", "updated_at": now_iso()}},
+            )
+        return {"ok": True}
+
     if not order_id:
         return {"ok": True}
 
@@ -1288,10 +1399,10 @@ async def pay_webhook(request: Request):
     if not order:
         return {"ok": True}
 
-    if event.get("event") == "payment.captured" and payment_id:
+    if name == "payment.captured" and payment_id:
         if entity.get("amount") == int(round(order["amount"] * 100)):
             await credit_wallet_once(payment_id, order)
-    elif event.get("event") == "payment.failed":
+    elif name == "payment.failed":
         await db.payments.update_one(
             {"razorpay_order_id": order_id},
             {"$set": {"status": "failed", "failure": entity.get("error_description"), "updated_at": now_iso()}},
@@ -1301,10 +1412,13 @@ async def pay_webhook(request: Request):
 
 @api_router.get("/pay/status/{order_id}")
 async def pay_status(order_id: str, user: Optional[dict] = Depends(require_user)):
-    """Polled by the app after checkout closes. If the browser callback never
+    """Polled by the app after checkout closes. If the browser redirect never
     made it back (WebView dismissed, network dropped), this asks Razorpay
-    directly and credits then — so a paid top-up is never lost."""
-    order = await db.payments.find_one({"razorpay_order_id": order_id}, {"_id": 0})
+    directly and credits then — so a paid top-up is never lost. Accepts either
+    a payment link id (plink_…) or a legacy order id."""
+    order = await db.payments.find_one(
+        {"$or": [{"razorpay_payment_link_id": order_id}, {"razorpay_order_id": order_id}]}
+    )
     if not order:
         raise HTTPException(status_code=404, detail="Unknown order")
     key = wallet_key_for(user, None)
@@ -1313,12 +1427,35 @@ async def pay_status(order_id: str, user: Optional[dict] = Depends(require_user)
 
     if order["status"] != "captured" and rzp.payments_configured():
         try:
-            found = await rzp.razorpay_request("GET", f"/orders/{order_id}/payments")
-            for p in found.get("items", []):
-                if p.get("status") == "captured":
-                    await settle_payment(order, p["id"])
-                    order = await db.payments.find_one({"razorpay_order_id": order_id}, {"_id": 0})
-                    break
+            if order.get("razorpay_payment_link_id"):
+                link = await rzp.fetch_payment_link(order["razorpay_payment_link_id"])
+                expected = int(round(order["amount"] * 100))
+                paid = (
+                    link.get("status") == "paid"
+                    and link.get("amount_paid") == expected
+                    and link.get("currency") == order["currency"]
+                )
+                payment_id = next(
+                    (p.get("payment_id") for p in reversed(link.get("payments") or []) if p.get("payment_id")),
+                    None,
+                )
+                if paid and payment_id:
+                    order = await bind_order_id(order, payment_id)
+                    await settle_payment(order, payment_id)
+                elif link.get("status") in ("expired", "cancelled"):
+                    await db.payments.update_one(
+                        {"reference_id": order["reference_id"], "status": {"$ne": "captured"}},
+                        {"$set": {"status": "failed", "updated_at": now_iso()}},
+                    )
+            elif order.get("razorpay_order_id"):
+                found = await rzp.razorpay_request("GET", f"/orders/{order['razorpay_order_id']}/payments")
+                for p in found.get("items", []):
+                    if p.get("status") == "captured":
+                        await settle_payment(order, p["id"])
+                        break
+            order = await db.payments.find_one(
+                {"$or": [{"razorpay_payment_link_id": order_id}, {"razorpay_order_id": order_id}]}
+            )
         except Exception as e:
             logger.warning(f"payment status refresh failed: {e}")
 
@@ -1943,7 +2080,15 @@ async def migrate_legacy_wallet_field():
 async def ensure_payment_indexes():
     """Unique indexes are what keep a top-up from being credited twice."""
     try:
-        await db.payments.create_index("razorpay_order_id", unique=True)
+        # Payment-link records carry no order id until the customer starts
+        # paying, so these must be sparse — the old non-sparse unique index
+        # would reject every record after the first one missing the field.
+        existing = await db.payments.index_information()
+        if "razorpay_order_id_1" in existing and not existing["razorpay_order_id_1"].get("sparse"):
+            await db.payments.drop_index("razorpay_order_id_1")
+        await db.payments.create_index("razorpay_order_id", unique=True, sparse=True)
+        await db.payments.create_index("razorpay_payment_link_id", unique=True, sparse=True)
+        await db.payments.create_index("reference_id", unique=True, sparse=True)
         await db.wallet_ledger.create_index("payment_id", unique=True)
         await db.webhook_events.create_index("event_id", unique=True)
     except Exception as e:

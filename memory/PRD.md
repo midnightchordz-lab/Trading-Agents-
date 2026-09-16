@@ -212,3 +212,30 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
   app-level, DB-free `GET /health`. Re-scan came back with no blockers.
 - Tests: new `backend/tests/test_pay_callback.py` (6 cases); 37/37 pass across
   test_pay_callback + test_razorpay + test_wallet + test_free_credits.
+
+## Razorpay: migrated to Payment Links (2026-06-19, session 9) — DONE
+- **Why**: every live payment was rejected with *"Payment blocked as website does not match registered
+  website(s)"* — Standard Checkout (checkout.js) validates the page origin against the account's
+  registered-websites list, which we can't change at runtime. Payment Links are hosted by Razorpay
+  (rzp.io / razorpay.com) so the origin check doesn't apply.
+- Removed: `rzp.checkout_html`, `rzp.create_order`, and `GET /api/pay/checkout/{id}` (now 404).
+- Added: `rzp.create_payment_link` / `fetch_payment_link` / `verify_link_signature`. Link signature is
+  `link_id|reference_id|status|payment_id` — different from checkout's `order_id|payment_id`.
+- `POST /api/pay/order` returns `{order_id: "plink_…", checkout_url: "https://rzp.io/…"}`. The payments
+  doc now carries `razorpay_payment_link_id`, `reference_id`, `short_url`; `razorpay_order_id` is
+  **omitted** at creation (a link's order only exists once the customer starts paying) and bound later by
+  `bind_order_id()`, so the unique indexes on `payments` are now sparse (the old non-sparse
+  `razorpay_order_id_1` index is dropped on startup).
+- `/api/pay/callback` gained a payment-link branch (`link_callback`), `/api/pay/webhook` handles
+  `payment_link.paid|expired|cancelled`, and `/api/pay/status/{id}` accepts a plink id (fetches the link,
+  settles on `paid` with matching amount+currency). Crediting still only ever happens through
+  `settle_payment` -> `credit_wallet_once`.
+- **This account requires customer email AND contact on every link**, but users sign in with only one.
+  `resolve_payment_customer()` fills what's known, accepts what the app supplies, stores it on the user,
+  and otherwise 400s with `detail: "contact_required:email|phone"`. `WalletCard` shows a ONE-TIME DETAIL
+  sheet (testIDs `contact-prompt`, `contact-email-input`, `contact-phone-input`, `contact-continue`,
+  `contact-error`) with inline validation, then retries the top-up.
+- Verified (iteration_14): 68/68 existing tests plus a new `tests/test_pay_links_iter14.py` (16 tests);
+  frontend confirmed opening a real Razorpay-hosted link, no payment completed (LIVE keys).
+- Webhook events to enable in the dashboard are now `payment_link.paid` (plus optionally
+  `payment_link.expired` / `payment_link.cancelled`); `RAZORPAY_WEBHOOK_SECRET` is still unset.

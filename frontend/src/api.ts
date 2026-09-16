@@ -243,8 +243,11 @@ export const api = {
   analyze: (symbol: string, name?: string, language?: string, deviceId?: string) =>
     j<Analysis>(`/analyze`, { method: "POST", body: JSON.stringify({ symbol, name, language, device_id: deviceId }) }),
   getWalletBalance: (deviceId: string) => j<WalletBalance>(`/wallet/balance?device_id=${encodeURIComponent(deviceId)}`),
-  createTopupOrder: (deviceId: string, amount: number) =>
-    j<TopupOrder>(`/pay/order`, { method: "POST", body: JSON.stringify({ device_id: deviceId, amount }) }),
+  createTopupOrder: (deviceId: string, amount: number, contact?: { email?: string; phone?: string }) =>
+    j<TopupOrder>(`/pay/order`, {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId, amount, ...(contact || {}) }),
+    }),
   getPaymentStatus: (orderId: string) => j<PaymentStatus>(`/pay/status/${orderId}`),
   getAnalysis: (id: string) => j<Analysis>(`/analysis/${id}`),
   history: () => j<{ results: Analysis[] }>(`/history`),

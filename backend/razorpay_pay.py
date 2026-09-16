@@ -1,12 +1,17 @@
 """Razorpay wallet top-ups.
 
-Flow: the app asks the backend for an order (amount validated against
-wallet.TOPUP_PACKS), the backend creates a Razorpay order and returns a hosted
-checkout URL that this same backend serves. Razorpay posts the result back to
-/api/pay/callback, and also sends a payment.captured webhook. Both paths
-verify server-side and credit through the same idempotent ledger, so a balance
-can never be credited twice — or credited at all without a captured payment
-confirmed by Razorpay itself.
+Flow: the app asks the backend for a top-up (amount validated against
+wallet.TOPUP_PACKS), the backend creates a Razorpay **Payment Link** and
+returns its short_url, which the app opens in a WebView. Razorpay redirects
+back to /api/pay/callback with the link's signed result, and also sends a
+payment_link.paid webhook. Both paths verify server-side and credit through
+the same idempotent ledger, so a balance can never be credited twice — or
+credited at all without a captured payment confirmed by Razorpay itself.
+
+Payment Links (Razorpay-hosted) replaced self-hosted Standard Checkout because
+checkout.js rejects any payment whose origin isn't in the account's registered
+websites list ("Payment blocked as website does not match registered
+website(s)"), which is out of our control at runtime.
 
 No credentials, amounts or balances are ever trusted from the client.
 """
@@ -14,6 +19,7 @@ import hashlib
 import hmac
 import logging
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -46,24 +52,50 @@ async def razorpay_request(method: str, path: str, **kwargs) -> dict:
         return r.json()
 
 
-async def create_order(amount_rupees: float, receipt: str, notes: dict) -> dict:
-    """Amount goes to Razorpay in the smallest currency unit (cents), as an
-    integer. Currency follows the wallet's own currency."""
+async def fetch_payment(payment_id: str) -> dict:
+    return await razorpay_request("GET", f"/payments/{payment_id}")
+
+
+LINK_TTL_SECONDS = 60 * 60
+
+
+async def create_payment_link(*, amount: float, reference_id: str, notes: dict, callback_url: str, description: str, customer: dict) -> dict:
+    """A one-time, Razorpay-hosted payment page. Amount goes in the smallest
+    currency unit. callback_method must be "get" whenever callback_url is set,
+    and this account requires customer email + contact on every link."""
     return await razorpay_request(
         "POST",
-        "/orders",
+        "/payment_links",
         json={
-            "amount": int(round(amount_rupees * 100)),
+            "amount": int(round(amount * 100)),
             "currency": wal.CURRENCY,
-            "receipt": receipt,
-            "payment_capture": 1,
+            "accept_partial": False,
+            "description": description,
+            "reference_id": reference_id,
             "notes": notes,
+            "customer": customer,
+            "callback_url": callback_url,
+            "callback_method": "get",
+            "expire_by": int(time.time()) + LINK_TTL_SECONDS,
+            "reminder_enable": False,
+            "notify": {"email": False, "sms": False},
         },
     )
 
 
-async def fetch_payment(payment_id: str) -> dict:
-    return await razorpay_request("GET", f"/payments/{payment_id}")
+async def fetch_payment_link(link_id: str) -> dict:
+    return await razorpay_request("GET", f"/payment_links/{link_id}")
+
+
+def verify_link_signature(*, link_id: str, reference_id: str, status: str, payment_id: str, supplied: str) -> bool:
+    """Payment Links use a different message from Standard Checkout:
+    link_id|reference_id|status|payment_id, HMAC-SHA256 with the key secret."""
+    expected = hmac.new(
+        KEY_SECRET.encode(),
+        f"{link_id}|{reference_id}|{status}|{payment_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, supplied or "")
 
 
 def verify_checkout_signature(order_id: str, payment_id: str, supplied: str) -> bool:
@@ -82,39 +114,6 @@ def verify_webhook_signature(raw_body: bytes, supplied: str) -> bool:
         return False
     expected = hmac.new(WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, supplied)
-
-
-def checkout_html(*, order_id: str, amount_paise: int, callback_url: str, brand: str) -> str:
-    """Hosted Razorpay Standard Checkout page. Every value here is
-    server-derived. Rendered inside a WebView on native and a popup on web."""
-    from html import escape
-
-    return f"""<!doctype html>
-<html><head><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>{escape(brand)} — secure checkout</title>
-<style>body{{margin:0;background:#05070B;color:#EEF7E0;font:14px -apple-system,Arial,sans-serif;
-display:flex;align-items:center;justify-content:center;height:100vh;text-align:center}}</style>
-</head><body>
-<p>Opening secure Razorpay checkout…</p>
-<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-<script>
-  var options = {{
-    key: "{escape(KEY_ID, quote=True)}",
-    amount: {amount_paise},
-    currency: "{wal.CURRENCY}",
-    name: "{escape(brand, quote=True)}",
-    description: "Wallet top-up",
-    order_id: "{escape(order_id, quote=True)}",
-    // Razorpay only POSTs the three razorpay_* fields to callback_url when
-    // redirect is on; the order id rides along as a query param so a failed /
-    // cancelled return (which carries no fields) can still be matched.
-    callback_url: "{escape(callback_url, quote=True)}?order_id={escape(order_id, quote=True)}",
-    redirect: true,
-    modal: {{ confirm_close: true, escape: false, backdropclose: false }}
-  }};
-  window.onload = function () {{ new Razorpay(options).open(); }};
-</script>
-</body></html>"""
 
 
 def result_html(message: str, ok: bool) -> str:

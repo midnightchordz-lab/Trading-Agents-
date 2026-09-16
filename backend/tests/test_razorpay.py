@@ -61,20 +61,34 @@ def test_webhook_signature_requires_a_secret():
         assert rzp.verify_webhook_signature(b'{"event":"other"}', good) is False
 
 
-def test_checkout_html_never_leaks_the_secret():
-    html = rzp.checkout_html(
-        order_id="order_ABC", amount_paise=500,
-        callback_url="https://example.com/api/pay/callback", brand="TradingAgents",
-    )
-    assert rzp.KEY_SECRET not in html
-    assert "order_ABC" in html
-    assert "500" in html
-    assert 'currency: "USD"' in html
+def test_payment_link_signature_accepts_the_real_one():
+    # Payment Links sign link_id|reference_id|status|payment_id — NOT the
+    # order_id|payment_id message Standard Checkout uses.
+    args = dict(link_id="plink_ABC", reference_id="wallet_ref1", status="paid", payment_id="pay_XYZ")
+    good = hmac.new(
+        rzp.KEY_SECRET.encode(), b"plink_ABC|wallet_ref1|paid|pay_XYZ", hashlib.sha256
+    ).hexdigest()
+    assert rzp.verify_link_signature(**args, supplied=good) is True
 
 
-def test_checkout_html_escapes_the_brand():
-    html = rzp.checkout_html(
-        order_id="order_ABC", amount_paise=500,
-        callback_url="https://example.com/cb", brand='Evil"</script>',
-    )
-    assert '"</script>' not in html.split("checkout.js")[1].split("window.onload")[0]
+def test_payment_link_signature_rejects_tampering():
+    args = dict(link_id="plink_ABC", reference_id="wallet_ref1", status="paid", payment_id="pay_XYZ")
+    good = hmac.new(
+        rzp.KEY_SECRET.encode(), b"plink_ABC|wallet_ref1|paid|pay_XYZ", hashlib.sha256
+    ).hexdigest()
+    assert rzp.verify_link_signature(**args, supplied=good[:-1] + "0") is False
+    assert rzp.verify_link_signature(**{**args, "status": "expired"}, supplied=good) is False
+    assert rzp.verify_link_signature(**{**args, "reference_id": "other"}, supplied=good) is False
+    assert rzp.verify_link_signature(**{**args, "payment_id": "pay_OTHER"}, supplied=good) is False
+    assert rzp.verify_link_signature(**args, supplied="") is False
+
+
+def test_payment_link_signature_is_not_the_checkout_one():
+    # A checkout-style signature must never unlock a payment link.
+    checkout_style = hmac.new(
+        rzp.KEY_SECRET.encode(), b"plink_ABC|pay_XYZ", hashlib.sha256
+    ).hexdigest()
+    assert rzp.verify_link_signature(
+        link_id="plink_ABC", reference_id="wallet_ref1", status="paid",
+        payment_id="pay_XYZ", supplied=checkout_style,
+    ) is False
