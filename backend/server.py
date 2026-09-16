@@ -1,6 +1,5 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Header, Depends, Request
 from fastapi.responses import HTMLResponse
-from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -1077,29 +1076,18 @@ async def get_wallet_balance(device_id: str) -> float:
 
 
 def _utc_day() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(timezone.utc).date().isoformat()
 
 
-async def daily_free_runs_used(key: str) -> int:
-    doc = await db.usage_daily.find_one({"_id": f"{key}:{_utc_day()}"})
-    return int(doc.get("count") or 0) if doc else 0
-
-
-async def consume_daily_free_run(key: str, limit: int) -> bool:
-    """Atomic per-day counter for launch-free runs. Increments first and rolls
-    the increment back when it lands over the cap, so two concurrent requests
-    can't both slip through on the last remaining run — and a blocked attempt
-    doesn't eat a slot."""
-    doc = await db.usage_daily.find_one_and_update(
-        {"_id": f"{key}:{_utc_day()}"},
-        {"$inc": {"count": 1}, "$setOnInsert": {"created_at": now_iso()}},
-        upsert=True,
-        return_document=ReturnDocument.AFTER,
+async def launch_free_daily_remaining(key: str) -> int:
+    """Read-only view of today's remaining launch-free allowance."""
+    wallet_doc = await db.wallets.find_one({"device_id": key}) or {}
+    _, count_today = wal.launch_free_daily_state(
+        wallet_doc.get("launch_free_daily_date", ""),
+        wallet_doc.get("launch_free_daily_count", 0),
+        _utc_day(),
     )
-    if int(doc["count"]) > limit:
-        await db.usage_daily.update_one({"_id": doc["_id"]}, {"$inc": {"count": -1}})
-        return False
-    return True
+    return max(0, wal.LAUNCH_FREE_DAILY_CAP - count_today)
 
 
 async def latest_completed_analysis_for(symbol: str, language: str = "en") -> Optional[dict]:
@@ -1123,11 +1111,7 @@ async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] =
     admin = is_admin(user)
     free_credits = await get_free_credits_remaining(user)
     launch_free = wal.is_launch_free_period(LAUNCH_FREE_UNTIL, datetime.now(timezone.utc))
-    daily_left = (
-        max(0, wal.LAUNCH_FREE_DAILY_LIMIT - await daily_free_runs_used(key))
-        if launch_free and not admin
-        else None
-    )
+    daily_left = await launch_free_daily_remaining(key) if launch_free else None
     return {
         "device_id": key,
         "balance": round(balance, 2),
@@ -1137,18 +1121,21 @@ async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] =
         "packs": wal.TOPUP_PACKS,
         "free_credits_remaining": free_credits,
         # Admins are never billed, and neither is anyone with free credits
-        # left — so the app shows them no balance gate. Nor is anyone during
-        # the launch-free window, otherwise the app would grey out the analyze
-        # button for a drained wallet that the backend would happily run free.
+        # left — so the app shows them no balance gate. Nor is anyone with
+        # launch-free allowance left today, otherwise the app would grey out
+        # the analyze button for a drained wallet the backend would run free.
         "enforcement_enabled": (
-            WALLET_ENFORCEMENT_ENABLED and not admin and not launch_free and free_credits <= 0
+            WALLET_ENFORCEMENT_ENABLED
+            and not admin
+            and not (launch_free and (daily_left or 0) > 0)
+            and free_credits <= 0
         ),
         "is_admin": admin,
         "payments_live": rzp.payments_configured(),
         "launch_free_active": launch_free,
-        # Only meaningful while the launch window is open.
-        "launch_free_daily_limit": wal.LAUNCH_FREE_DAILY_LIMIT if launch_free else None,
-        "launch_free_runs_left": daily_left,
+        # Powers the on-screen countdown; `remaining` is null outside the window.
+        "launch_free_daily_remaining": daily_left,
+        "launch_free_daily_cap": wal.LAUNCH_FREE_DAILY_CAP,
     }
 
 
@@ -1696,13 +1683,34 @@ async def auth_session(body: GoogleSession):
     return {"token": token, "user": {"id": user["id"], "phone": user.get("phone"), "email": user.get("email")}}
 
 
+_apple_jwks_cache: dict = {"keys": None, "fetched_at": 0.0}
+APPLE_JWKS_CACHE_TTL = 3600  # seconds — Apple's signing keys rotate infrequently
+
+
+def fetch_apple_jwks() -> list:
+    now = time.time()
+    if _apple_jwks_cache["keys"] is not None and (now - _apple_jwks_cache["fetched_at"]) < APPLE_JWKS_CACHE_TTL:
+        return _apple_jwks_cache["keys"]
+    r = requests.get("https://appleid.apple.com/auth/keys", timeout=10)
+    r.raise_for_status()
+    keys = r.json().get("keys", [])
+    _apple_jwks_cache["keys"] = keys
+    _apple_jwks_cache["fetched_at"] = now
+    return keys
+
+
 @api_router.post("/auth/apple")
 async def auth_apple(body: SocialSignIn):
     if not APPLE_SERVICES_ID:
         raise HTTPException(status_code=501, detail="Apple sign-in is not configured yet (APPLE_SERVICES_ID unset)")
-    claims = au.verify_apple_id_token_stub(body.token, APPLE_SERVICES_ID)
+    try:
+        jwks = await asyncio.to_thread(fetch_apple_jwks)
+    except Exception as e:
+        logger.warning(f"Apple JWKS fetch failed: {e}")
+        raise HTTPException(status_code=502, detail="Could not verify Apple sign-in right now — try again")
+    claims = au.verify_apple_id_token(body.token, APPLE_SERVICES_ID, jwks)
     if not claims:
-        raise HTTPException(status_code=501, detail="Apple sign-in verification is not wired to a real provider yet")
+        raise HTTPException(status_code=401, detail="Invalid Apple sign-in token")
     user = await db.users.find_one({"apple_sub": claims.get("sub")})
     if not user:
         user = {"id": str(uuid.uuid4()), "phone": None, "email": claims.get("email"),
@@ -1717,6 +1725,24 @@ async def auth_apple(body: SocialSignIn):
 @api_router.get("/auth/me")
 async def auth_me(user: dict = Depends(get_current_user)):
     return {"id": user["id"], "phone": user.get("phone"), "email": user.get("email")}
+
+
+@api_router.delete("/account")
+async def delete_account(user: dict = Depends(get_current_user)):
+    """Apple requires in-app account deletion, not just 'contact support'.
+    Deletes the account record and its wallet — the two things that
+    directly identify and grant access to this person. Deliberately does
+    NOT delete payment/transaction records (payments, wallet_ledger):
+    financial recordkeeping obligations generally require retaining those
+    regardless of account deletion — this is a data-retention judgment
+    call, not an oversight, and should be confirmed against your actual
+    compliance requirements before relying on it. Analyses aren't deleted
+    either, since they were never linked to this account's identity in the
+    first place (see the Privacy Policy)."""
+    user_id = user["id"]
+    await db.users.delete_one({"id": user_id})
+    await db.wallets.delete_one({"device_id": f"user:{user_id}"})
+    return {"deleted": True}
 
 
 # --- Portfolio optimization (additive; never mutates analyses or the pipeline) ---
@@ -1982,24 +2008,40 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         raise HTTPException(status_code=400, detail="Invalid ticker symbol")
     language = body.language if body.language in SUPPORTED_LANGUAGES else "en"
 
-    # During a configured launch-free window, EVERYONE gets this same
-    # bypass — auto-expires on its own, no flag to remember to flip.
+    # During a configured launch-free window, everyone gets a capped daily
+    # allowance instead of unlimited free runs — unlimited-free has real,
+    # unbounded cost exposure (nothing stops scripted abuse while analyses
+    # cost nothing); the cap closes that gap while staying generous. Tracked
+    # on the wallet doc, not on analyses — a count, not which tickers were
+    # run, so this doesn't touch the "analyses aren't linked to identity"
+    # privacy commitment at all. Once the day's allowance is spent the request
+    # falls through to normal billing (free credits, then wallet), it is not a
+    # hard block.
     launch_free_now = wal.is_launch_free_period(LAUNCH_FREE_UNTIL, datetime.now(timezone.utc))
-    is_admin_user = is_admin(user)
-    admin_bypass = is_admin_user or launch_free_now
-
-    # Free doesn't mean unlimited: each account gets a fixed number of runs per
-    # day while the launch window is open.
-    if launch_free_now and WALLET_ENFORCEMENT_ENABLED and not is_admin_user:
-        daily_key = wallet_key_for(user, body.device_id)
-        if not daily_key:
+    launch_free_daily_ok = False
+    if launch_free_now:
+        launch_key = wallet_key_for(user, body.device_id)
+        if not launch_key:
             raise HTTPException(status_code=400, detail="device_id is required")
-        if not await consume_daily_free_run(daily_key, wal.LAUNCH_FREE_DAILY_LIMIT):
-            raise HTTPException(
-                status_code=429,
-                detail=(f"Daily limit reached — {wal.LAUNCH_FREE_DAILY_LIMIT} free analyses per day "
-                        "during launch. Resets at midnight UTC."),
-            )
+        today_str = datetime.now(timezone.utc).date().isoformat()
+        wallet_doc = await db.wallets.find_one({"device_id": launch_key}) or {}
+        reset_date, reset_count = wal.launch_free_daily_state(
+            wallet_doc.get("launch_free_daily_date", ""),
+            wallet_doc.get("launch_free_daily_count", 0),
+            today_str,
+        )
+        launch_free_daily_ok = wal.has_launch_free_daily_quota(reset_count)
+        new_count = reset_count + 1 if launch_free_daily_ok else reset_count
+        await db.wallets.update_one(
+            {"device_id": launch_key},
+            {"$set": {
+                "launch_free_daily_date": reset_date,
+                "launch_free_daily_count": new_count,
+                "updated_at": now_iso(),
+            }},
+            upsert=True,
+        )
+    admin_bypass = is_admin(user) or launch_free_daily_ok
 
     used_free_credit = False
     billed = WALLET_ENFORCEMENT_ENABLED and not admin_bypass
@@ -2065,7 +2107,7 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         "billed": billed,
         "price_charged": wal.get_price("full_analysis") if billed else None,
         "admin_bypass": admin_bypass if WALLET_ENFORCEMENT_ENABLED else False,
-        "launch_free_active": launch_free_now if WALLET_ENFORCEMENT_ENABLED else False,
+        "launch_free_active": launch_free_daily_ok if WALLET_ENFORCEMENT_ENABLED else False,
         "used_free_credit": used_free_credit,
         "free_credits_remaining": await get_free_credits_remaining(
             await db.users.find_one({"id": user["id"]}, {"_id": 0}) if user else None

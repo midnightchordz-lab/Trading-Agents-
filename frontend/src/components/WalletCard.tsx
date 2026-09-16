@@ -159,8 +159,8 @@ export function WalletCard() {
 
       {launchFree ? (
         <Text style={styles.priceNote}>
-          {wallet?.launch_free_runs_left != null
-            ? `Free during launch — ${wallet.launch_free_runs_left} of ${wallet.launch_free_daily_limit ?? 10} analyses left today.`
+          {wallet?.launch_free_daily_remaining != null
+            ? `Free during launch — ${wallet.launch_free_daily_remaining} of ${wallet.launch_free_daily_cap ?? 10} analyses left today.`
             : "Every analysis is free during launch — no payment needed."}
         </Text>
       ) : price ? (

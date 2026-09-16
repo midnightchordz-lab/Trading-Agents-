@@ -10,10 +10,12 @@ real provider credentials (an SMS/email provider, a Google OAuth client ID,
 an Apple Sign In configuration) that only the app owner can provision — see
 the integration notes in the accompanying spec. The functions below that
 stand in for those (`send_otp_stub`, `verify_google_id_token_stub`,
-`verify_apple_id_token_stub`) are explicit placeholders.
+`verify_google_id_token_stub`) are explicit placeholders; Apple tokens are
+verified for real in `verify_apple_id_token`.
 """
 from __future__ import annotations
 
+import json
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -166,8 +168,38 @@ def verify_google_id_token_stub(id_token: str, expected_audience: str) -> Option
     return None
 
 
-def verify_apple_id_token_stub(identity_token: str, expected_audience: str) -> Optional[dict]:
-    """PLACEHOLDER. Real verification needs your own Apple Sign In
-    configuration (Services ID as expected_audience) and network access to
-    Apple's public JWKS endpoint. Returns None until wired."""
-    return None
+def verify_apple_id_token(identity_token: str, expected_audience: str, jwks: list) -> Optional[dict]:
+    """Verifies a real Sign in with Apple identity token against Apple's
+    published public keys. `jwks` is Apple's JWKS response (the list under
+    its "keys" field) — fetched separately by the caller (see
+    fetch_apple_jwks in server.py), since this function has no network
+    access itself and is fully testable with a synthetic JWKS + token pair.
+    Returns {"sub": ..., "email": ...} on success, None on any verification
+    failure — a malformed token, a tampered signature, an expired token, or
+    a wrong audience are all treated the same way: reject, don't
+    authenticate. Never raises."""
+    try:
+        unverified_header = jwt.get_unverified_header(identity_token)
+    except Exception:
+        return None
+    kid = unverified_header.get("kid")
+    if not kid:
+        return None
+    matching_key = next((k for k in jwks if isinstance(k, dict) and k.get("kid") == kid), None)
+    if not matching_key:
+        return None
+    try:
+        public_key = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(matching_key))
+        payload = jwt.decode(
+            identity_token,
+            key=public_key,
+            algorithms=["RS256"],
+            audience=expected_audience,
+            issuer="https://appleid.apple.com",
+        )
+    except jwt.PyJWTError:
+        return None
+    sub = payload.get("sub")
+    if not sub:
+        return None
+    return {"sub": sub, "email": payload.get("email")}

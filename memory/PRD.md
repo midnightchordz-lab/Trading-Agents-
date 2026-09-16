@@ -294,3 +294,64 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
   window); WalletCard shows "Free during launch — N of 10 analyses left today".
 - Verified: 12/12 in `tests/test_launch_free.py` (serial, `RUN_LAUNCH_FREE_E2E=1`), full suite
   230 passed / 6 skipped, and the wallet card rendering confirmed by screenshot with the window on.
+
+## Combined launch-free design (2026-06-19, session 9, ALREADY_BUILT_AND_LAUNCH_FREE_COMBINED.md) — DONE
+- **Part A check**: `DELETE /account` and real Sign in with Apple are NOT in this repo — there is no
+  account-deletion route at all and `/api/auth/apple` still calls `au.verify_apple_id_token_stub`
+  (501). `IOS_BLOCKERS_ALL_SIX.md` has never been uploaded here, so its code could not be applied;
+  asked the user for that file. Do NOT hand-roll either one without it (and route auth through
+  `integration_expert` if building from scratch).
+- **Part B replaced the previous session's daily cap** with the spec's design:
+  - `wal.LAUNCH_FREE_DAILY_CAP = 10`, plus `wal.launch_free_daily_state()` (derives the rollover from
+    the stored date on every read — no scheduled job, bad data reads as 0) and
+    `wal.has_launch_free_daily_quota()`.
+  - Counter now lives ON THE WALLET DOC (`launch_free_daily_date`, `launch_free_daily_count`), per the
+    spec's privacy rationale: a count on an already-per-user document, never a user_id on `analyses`.
+    The previous `usage_daily` collection and its 429 hard block are gone (collection dropped).
+  - Exhausting the day's allowance is **not** a block: `launch_free_daily_ok` simply stops feeding
+    `admin_bypass`, so the request falls through to free credits, then the wallet (drained wallet =>
+    the ordinary 402; funded wallet => it just pays). `/analyze` reports
+    `launch_free_active: launch_free_daily_ok`, i.e. what happened on THIS run.
+  - `/wallet/balance` returns `launch_free_active`, `launch_free_daily_remaining` (null outside the
+    window) and `launch_free_daily_cap`; `enforcement_enabled` stays off only while remaining > 0.
+- Frontend: Analyze screen shows `FREE DURING LAUNCH · 7 OF 10 FREE TODAY` under the ticker input
+  (testID `launch-free-countdown`, wallet now fetched on mount/focus rather than only after a ticker is
+  picked) plus `N of 10 free today` above the execute CTA (testID `launch-free-cta-note`). WalletCard
+  still replaces the +$5/+$10/+$25 buttons with the FREE DURING LAUNCH banner — countdown replaces
+  purchase UI, never sits beside it.
+- Verified: 19/19 in `tests/test_launch_free.py` (serial, `RUN_LAUNCH_FREE_E2E=1`) covering helpers,
+  counter increment, 11th-run fall-through to 402, funded account paying past the allowance, a
+  **simulated day rollover** granting a fresh 10, and admin staying unlimited with a count of 60.
+  Full suite 234 passed / 9 skipped. `LAUNCH_FREE_UNTIL` left unset; wallet docs cleaned of test state.
+
+## iOS blockers 1-5 (2026-06-19, session 9, IOS_BLOCKERS_ALL_SIX.md) — DONE
+- **1. `DELETE /api/account`** added right after `/auth/me`, verbatim from the spec: deletes the user
+  doc + `wallets` doc for `user:<id>`, keeps `payments` / `wallet_ledger` (financial recordkeeping),
+  keeps analyses (never linked to identity). The old bearer token dies with the user record because
+  `get_current_user` looks the user up on every request — proven by test, not assumed.
+  Frontend: `AccountCard` has a two-tap `DELETE ACCOUNT` (testID `delete-account-button`) that calls
+  `api.deleteAccount()` then signs out locally; inline confirm + error text (Alert is a no-op on web).
+- **2. Sign in with Apple is real now**: `au.verify_apple_id_token(token, audience, jwks)` replaces
+  `verify_apple_id_token_stub` (JWKS kid match, RS256 signature, issuer + audience + expiry, never
+  raises). `server.fetch_apple_jwks()` caches Apple's keys for an hour and is isolated so the one
+  untestable thing (the network fetch) is separate from the crypto. `/auth/apple` now 401s an invalid
+  token and 502s a JWKS fetch failure; it still 501s until `APPLE_SERVICES_ID` is set — **user must
+  set their real Apple Services ID**.
+- **3. Privacy Policy link** in `AccountCard` -> `https://tradingagents.in/privacy.html`
+  (testID `privacy-policy-link`). The same URL still has to go into App Store Connect's own field.
+- **4. Privacy manifest**: `frontend/app.json` `ios.privacyManifests` declares
+  `NSPrivacyAccessedAPICategoryUserDefaults` with reason `CA92.1` (AsyncStorage/SecureStore). JSON
+  re-validated after the edit.
+- **5. Reviewer login: NOT APPLICABLE — the mechanism does not exist in this repo.** There is no
+  `PLAYSTORE_REVIEWER_IDENTIFIERS` / `PLAYSTORE_REVIEWER_FIXED_OTP` anywhere (the spec assumed an
+  earlier Play Store doc that was never applied here). The only bypass is `ADMIN_IDENTIFIERS`
+  (`+918446307145`), which does not solve OTP delivery for a reviewer. Still an open blocker.
+- **6. IAP: deliberately NOT built** per the spec and the user's instruction (needs real App Store
+  Connect consumable product IDs first). The launch-free window is the interim cover.
+- Tests: new `tests/test_ios_blockers.py` — 10 Apple tests using a REAL per-class RSA keypair
+  (valid token, wrong audience, non-Apple issuer, expired, unknown kid, **forged signature from a
+  different private key**, garbage, empty JWKS, no-email token, no-sub token) + 4 delete-account tests
+  (user+wallet gone, old token 401, payments retained, clean re-signup, unauthenticated 401).
+  `tests/test_auth.py` placeholder assertion updated to the new signature. Full suite: 249 passed,
+  9 skipped. Note: `test_wallet_sanity_iter12` / `test_wallet_razorpay_admin` intermittently collide
+  under xdist because they share the same admin user — pre-existing, passes in isolation.

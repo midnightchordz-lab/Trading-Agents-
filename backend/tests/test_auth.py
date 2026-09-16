@@ -80,7 +80,7 @@ def test_session_token_garbage_fails():
 def test_placeholders_return_none():
     assert auth.send_otp_stub("+14155550134", "phone", "123456") is None
     assert auth.verify_google_id_token_stub("fake", "client-id") is None
-    assert auth.verify_apple_id_token_stub("fake", "service-id") is None
+    assert auth.verify_apple_id_token("fake", "service-id", []) is None
 
 
 def test_parse_admin_identifiers_normalizes_phone():

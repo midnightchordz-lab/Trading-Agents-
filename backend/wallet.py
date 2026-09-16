@@ -63,13 +63,42 @@ PRICES = {
 # list — a client can never name its own price.
 TOPUP_PACKS = [5.0, 10.0, 25.0]
 
+# How many free analyses the launch-free window grants per user, per day —
+# unlimited-free-with-no-cap has real, unbounded cost exposure (nothing
+# stops scripted abuse while analyses cost nothing); a daily cap closes
+# that gap while staying generous. Deliberately tracked on the wallet
+# document (already per-user, already tracks free_credits_remaining) —
+# NOT on the analyses collection, which is deliberately not linked to user
+# identity per the Privacy Policy. This tracks a count, not which tickers
+# were analyzed, so it doesn't touch that commitment at all.
+LAUNCH_FREE_DAILY_CAP = 10
+
+
+def launch_free_daily_state(stored_date: str, stored_count, today: str) -> tuple:
+    """Normalizes the stored per-day allowance counter to `today`.
+
+    A stored date that isn't today means the allowance has already rolled
+    over, so the count starts from zero again — the rollover is *derived*
+    from the date on every read, never from a scheduled job that could fail
+    to run. A missing or nonsense count reads as zero, so bad data can never
+    grant extra free runs."""
+    try:
+        count = max(0, int(stored_count or 0))
+    except (TypeError, ValueError):
+        count = 0
+    if stored_date != today:
+        return today, 0
+    return today, count
+
+
+def has_launch_free_daily_quota(count_today: int) -> bool:
+    """False once the day's allowance is spent — the caller then falls through
+    to normal billing (free credits, then wallet), it is not a hard block."""
+    return count_today < LAUNCH_FREE_DAILY_CAP
+
+
 # Every new account gets this many analyses before the wallet is needed.
 FREE_CREDITS_ON_SIGNUP = 10
-
-# During the launch-free window every analysis is free, so a per-day cap is
-# what stops one enthusiastic (or scripted) account from burning the whole LLM
-# budget in an afternoon. Counted per account per UTC day; admins are exempt.
-LAUNCH_FREE_DAILY_LIMIT = 10
 
 
 def should_use_free_credit(free_credits_remaining: Optional[int]) -> bool:

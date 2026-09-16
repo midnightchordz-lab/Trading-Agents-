@@ -179,9 +179,9 @@ export type WalletBalance = {
    *  purchase UI may be shown (an external payment path for digital content
    *  is what Apple's 3.1.1 prohibits, whether or not it charges today). */
   launch_free_active?: boolean;
-  /** Runs left today while the launch window is open (null otherwise). */
-  launch_free_daily_limit?: number | null;
-  launch_free_runs_left?: number | null;
+  /** Powers the on-screen countdown; remaining is null outside the window. */
+  launch_free_daily_remaining?: number | null;
+  launch_free_daily_cap?: number;
 };
 
 export type TopupOrder = { order_id: string; amount: number; currency: string; checkout_url: string };
@@ -276,4 +276,5 @@ export const api = {
     }),
   authMe: (token: string) =>
     j<SessionUser>(`/auth/me`, { headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` } }),
+  deleteAccount: () => j<{ deleted: boolean }>(`/account`, { method: "DELETE" }),
 };

@@ -160,8 +160,6 @@ export default function AnalyzeScreen() {
         const msg: string = e?.message || "Something went wrong. Try again.";
         if (msg.toLowerCase().includes("insufficient balance")) {
           Alert.alert("Add funds to continue", msg);
-        } else if (msg.toLowerCase().includes("daily limit")) {
-          Alert.alert("That's today's limit", msg);
         } else {
           Alert.alert("Couldn't start the analysis", msg);
         }
@@ -181,6 +179,8 @@ export default function AnalyzeScreen() {
   const freeCredits = wallet?.free_credits_remaining ?? 0;
   const needsFunds =
     !!wallet?.enforcement_enabled && analysisPrice > 0 && (wallet?.balance ?? 0) < analysisPrice;
+  // Only set while the launch-free window is open.
+  const launchFreeLeft = wallet?.launch_free_active ? wallet?.launch_free_daily_remaining ?? null : null;
 
   const refreshWallet = useCallback(async () => {
     try {
@@ -190,15 +190,19 @@ export default function AnalyzeScreen() {
     }
   }, []);
 
+  // Fetched on mount (not only after picking a ticker) so the launch-free
+  // countdown is visible before anyone spends a run. The focus effect below
+  // covers every later change (a top-up, a spent run).
   useEffect(() => {
-    if (selected) refreshWallet();
-  }, [selected, refreshWallet]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    refreshWallet();
+  }, [refreshWallet]);
 
   // Picking up a top-up made on the Agents tab.
   useFocusEffect(
     useCallback(() => {
-      if (selected) refreshWallet();
-    }, [selected, refreshWallet])
+      refreshWallet();
+    }, [refreshWallet])
   );
 
   const showResults = !selected && query.trim().length > 0 && (results.length > 0 || searching);
@@ -250,6 +254,14 @@ export default function AnalyzeScreen() {
             </Pressable>
           ) : null}
         </View>
+
+        {/* Launch-free countdown — sits with the ticker input so people see
+            what's left before they spend a run, not after. */}
+        {launchFreeLeft != null ? (
+          <Text testID="launch-free-countdown" style={styles.launchFreeCountdown}>
+            {`FREE DURING LAUNCH · ${launchFreeLeft} OF ${wallet?.launch_free_daily_cap ?? 10} FREE TODAY`}
+          </Text>
+        ) : null}
 
         {showResults ? (
           <View style={styles.resultsBox}>
@@ -447,6 +459,10 @@ export default function AnalyzeScreen() {
               <Text testID="low-balance-note" style={styles.lowBalanceNote}>
                 {`Balance ${wallet?.symbol || "$"}${(wallet?.balance ?? 0).toFixed(2)} — add funds on the Agents tab to run this.`}
               </Text>
+            ) : launchFreeLeft != null ? (
+              <Text testID="launch-free-cta-note" style={styles.freeCreditsNote}>
+                {`${launchFreeLeft} of ${wallet?.launch_free_daily_cap ?? 10} free today`}
+              </Text>
             ) : freeCredits > 0 ? (
               <Text testID="free-credits-note" style={styles.freeCreditsNote}>
                 {`${freeCredits} free ${freeCredits === 1 ? "analysis" : "analyses"} left`}
@@ -485,6 +501,13 @@ export default function AnalyzeScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
+  launchFreeCountdown: {
+    fontFamily: fonts.monoBold,
+    fontSize: 10.5,
+    letterSpacing: 1,
+    color: colors.onSurfaceTertiary,
+    marginTop: spacing.sm,
+  },
   header: {
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.md,
