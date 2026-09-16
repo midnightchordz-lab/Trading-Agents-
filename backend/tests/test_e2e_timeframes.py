@@ -22,7 +22,7 @@ def analysis():
     deadline = time.time() + 180
     doc = None
     while time.time() < deadline:
-        g = requests.get(f"{BASE_URL}/api/analysis/{aid}", timeout=30)
+        g = requests.get(f"{BASE_URL}/api/analysis/{aid}", headers=AUTH_HEADERS, timeout=30)
         assert g.status_code == 200, f"GET analysis failed: {g.status_code}"
         doc = g.json()
         if doc.get("status") == "completed":

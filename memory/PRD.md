@@ -355,3 +355,110 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
   `tests/test_auth.py` placeholder assertion updated to the new signature. Full suite: 249 passed,
   9 skipped. Note: `test_wallet_sanity_iter12` / `test_wallet_razorpay_admin` intermittently collide
   under xdist because they share the same admin user — pre-existing, passes in isolation.
+
+## Security audit + fixes (2026-06-19, session 9) — DONE
+Audit verdict was FAIL / DO-NOT-LAUNCH with two CONFIRMED HIGH findings. All three fixed and
+independently re-verified by the testing agent (iteration_16, 274 passed / 9 skipped).
+- **SEC-001 (HIGH) privilege escalation -> unlimited free paid usage.** `/pay/order`'s
+  `resolve_payment_customer` wrote the caller-supplied email/phone straight onto their own user doc, and
+  `au.is_admin` matches `user.phone` / `user.email` against `ADMIN_IDENTIFIERS` — so ANY signed-in user
+  could send `{"phone": "+918446307145"}` and inherit the owner's billing bypass. **Introduced by me**
+  when adding the Razorpay payment-link contact requirement. Fix: unverified contact now goes to
+  `billing_email` / `billing_phone` and NEVER overwrites the verified sign-in identity (which only the
+  OTP / Google / Apple flows set). Also cleaned two already-escalated accounts
+  (`users.update_many({phone: admin, id: !/^admin-/}, {$unset: {phone}})`) — re-count now 0.
+  **Rule going forward: never write to `users.email` / `users.phone` outside a verified auth flow.**
+- **SEC-002 (HIGH) unauthenticated data destruction.** `GET /analysis/{id}`, `GET /history` and
+  `DELETE /analysis/{id}` had no auth: anyone could enumerate every analysis and delete any of them.
+  All three now `Depends(get_current_user)` (401 otherwise). Delete is deliberately NOT per-user —
+  history is a shared cache, so an owner check would 403 people deleting rows their own history shows;
+  `owner_hash` (HMAC of the account id with JWT_SECRET, never returned to clients, projected out of
+  both read endpoints) is now recorded on new analyses so per-account history can be enabled later
+  without a migration. **Making history private is an open product decision.**
+- **SEC-003 (MEDIUM) forgeable sessions.** `JWT_SECRET` fell back to the in-repo default
+  `dev-only-change-me`; combined with the recurring `.gitignore` `.env` exclusion that nearly shipped.
+  Now fails closed: the app refuses to start when auth is enabled and the secret is missing/default.
+- Hardening: CORS `allow_credentials` -> False (bearer tokens only, never cookies).
+- Test updates: existing e2e tests now send `AUTH_HEADERS` to the newly authenticated endpoints, and the
+  two contact-persistence tests assert `billing_phone` with `phone is None`.
+- Accepted/left open: Razorpay-for-digital-content vs Apple IAP, no reviewer login, `.gitignore`
+  regenerating its `.env` exclusion (platform-side), `server.py` now 2264 lines.
+
+## Apple IAP + private history + server.py refactor (2026-06-20, session 10) — DONE
+
+Three things, in the order the user picked them.
+
+### 1. Apple In-App Purchase on iOS, via RevenueCat (the last App Store blocker)
+Razorpay for wallet credit is an automatic rejection on iOS (guideline 3.1.1 — digital content
+consumed in-app must use Apple's IAP). Android and Web keep Razorpay untouched.
+- `backend/iap.py` — product-id → USD map (`credits_5`/`credits_10`/`credits_25` = 5/10/25, the same
+  packs as Razorpay), webhook auth compare, and `classify_event()` as a pure function so the
+  "what may credit" decision is unit-testable: only `NON_RENEWING_PURCHASE` from `APP_STORE` /
+  `MAC_APP_STORE` with a known product and a `user:<id>` App User ID credits. Renewals, Play Store,
+  Stripe, unknown products and anonymous ids never do.
+- `GET /api/pay/iap/config` → `{enabled, ios_api_key, packs}`. The public SDK key is served from the
+  backend, NOT bundled, so it can be rotated without a new App Store build. Reports `enabled: false`
+  and an empty key until both env vars are set.
+- `POST /api/pay/iap/webhook` — the ONLY thing that credits an Apple purchase. The app's own purchase
+  callback is never trusted. Auth is the dashboard-configured `Authorization` header value
+  (`REVENUECAT_WEBHOOK_AUTH`), compared in constant time; with no secret set NOTHING is accepted.
+  Credits via `credit_iap_once()`, which shares `wallet_ledger` (and its unique `payment_id` index)
+  with Razorpay — one place in the whole system a balance can grow — keyed `apple:<transaction_id>`,
+  so RevenueCat's at-least-once delivery and duplicate event ids both credit exactly once.
+- `frontend/src/iap.ts` — `react-native-purchases@10.9.1` is required LAZILY inside try/catch:
+  it's a native module, absent in Expo Go and on web, and an unavailable module must degrade to
+  "purchases off on this build", never crash the wallet screen. Configured with `user:<id>` only
+  after sign-in (the App User ID is what says whose wallet a real payment credits); `resetIap()`
+  on sign-out so the next account can't inherit it.
+- `WalletCard.tsx` — on iOS renders the StoreKit packs, or an explanatory line when IAP isn't
+  configured/available. A Razorpay button can never render on iOS now.
+- **Still needed from the app owner** (feature is inert until then): App Store Connect Consumable
+  products with those exact ids, a RevenueCat project wired to the App Store app, then
+  `REVENUECAT_IOS_KEY` (iOS public SDK key) in `backend/.env`, and the generated
+  `REVENUECAT_WEBHOOK_AUTH` pasted into RevenueCat → Integrations → Webhooks
+  (URL `<deployed>/api/pay/iap/webhook`). Cannot be tested in Expo Go — needs a build.
+- Tests: `backend/tests/test_iap.py` (24). Webhook secret is set, so crediting/idempotency/
+  ignore/reject paths are covered against the real running backend.
+
+### 2. History is now private per account (was a product decision left open by the security audit)
+Any signed-in account could previously read, open and delete every analysis anyone had run.
+- `deps.own_analyses_filter(user)` = `owner_hash` match OR `viewer_hashes` contains the caller.
+  `viewer_hashes` is the new part: a free re-check serves ANOTHER account's cached document, and
+  from the caller's side that was still their own re-check — so `/analyze` now `$addToSet`s their
+  hash onto the cached doc, keeping it visible and openable without duplicating it.
+- `/history` and `/analysis/{id}` are filtered; a foreign id returns **404, not 403**, so a real id
+  is indistinguishable from a made-up one. Both projections strip `owner_hash` and `viewer_hashes`
+  (the cache-hit response leaked `owner_hash` before — fixed).
+- DELETE deletes only runs you own; for a cache-served row it just `$pull`s your viewer mark, so
+  deleting from your history can't destroy someone else's record or the shared re-check cache.
+- Legacy analyses (no `owner_hash`) are visible to nobody, which is the safe direction.
+- Tests: `backend/tests/test_private_history.py` (13, two-account Alice/Bob).
+
+### 3. server.py refactored: 2387 lines → 97
+Pure structural move, no behaviour change (all 312 tests green before and after).
+- `core.py` (36) — env, logging, Mongo handle, model config, `now_iso`. Imports nothing local, so
+  no cycle is possible.
+- `market_data.py` (377) — all Yahoo feeds + headline sentiment.
+- `pipeline.py` (599) — prompts, parsers, grounding gate, `run_analysis`, i18n directive.
+- `deps.py` (200) — auth config + session dependencies, wallet/admin/free-credit reads,
+  `owner_hash_for`, `own_analyses_filter`. The JWT fail-closed check moved here and still fires on
+  `import server`.
+- `routes/market.py` (107), `routes/analysis.py` (213), `routes/auth_routes.py` (271),
+  `routes/payments.py` (543), `routes/portfolio.py` (137) — each owns an `api_router`, all included
+  by `server.py`.
+- Tests that reached into `server` internals now import the real module (`pipeline`,
+  `market_data`, `deps`, `routes.analysis`); the source-scanning privacy tests iterate
+  `BACKEND_SOURCES` so they can't be defeated by moving code to a new file.
+- Also fixed a genuinely flaky test: `test_security_fixes_iter16.teardown_module` deleted ALL
+  `^TEST_sec16-` users, wiping the other xdist worker's in-use account ("User not found" 401).
+  It now only removes ids that process created.
+
+### Still open
+- Live P/L for the (hidden) Portfolio tab. RTL layout support.
+
+### Test-suite note (2026-06-20)
+338 passed / 9 skipped when green. The pipeline-dependent e2e tests
+(`test_wallet_sanity_iter12`, `test_tradingagents`, `test_pay_links_iter14`) are LOAD-flaky under
+xdist: ~1-2 of them fail in a different place on each full run and every one of them passes in
+isolation. Cause is external rate limiting (Yahoo + the LLM + Razorpay) when 380 tests fire real
+analyses in parallel, not app behaviour. Re-run the failing file alone before investigating.

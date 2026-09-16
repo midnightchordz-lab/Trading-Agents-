@@ -14,15 +14,21 @@ import {
 import { WebView } from "react-native-webview";
 import { useFocusEffect } from "expo-router";
 import { colors, fonts, spacing, BORDER, TERMINAL } from "@/src/theme";
-import { api, WalletBalance } from "@/src/api";
+import { api, IapPack, WalletBalance } from "@/src/api";
 import { getWalletDeviceId } from "@/src/wallet";
+import { useAuth } from "@/src/auth";
+import { buyIapPack, IapState, isUserCancelled, prepareIap } from "@/src/iap";
 
 // Real Razorpay top-ups. The app never sees the key secret and never credits
 // anything itself: it asks the backend for a Razorpay-hosted payment link,
 // opens it, then polls the backend, which verifies with Razorpay before
 // crediting.
 
+const IS_IOS = Platform.OS === "ios";
+
 export function WalletCard() {
+  const { user } = useAuth();
+  const [iap, setIap] = useState<IapState | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [wallet, setWallet] = useState<WalletBalance | null>(null);
   const [busy, setBusy] = useState(false);
@@ -148,6 +154,51 @@ export function WalletCard() {
   const freeCredits = wallet?.free_credits_remaining ?? 0;
   const launchFree = wallet?.launch_free_active === true;
 
+  // iOS must sell through Apple; StoreKit is prepared only once an account is
+  // known, because RevenueCat's App User ID is what decides whose wallet a
+  // real payment credits.
+  useEffect(() => {
+    if (!IS_IOS || launchFree || !user?.id) return;
+    let cancelled = false;
+    prepareIap(user.id)
+      .then((s) => !cancelled && setIap(s))
+      .catch(() => !cancelled && setIap({ available: false, packs: [], reason: "error" }));
+    return () => {
+      cancelled = true;
+    };
+  }, [launchFree, user?.id]);
+
+  // Apple takes the money, then RevenueCat's signed webhook tells our backend
+  // to credit — so the only honest way to know it landed is to watch the
+  // server balance. Nothing is ever added client-side.
+  const buyWithApple = async (pack: IapPack) => {
+    if (!deviceId) return;
+    const before = wallet?.balance ?? 0;
+    setBusy(true);
+    try {
+      await buyIapPack(pack.product_id);
+      for (let i = 0; i < 12; i++) {
+        await new Promise((r) => setTimeout(r, 2500));
+        const fresh = await api.getWalletBalance(deviceId);
+        setWallet(fresh);
+        if (fresh.balance > before + 0.001) {
+          Alert.alert("Wallet topped up", `Your balance is now ${fresh.symbol}${fresh.balance.toFixed(2)}.`);
+          return;
+        }
+      }
+      Alert.alert(
+        "Purchase confirmed",
+        "Apple has your payment. Your balance will appear here within a minute — pull to refresh."
+      );
+    } catch (e: unknown) {
+      if (!isUserCancelled(e)) {
+        Alert.alert("Purchase didn't complete", (e as Error)?.message || "Nothing was charged. You can try again.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <View testID="wallet-card" style={styles.card}>
       <View style={styles.headerRow}>
@@ -180,6 +231,32 @@ export function WalletCard() {
         <View testID="launch-free-banner" style={styles.launchFreeBox}>
           <Text style={styles.launchFreeText}>FREE DURING LAUNCH</Text>
         </View>
+      ) : IS_IOS ? (
+        // Apple only. A Razorpay button must never render here, configured or
+        // not — guideline 3.1.1.
+        iap?.available ? (
+          <View style={styles.topUpRow}>
+            {iap.packs.map((pack) => (
+              <Pressable
+                key={pack.product_id}
+                testID={`iap-topup-${pack.amount}`}
+                disabled={busy}
+                onPress={() => buyWithApple(pack)}
+                style={[styles.topUpBtn, busy && styles.topUpBtnDisabled]}
+              >
+                <Text style={styles.topUpText}>{`+${symbol}${pack.amount.toFixed(0)}`}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : (
+          <View testID="iap-unavailable" style={styles.topUpRow}>
+            <Text style={styles.priceNote}>
+              {iap?.reason === "needs_native_build"
+                ? "App Store purchases need the installed build — they can't run in Expo Go."
+                : "App Store purchases aren't switched on yet."}
+            </Text>
+          </View>
+        )
       ) : (
         <View style={styles.topUpRow}>
           {packs.map((amt) => (
@@ -203,9 +280,13 @@ export function WalletCard() {
       ) : null}
       {launchFree ? null : (
         <Text style={styles.placeholderNote}>
-          {wallet?.payments_live
-            ? "Secure payment page hosted by Razorpay."
-            : "Payments aren't switched on yet."}
+          {IS_IOS
+            ? iap?.available
+              ? "Purchased securely through the App Store."
+              : "Purchases are handled by the App Store."
+            : wallet?.payments_live
+              ? "Secure payment page hosted by Razorpay."
+              : "Payments aren't switched on yet."}
         </Text>
       )}
 

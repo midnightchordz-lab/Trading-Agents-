@@ -42,6 +42,10 @@ RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 _client = MongoClient(MONGO_URL)
 _db = _client[DB_NAME]
 
+# Every backend source file, so the source-scanning privacy tests can't be
+# quietly defeated by moving code into a new module.
+BACKEND_SOURCES = sorted(Path("/app/backend").glob("*.py")) + sorted(Path("/app/backend/routes").glob("*.py"))
+
 
 # ---------------------------- helpers ----------------------------
 
@@ -237,7 +241,9 @@ class TestRazorpayOrder:
             r2 = requests.post(f"{BASE_URL}/api/pay/order", headers=headers,
                                json={"amount": 5, "phone": "+15550001234"}, timeout=20)
             assert r2.status_code == 200, r2.text
-            assert _db.users.find_one({"id": uid})["phone"] == "+15550001234"
+            saved = _db.users.find_one({"id": uid})
+            assert saved.get("billing_phone") == "+15550001234"
+            assert saved.get("phone") is None  # verified identity untouched
 
             # Remembered: no contact needed on the next top-up.
             r3 = requests.post(f"{BASE_URL}/api/pay/order", headers=headers,
@@ -345,22 +351,19 @@ class TestPrivacy:
         assert not offending, f"analyses docs with user_id: {offending}"
 
     def test_require_admin_exists_but_is_not_wired_to_any_route(self):
-        import server as srv
-        assert hasattr(srv, "require_admin"), "require_admin missing from server.py"
-        # crude but effective: no `Depends(require_admin)` call in the module source
-        src = Path(srv.__file__).read_text()
-        assert "Depends(require_admin)" not in src, (
-            "require_admin is currently wired to a route — spec says it must be unused"
-        )
+        import deps
+        assert hasattr(deps, "require_admin"), "require_admin missing from deps.py"
+        # crude but effective: no `Depends(require_admin)` call anywhere
+        for path in BACKEND_SOURCES:
+            assert "Depends(require_admin)" not in path.read_text(), (
+                f"require_admin is wired to a route in {path.name} — spec says it must be unused"
+            )
 
     def test_admin_phone_is_not_hardcoded_outside_env_default(self):
         """+918446307145 must appear ONLY on the ADMIN_IDENTIFIERS = ... default,
         never inline in a route handler or other module."""
         needle = "+918446307145"
-        for path in (Path("/app/backend/server.py"),
-                     Path("/app/backend/auth.py"),
-                     Path("/app/backend/wallet.py"),
-                     Path("/app/backend/razorpay_pay.py")):
+        for path in BACKEND_SOURCES:
             txt = path.read_text()
             hits = [
                 i for i, line in enumerate(txt.splitlines(), start=1)

@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 16 — Security-audit-fix verification (SEC-001 HIGH, SEC-002 HIGH, SEC-003 MEDIUM). Independent black-box re-testing confirms all three findings are CLOSED. New file /app/backend/tests/test_security_fixes_iter16.py adds 25 focused assertions covering the exact attack vectors called out by the audit; all 25 pass. Full pytest suite: 274 passed / 9 skipped / 0 failed serially (249 prior + 25 new). SEC-001: POST /api/pay/order with the admin identifier (+918446307145) — plain, whitespace-padded, no-+, dashed, spaced, and uppercase-email variants — leaves the caller's verified user.phone/user.email UNTOUCHED (the value now lands only in billing_phone/billing_email); GET /api/wallet/balance for that account still returns is_admin:false; the real admin account (id 'admin-+918446307145', verified phone = admin id) still gets is_admin:true & enforcement_enabled:false. DB re-count: 0 non-admin users hold the admin identifier in a verified field (matches the main-agent cleanup). SEC-002: GET /api/history, GET /api/analysis/{id}, and DELETE /api/analysis/{id} return 401 with no header, 401 with a garbage/malformed token, and 401 with a token signed by the wrong secret. With a valid session all three work; /history and /analysis/{id} response bodies contain NO owner_hash and /history contains NO messages field. Delete returns {ok:true} and a subsequent GET returns 404. SEC-003: launching `python -c 'import server'` with JWT_SECRET='' or JWT_SECRET='dev-only-change-me' and AUTH_REQUIRED_ENABLED=true raises RuntimeError('JWT_SECRET must be set when auth is enabled — refusing to start with a default secret') — verified both via subprocess in pytest and by hand. The running backend itself was NOT restarted and .env was NOT touched. Payment regression: POST /api/pay/order returns 200 with plink_/rzp.io checkout_url, forged callback signature and empty callback both behave (400/200 with a 'nothing was charged' page — never 422), /api/pay/webhook 400s an invalid signature, /api/pay/status/{unknown} 404s. CORS: allow_credentials is false with allow_origins=['*'] — safe pairing. Frontend smoke: mobile viewport loads the sign-in gate cleanly (no red screen, 0 console errors); /app/frontend/src/api.ts sends Bearer token on every j<T> call, so signed-in History/Detail/Delete flows will pass through auth transparently. No code changes were made — testing only.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_security_fixes_iter16.py",
+    "/app/test_reports/pytest/iteration_16_security.xml",
+    "/app/test_reports/pytest/iteration_16_full.xml"
+  ],
+  "action_items": [
+    "None — all three audit findings verified closed and full regression is green. Ready to sign off on the security fix.",
+    "Optional carry-over from prior iterations: server.py is still ~2264 lines (>700 guideline). Not caused by this fix; skip unless the main agent wants to schedule a split."
+  ],
+  "critical_code_review_comments": [
+    "server.py:1222 resolve_payment_customer correctly separates the caller-supplied identifiers into billing_email/billing_phone and never writes them into user.email/user.phone unless those verified fields are already empty — the only path that could still land the admin value into a 'verified' slot is when a brand-new account has NO verified phone at all (verified test body[0..4]: phone stayed None). is_admin() only matches on user.phone/user.email, so billing_* does not confer admin. Fix is correct.",
+    "server.py:951 fail-closed guard fires for both empty and the specific 'dev-only-change-me' default; both are covered by TestSEC003FailClosed.",
+    "server.py:2156/2164/2170 all three endpoints depend on get_current_user (not require_user) which hard-401s an anonymous request — matches the audit ask (history was previously public).",
+    "server.py:2165/2157 correctly project out owner_hash (and messages on history) — no leak of the internal per-owner digest.",
+    "server.py:2170 delete_analysis is deliberately not owner-scoped (documented in the docstring as 'shared free-recheck cache'); the audit finding was 'unauthenticated', not 'un-owned', so this is acceptable.",
+    "auth.py:146 is_admin still checks phone AND email against the same normalized set — combined with the resolve_payment_customer split, no /pay/order-supplied value can ever satisfy this check on a non-admin account."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_security_fixes_iter16.py (new; 25 tests)"
+  ],
+  "success_rate": {
+    "backend": "100% (274/274 non-skipped tests pass, 9 pre-existing skips)",
+    "frontend": "smoke only — app loads, no errors"
+  },
+  "seed_data_creation": "Ephemeral TEST_sec16-* users, wallets, and one analysis doc, all cleaned up in teardown_module. One live Razorpay test-mode payment link was created by TestPaymentRegression and left unpaid (per iter15 protocol).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All three security-audit findings (SEC-001 HIGH privilege escalation via /pay/order, SEC-002 HIGH unauth data destruction/disclosure on history/analysis, SEC-003 MEDIUM default-secret guard) are verified CLOSED as of iter 16. Regression file is /app/backend/tests/test_security_fixes_iter16.py — run with `pytest tests/test_security_fixes_iter16.py -o addopts=''` (25 tests, ~20s). Full suite is 274/9 skipped serially. Backend .env was NOT modified. Admin account for real-admin-still-admin assertions is 'admin-+918446307145'. If you need to sign in from the UI, follow /app/memory/test_credentials.md option 1 (flip AUTH_DEBUG_RETURN_OTP → restart → login → flip back → restart).",
+  "rca_of_issue": "N/A — no failures found. The audit fixes are correct at the code level and correctly enforced at the wire level."
+}

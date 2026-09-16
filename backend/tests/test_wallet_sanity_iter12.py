@@ -79,7 +79,7 @@ def test_analyze_spends_free_credit_and_cache_does_not():
     aid = r.json()["id"]
     # Wait until analysis is not running so caching can kick in on repeat.
     for _ in range(60):
-        rr = requests.get(f"{BASE_URL}/api/analysis/{aid}", timeout=15)
+        rr = requests.get(f"{BASE_URL}/api/analysis/{aid}", headers=AUTH_HEADERS, timeout=15)
         if rr.status_code == 200 and rr.json().get("status") != "running":
             break
         time.sleep(1)
@@ -121,7 +121,7 @@ def test_admin_bypass_does_not_spend_free_credit():
     assert r.status_code == 200, r.text
     aid = r.json()["id"]
     for _ in range(60):
-        rr = requests.get(f"{BASE_URL}/api/analysis/{aid}", timeout=15)
+        rr = requests.get(f"{BASE_URL}/api/analysis/{aid}", headers=AUTH_HEADERS, timeout=15)
         if rr.status_code == 200 and rr.json().get("status") != "running":
             break
         time.sleep(1)

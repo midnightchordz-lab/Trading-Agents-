@@ -1,5 +1,4 @@
 """Unit tests for parse_timeframes / fallback_timeframes (pure functions)."""
-import importlib.util
 import os
 import sys
 
@@ -20,11 +19,7 @@ sys.modules.setdefault("emergentintegrations", types.ModuleType("emergentintegra
 sys.modules.setdefault("emergentintegrations.llm", types.ModuleType("emergentintegrations.llm"))
 sys.modules["emergentintegrations.llm.chat"] = _stub_llm
 
-spec = importlib.util.spec_from_file_location("server", os.path.join(HERE, "server.py"))
-server = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(server)
-parse_timeframes = server.parse_timeframes
-fallback_timeframes = server.fallback_timeframes
+from pipeline import fallback_timeframes, parse_timeframes  # noqa: E402
 
 GOOD = '''{"short_term": {"decision": "BUY", "confidence": 70, "target_price": 105, "stop_loss": 95, "thesis": "Momentum favors a bounce this week."},
 "medium_term": {"decision": "HOLD", "confidence": 55, "target_price": null, "stop_loss": null, "thesis": "Range-bound until earnings."},

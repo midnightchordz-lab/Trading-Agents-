@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 17 — Apple IAP webhook + private-per-account history + server.py refactor (2387→97 lines, split into core/deps/market_data/pipeline + routes/*). All three ship green. pytest: 338 passed / 9 skipped / 0 failed serially (312 prior + 26 new refactor-regression tests in test_refactor_regression.py). IAP: test_iap.py (28 tests) all pass — /api/pay/iap/config returns {enabled:false, ios_api_key:'', packs:[credits_5→$5, credits_10→$10, credits_25→$25], currency:USD, symbol:$}, never leaks REVENUECAT_WEBHOOK_AUTH; /api/pay/iap/webhook 401s without or with a wrong Authorization header, credits the mapped USD amount on a valid NON_RENEWING_PURCHASE from APP_STORE tied to user:<id>, and is idempotent both on the RevenueCat event id (same id x3 credits once) and Apple's own transaction id (same txn under a fresh event id credits once); two genuinely different transactions both credit; RENEWAL/INITIAL_PURCHASE/PLAY_STORE/STRIPE are 200-ignored and credit nothing; unknown product id, $RCAnonymousID app_user_id, missing transaction_id → 400 and credit nothing; malformed JSON → 400 not 500; wallet_ledger row records source='apple_iap' and product_id. Private history: test_private_history.py (11 tests) all pass — /api/history only lists rows the caller owns or is a viewer on; Bob's analysis is NOT in Alice's /history and GETting it as Alice returns 404 (not 403); a viewer entry IS visible/openable; DELETE of own row deletes; DELETE of another account's row returns 404 AND the document survives; DELETE of a viewer-only row is 200, 404 for Alice afterwards, but Bob (owner) can still open it; owner_hash and viewer_hashes never appear in any response. Cache-hit visibility: I ran a real /analyze AAPL end-to-end as an authenticated user, verified verdict=HOLD + grounding + timeframes present, then re-ran the same symbol and confirmed served_from_cache:true, same analysis id, and it stayed in that account's /api/history with no owner_hash leak. Refactor regression: new /app/backend/tests/test_refactor_regression.py (26 tests) exercises every route family — market (/, /search, /quote, /chart, /ohlc, /news, /trending, /markets/{category} incl. unknown → 404), auth (/auth/me 401 vs 200, /auth/otp/request shape, /auth/apple), payments (/wallet/balance 401 vs 200 shape incl. iap_enabled:false, /pay/order amount + auth validation, /pay/status unknown → 404, /pay/webhook bad signature → 400, /pay/callback empty → 200 HTML, /pay/iap/config shape + secret non-leak), analysis (/history + /analysis/{id} + DELETE all 401 without token; /history 200 with no owner_hash/viewer_hashes leak), portfolio (/portfolio/optimize 200). Frontend smoke: mobile 390×844 viewport, sign-in via debug OTP works, ANALYZE tab renders the trending markets grid and symbol detail, HISTORY tab correctly shows '0 ANALYSES ON RECORD' for a brand-new account (private-per-account confirmed at UI level), ALERTS + PORTFOLIO + COMPARE tabs all render cleanly, AGENTS tab shows the WalletCard with testIDs wallet-card + topup-5 + topup-10 + topup-25 exactly as required (Razorpay branch on web, the iOS/IAP branch does not render on non-iOS) and 'Secure payment page hosted by Razorpay' copy. Zero red-screen errors and zero console errors across the whole flow. Backend .env was flipped AUTH_DEBUG_RETURN_OTP=true only for the frontend sign-in leg and set back to false after.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_refactor_regression.py",
+    "/app/backend/tests/test_iap.py",
+    "/app/backend/tests/test_private_history.py",
+    "/app/test_reports/pytest/iteration_17_iap_history.xml",
+    "/app/test_reports/pytest/iteration_17_regression.xml",
+    "/app/test_reports/pytest/iteration_17_full.xml"
+  ],
+  "action_items": [
+    "None — feature verified. Optional carry-over: server.py is 97 lines now (great), but /app/backend/deps.py and /app/backend/routes/payments.py were not re-checked for size; if any grew past ~700 lines during the split it may be worth another factor pass. Not blocking."
+  ],
+  "critical_code_review_comments": [
+    "iap.py:60 verify_webhook_auth uses hmac.compare_digest against WEBHOOK_AUTH and returns False when WEBHOOK_AUTH is empty — so a mis-configured deploy fails closed (nothing accepted) rather than open. Good.",
+    "iap.py:88-113 classify_event enforces both type==NON_RENEWING_PURCHASE and store∈APPLE_STORES BEFORE looking at the product id, so a Play Store event carrying a valid apple product id id still ignores. Correct.",
+    "routes/payments.py:483 credit_iap_once keys the ledger on 'apple:<transaction_id>' via the SAME unique index (payment_id) that Razorpay uses, so a balance can only ever be grown once per real payment regardless of which store paid it. Correct.",
+    "routes/payments.py:462 iap_config never puts WEBHOOK_AUTH in the response, and ios_api_key is only returned when configured() is true — so the empty-key deploy sends '', not the secret.",
+    "routes/analysis.py:173/185/193 (via /app/backend/routes/analysis.py) all three history endpoints depend on get_current_user (401 without a token) and project out owner_hash / viewer_hashes / messages — matches the iter16 audit lock-down and the new private-per-account design.",
+    "server.py is now 97 lines and only wires the routers, CORS and startup hooks; no route logic remains — matches the refactor brief and behaviour is preserved (26/26 regression tests pass and the full suite of 338 tests passes)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_refactor_regression.py (new, 26 tests)"
+  ],
+  "success_rate": {
+    "backend": "100% (338/338 non-skipped tests pass, 9 pre-existing skips — the 9 skips are all `@needs_secret` guards or Twilio trial number checks, unchanged from iter16)",
+    "frontend": "smoke: all 6 tabs render, no red screen, no console errors, wallet-card + topup-{5,10,25} testIDs present on web"
+  },
+  "seed_data_creation": "Ephemeral TEST_iap-* / TEST_hist-* users + wallets + analyses via test fixtures — all cleaned up by their own teardown_module hooks. Frontend sign-in created a handful of test-fe-* accounts + user:test-fe-* wallets which I then purged (287 test users + 153 test wallets removed) before finishing.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 17 status: IAP webhook + private history + server.py refactor are all verified green. Regression file is /app/backend/tests/test_refactor_regression.py — run with `pytest tests/test_refactor_regression.py -o addopts=''` (26 tests, ~10s). Full suite `pytest tests/ -o addopts=''` is 338/9 skipped serially, ~4m20s. If you sign in from the UI: /app/memory/test_credentials.md option 1 (flip AUTH_DEBUG_RETURN_OTP=true → restart backend → read the on-screen 'DEV MODE — code' from the OTP screen not your own POST because the frontend re-requests when the screen mounts → verify → flip back to false + restart). WalletCard on web lives at /agents (AGENTS tab); tapping the bottom nav tabs via `page.get_by_text('AGENTS')` did NOT work in Playwright — use direct URL navigation `page.goto(BASE+'/agents')`. AUTH_DEBUG_RETURN_OTP was set back to false at end of run — .env is clean.",
+  "rca_of_issue": "N/A — no failures found."
+}

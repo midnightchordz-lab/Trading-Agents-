@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import { storage } from "@/src/utils/storage";
 import { api, setAuthTokenGetter, SessionUser } from "@/src/api";
 import { consumeGoogleRedirect } from "@/src/googleAuth";
+import { resetIap } from "@/src/iap";
 
 // Session token lives in the secure (Keychain/Keystore) namespace — never in
 // plain AsyncStorage. SecureStore keys allow only alphanumerics, ".", "-", "_".
@@ -62,6 +63,9 @@ export function useAuthGate() {
 
   const signOut = useCallback(async () => {
     await clearStoredToken();
+    // Detach the Apple/RevenueCat identity too, or the next account signing in
+    // on this device would inherit the previous one's purchase id.
+    await resetIap();
     setUser(null);
   }, []);
 

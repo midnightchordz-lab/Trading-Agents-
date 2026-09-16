@@ -175,6 +175,10 @@ export type WalletBalance = {
   enforcement_enabled: boolean;
   is_admin?: boolean;
   payments_live: boolean;
+  /** iOS sells wallet credit through Apple In-App Purchase (App Store
+   *  guideline 3.1.1 forbids Razorpay for digital content consumed in-app).
+   *  False means the iOS purchase path isn't configured yet. */
+  iap_enabled?: boolean;
   /** Launch promotion — everything is free until the configured date, so no
    *  purchase UI may be shown (an external payment path for digital content
    *  is what Apple's 3.1.1 prohibits, whether or not it charges today). */
@@ -185,6 +189,16 @@ export type WalletBalance = {
 };
 
 export type TopupOrder = { order_id: string; amount: number; currency: string; checkout_url: string };
+
+export type IapPack = { product_id: string; amount: number };
+
+export type IapConfig = {
+  enabled: boolean;
+  ios_api_key: string;
+  packs: IapPack[];
+  currency: string;
+  symbol: string;
+};
 
 export type PaymentStatus = { order_id: string; status: string; balance: number };
 
@@ -256,6 +270,7 @@ export const api = {
       body: JSON.stringify({ device_id: deviceId, amount, ...(contact || {}) }),
     }),
   getPaymentStatus: (orderId: string) => j<PaymentStatus>(`/pay/status/${orderId}`),
+  getIapConfig: () => j<IapConfig>(`/pay/iap/config`),
   getAnalysis: (id: string) => j<Analysis>(`/analysis/${id}`),
   history: () => j<{ results: Analysis[] }>(`/history`),
   remove: (id: string) => j<{ ok: boolean }>(`/analysis/${id}`, { method: "DELETE" }),
