@@ -1017,6 +1017,18 @@ WALLET_ENFORCEMENT_ENABLED = os.environ.get("WALLET_ENFORCEMENT_ENABLED", "false
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 
 
+def public_base(request: Request) -> str:
+    """Absolute origin used for the Razorpay checkout + callback URLs. Derived
+    from the incoming request (honouring the ingress' forwarded headers) so
+    preview and production each point back at themselves — a stale
+    PUBLIC_BASE_URL baked into a deployed image would otherwise send paying
+    customers to the wrong host, where their order id doesn't exist. The env
+    var stays as a fallback for local/CLI use."""
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    return f"{proto}://{host}".rstrip("/") if host else PUBLIC_BASE_URL
+
+
 class WalletTopup(BaseModel):
     device_id: Optional[str] = None  # ignored for signed-in users (account-keyed wallet)
     amount: float  # in INR; must match one of wallet.TOPUP_PACKS
@@ -1139,7 +1151,7 @@ async def settle_payment(order: dict, payment_id: str) -> str:
 
 
 @api_router.post("/pay/order")
-async def create_topup_order(body: WalletTopup, user: Optional[dict] = Depends(require_user)):
+async def create_topup_order(body: WalletTopup, request: Request, user: Optional[dict] = Depends(require_user)):
     """Creates a Razorpay order for one of the fixed top-up packs and returns a
     hosted checkout URL. The amount is validated here — never taken on trust."""
     if not rzp.payments_configured():
@@ -1174,12 +1186,12 @@ async def create_topup_order(body: WalletTopup, user: Optional[dict] = Depends(r
         "order_id": order["id"],
         "amount": body.amount,
         "currency": wal.CURRENCY,
-        "checkout_url": f"{PUBLIC_BASE_URL}/api/pay/checkout/{order['id']}",
+        "checkout_url": f"{public_base(request)}/api/pay/checkout/{order['id']}",
     }
 
 
 @api_router.get("/pay/checkout/{order_id}", response_class=HTMLResponse)
-async def pay_checkout(order_id: str):
+async def pay_checkout(order_id: str, request: Request):
     """Hosted checkout page — opened in a WebView on native, a popup on web.
     Deliberately unauthenticated: it's a one-time, server-created order id and
     it carries no balance or account data."""
@@ -1189,7 +1201,7 @@ async def pay_checkout(order_id: str):
     return HTMLResponse(rzp.checkout_html(
         order_id=order_id,
         amount_paise=int(round(order["amount"] * 100)),
-        callback_url=f"{PUBLIC_BASE_URL}/api/pay/callback",
+        callback_url=f"{public_base(request)}/api/pay/callback",
         brand=mailer.EMAIL_FROM_NAME,
     ))
 
@@ -1883,6 +1895,15 @@ async def delete_analysis(analysis_id: str):
 
 
 app.include_router(api_router)
+
+
+@app.get("/health")
+async def health():
+    """Platform readiness probe. Deliberately app-level (not under /api) and
+    DB-free so a slow Mongo can't make the container look dead."""
+    return {"status": "ok"}
+
+
 
 app.add_middleware(
     CORSMiddleware,

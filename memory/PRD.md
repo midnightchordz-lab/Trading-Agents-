@@ -187,3 +187,28 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
 - Known trade-off: `LightweightChart` re-keys its WebView/iframe on the generated HTML, so the
   own-data LEVELS chart reloads (mild flicker) on each 30s tick. Fixing it needs a price-line
   injection path inside `LightweightChart`, which this spec's diff scope excluded.
+
+## Razorpay live-key swap + checkout hardening (2026-06-19, session 9) — DONE
+- New LIVE keys in `backend/.env` (`rzp_live_TcXwvcOkbzuvGv`), verified against the Razorpay API and by
+  creating a real $5 order. Webhook secret still empty (callback + `/api/pay/status` polling cover it).
+- **Root cause of the user's failed payments**: Razorpay rejected them with *"Payment blocked as website
+  does not match registered website(s)"* — the checkout host must be added under Razorpay Dashboard →
+  Account & Settings → Websites & API keys. Nothing was ever charged.
+- **Root cause of the "Couldn't start checkout · HTTP 502" alert**: that is our own error from
+  `/api/pay/order` when `rzp.create_order` raises. The deployed container still held the OLD (now
+  deactivated) keys, so Razorpay returned 401. Needs a redeploy, no code change.
+- Callback hardened: `/api/pay/callback` is now `api_route(["POST","GET"])` and reads the `razorpay_*`
+  fields defensively from form / JSON / query params. Razorpay only sends them on a *successful*
+  authorisation, so the old `Form(...)` signature showed customers a raw FastAPI 422 inside the checkout
+  WebView on cancel/failure. Cancels now render "Payment wasn't completed — nothing was charged" (200)
+  and mark the order failed; forged/unsigned attempts still 400; crediting still requires a valid
+  signature + a re-fetch from Razorpay. `checkout_html` now sets `redirect: true` (required for
+  `callback_url` to POST at all) and appends `?order_id=` so bodyless returns can be matched.
+- Checkout + callback URLs are now derived from the incoming request (`public_base()`, honouring
+  `x-forwarded-*`) instead of the static `PUBLIC_BASE_URL`, which was baked to the preview host and would
+  have sent paying customers to the wrong origin in production.
+- Deployment blockers fixed (via deployment_agent): root `.gitignore` was excluding `.env` / `.env.*` /
+  `*.env` from the deploy build context, and the platform readiness probe was 404ing — added an
+  app-level, DB-free `GET /health`. Re-scan came back with no blockers.
+- Tests: new `backend/tests/test_pay_callback.py` (6 cases); 37/37 pass across
+  test_pay_callback + test_razorpay + test_wallet + test_free_credits.
