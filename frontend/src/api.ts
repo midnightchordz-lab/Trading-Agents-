@@ -199,18 +199,32 @@ export type Analysis = {
   updated_at: string;
 };
 
+const GATEWAY_STATUSES = [502, 503, 504];
+
 async function j<T>(path: string, opts?: RequestInit): Promise<T> {
   const token = authTokenGetter ? await authTokenGetter() : null;
-  const res = await fetch(`${API}${path}`, {
-    ...opts,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(opts?.headers || {}),
-    },
-  });
+  const send = () =>
+    fetch(`${API}${path}`, {
+      ...opts,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(opts?.headers || {}),
+      },
+    });
+
+  let res = await send();
+  // A gateway status means the request never reached the API (cold start,
+  // restart, proxy hiccup) — the body is an HTML error page, so there's
+  // nothing useful to show the user. One quiet retry fixes almost all of them.
+  if (GATEWAY_STATUSES.includes(res.status)) {
+    await new Promise((r) => setTimeout(r, 1500));
+    res = await send();
+  }
   if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
+    let detail = GATEWAY_STATUSES.includes(res.status)
+      ? "The server isn't reachable right now. Try again in a few seconds."
+      : `HTTP ${res.status}`;
     try {
       const body = await res.json();
       detail = body?.detail || detail;

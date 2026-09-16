@@ -1224,8 +1224,9 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
             customer=customer,
         )
     except Exception as e:
-        logger.error(f"razorpay payment link creation failed: {e}")
-        raise HTTPException(status_code=502, detail="Couldn't start checkout — try again")
+        detail = getattr(e, "description", "") or str(e)
+        logger.error(f"razorpay payment link creation failed: {detail}")
+        raise HTTPException(status_code=502, detail=f"Couldn't start checkout — {detail or 'try again'}")
 
     await db.payments.insert_one({
         "razorpay_payment_link_id": link["id"],
