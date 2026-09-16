@@ -279,3 +279,18 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
   backend and would disturb the other xdist worker.
 - **To go live**: set `LAUNCH_FREE_UNTIL=YYYY-MM-DD` in `backend/.env` and redeploy. Currently UNSET,
   so billing is exactly as before.
+
+### Launch-free daily cap: 10 analyses/day (same session) — DONE
+- `wal.LAUNCH_FREE_DAILY_LIMIT = 10`. Enforced in `/analyze` **only while the launch window is open**
+  (outside it, normal wallet/free-credit billing is untouched) and admins are exempt.
+- Counter lives in `usage_daily` as `_id: "<wallet_key>:<YYYY-MM-DD>"` (UTC day, so it resets at
+  midnight UTC). `consume_daily_free_run()` increments atomically and rolls the increment back when it
+  lands over the cap — two concurrent requests can't both take the last slot, and a blocked attempt
+  doesn't eat one.
+- Over the cap => **429** "Daily limit reached — 10 free analyses per day during launch. Resets at
+  midnight UTC." The home screen now alerts on this (and on any other start-analysis failure — it
+  previously swallowed every error except "insufficient balance").
+- `/wallet/balance` adds `launch_free_daily_limit` and `launch_free_runs_left` (both null outside the
+  window); WalletCard shows "Free during launch — N of 10 analyses left today".
+- Verified: 12/12 in `tests/test_launch_free.py` (serial, `RUN_LAUNCH_FREE_E2E=1`), full suite
+  230 passed / 6 skipped, and the wallet card rendering confirmed by screenshot with the window on.

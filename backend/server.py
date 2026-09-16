@@ -1,5 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Header, Depends, Request
 from fastapi.responses import HTMLResponse
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -1075,6 +1076,32 @@ async def get_wallet_balance(device_id: str) -> float:
     return doc["balance"] if doc else 0.0
 
 
+def _utc_day() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+async def daily_free_runs_used(key: str) -> int:
+    doc = await db.usage_daily.find_one({"_id": f"{key}:{_utc_day()}"})
+    return int(doc.get("count") or 0) if doc else 0
+
+
+async def consume_daily_free_run(key: str, limit: int) -> bool:
+    """Atomic per-day counter for launch-free runs. Increments first and rolls
+    the increment back when it lands over the cap, so two concurrent requests
+    can't both slip through on the last remaining run — and a blocked attempt
+    doesn't eat a slot."""
+    doc = await db.usage_daily.find_one_and_update(
+        {"_id": f"{key}:{_utc_day()}"},
+        {"$inc": {"count": 1}, "$setOnInsert": {"created_at": now_iso()}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    if int(doc["count"]) > limit:
+        await db.usage_daily.update_one({"_id": doc["_id"]}, {"$inc": {"count": -1}})
+        return False
+    return True
+
+
 async def latest_completed_analysis_for(symbol: str, language: str = "en") -> Optional[dict]:
     """Most recent completed analysis document for a symbol IN THE REQUESTED
     LANGUAGE (full doc, not just the verdict) — used only for the wallet's
@@ -1096,6 +1123,11 @@ async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] =
     admin = is_admin(user)
     free_credits = await get_free_credits_remaining(user)
     launch_free = wal.is_launch_free_period(LAUNCH_FREE_UNTIL, datetime.now(timezone.utc))
+    daily_left = (
+        max(0, wal.LAUNCH_FREE_DAILY_LIMIT - await daily_free_runs_used(key))
+        if launch_free and not admin
+        else None
+    )
     return {
         "device_id": key,
         "balance": round(balance, 2),
@@ -1114,6 +1146,9 @@ async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] =
         "is_admin": admin,
         "payments_live": rzp.payments_configured(),
         "launch_free_active": launch_free,
+        # Only meaningful while the launch window is open.
+        "launch_free_daily_limit": wal.LAUNCH_FREE_DAILY_LIMIT if launch_free else None,
+        "launch_free_runs_left": daily_left,
     }
 
 
@@ -1950,7 +1985,22 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
     # During a configured launch-free window, EVERYONE gets this same
     # bypass — auto-expires on its own, no flag to remember to flip.
     launch_free_now = wal.is_launch_free_period(LAUNCH_FREE_UNTIL, datetime.now(timezone.utc))
-    admin_bypass = is_admin(user) or launch_free_now
+    is_admin_user = is_admin(user)
+    admin_bypass = is_admin_user or launch_free_now
+
+    # Free doesn't mean unlimited: each account gets a fixed number of runs per
+    # day while the launch window is open.
+    if launch_free_now and WALLET_ENFORCEMENT_ENABLED and not is_admin_user:
+        daily_key = wallet_key_for(user, body.device_id)
+        if not daily_key:
+            raise HTTPException(status_code=400, detail="device_id is required")
+        if not await consume_daily_free_run(daily_key, wal.LAUNCH_FREE_DAILY_LIMIT):
+            raise HTTPException(
+                status_code=429,
+                detail=(f"Daily limit reached — {wal.LAUNCH_FREE_DAILY_LIMIT} free analyses per day "
+                        "during launch. Resets at midnight UTC."),
+            )
+
     used_free_credit = False
     billed = WALLET_ENFORCEMENT_ENABLED and not admin_bypass
     if billed:

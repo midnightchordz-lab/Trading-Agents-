@@ -165,6 +165,61 @@ class TestLaunchFreeEndToEnd:
         assert _db.wallets.find_one({"device_id": f"user:{USER_ID}"})["balance"] == 0.0
         assert _db.users.find_one({"id": USER_ID})["free_credits_remaining"] == 0
 
+    def test_daily_cap_blocks_the_eleventh_run_and_reports_what_is_left(self):
+        future = (datetime.now(timezone.utc) + timedelta(days=30)).date().isoformat()
+        _set_launch_free(future)
+        _drain_wallet()
+        key = f"user:{USER_ID}"
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # Pretend the account has already used its whole day.
+        _db.usage_daily.update_one(
+            {"_id": f"{key}:{day}"},
+            {"$set": {"count": wal.LAUNCH_FREE_DAILY_LIMIT}},
+            upsert=True,
+        )
+        body = requests.get(f"{BASE_URL}/api/wallet/balance", headers=AUTH_HEADERS, timeout=15).json()
+        assert body["launch_free_daily_limit"] == wal.LAUNCH_FREE_DAILY_LIMIT
+        assert body["launch_free_runs_left"] == 0
+
+        _db.analyses.delete_many({"symbol": "KO", "language": "en"})
+        r = requests.post(f"{BASE_URL}/api/analyze", headers=AUTH_HEADERS,
+                          json={"symbol": "KO"}, timeout=60)
+        assert r.status_code == 429, r.text
+        assert "daily limit" in r.json()["detail"].lower()
+        # A blocked attempt must not consume tomorrow's headroom.
+        assert _db.usage_daily.find_one({"_id": f"{key}:{day}"})["count"] == wal.LAUNCH_FREE_DAILY_LIMIT
+
+        # One slot freed -> the next run goes through and the counter moves.
+        _db.usage_daily.update_one(
+            {"_id": f"{key}:{day}"},
+            {"$set": {"count": wal.LAUNCH_FREE_DAILY_LIMIT - 1}},
+        )
+        left = requests.get(f"{BASE_URL}/api/wallet/balance", headers=AUTH_HEADERS, timeout=15).json()
+        assert left["launch_free_runs_left"] == 1
+        r2 = requests.post(f"{BASE_URL}/api/analyze", headers=AUTH_HEADERS,
+                           json={"symbol": "KO"}, timeout=90)
+        assert r2.status_code == 200, r2.text
+        assert _db.usage_daily.find_one({"_id": f"{key}:{day}"})["count"] == wal.LAUNCH_FREE_DAILY_LIMIT
+        _db.usage_daily.delete_one({"_id": f"{key}:{day}"})
+
+    def test_daily_cap_does_not_exist_outside_the_window(self):
+        _set_launch_free(None)
+        key = f"user:{USER_ID}"
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _db.usage_daily.update_one(
+            {"_id": f"{key}:{day}"}, {"$set": {"count": 999}}, upsert=True
+        )
+        _db.wallets.update_one({"device_id": key}, {"$set": {"balance": 100.0}}, upsert=True)
+        body = requests.get(f"{BASE_URL}/api/wallet/balance", headers=AUTH_HEADERS, timeout=15).json()
+        assert body["launch_free_daily_limit"] is None
+        assert body["launch_free_runs_left"] is None
+        # A paid account is unaffected by the launch-window counter.
+        _db.analyses.delete_many({"symbol": "KO", "language": "en"})
+        r = requests.post(f"{BASE_URL}/api/analyze", headers=AUTH_HEADERS,
+                          json={"symbol": "KO"}, timeout=90)
+        assert r.status_code == 200, r.text
+        _db.usage_daily.delete_one({"_id": f"{key}:{day}"})
+
     def test_billing_resumes_by_itself_once_the_date_passes(self):
         past = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
         _set_launch_free(past)

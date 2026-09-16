@@ -157,8 +157,13 @@ export default function AnalyzeScreen() {
         router.push(`/analysis/${res.id}`);
       } catch (e: any) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        if (e?.message?.toLowerCase().includes("insufficient balance")) {
-          Alert.alert("Add funds to continue", e.message);
+        const msg: string = e?.message || "Something went wrong. Try again.";
+        if (msg.toLowerCase().includes("insufficient balance")) {
+          Alert.alert("Add funds to continue", msg);
+        } else if (msg.toLowerCase().includes("daily limit")) {
+          Alert.alert("That's today's limit", msg);
+        } else {
+          Alert.alert("Couldn't start the analysis", msg);
         }
       } finally {
         setSubmitting(false);

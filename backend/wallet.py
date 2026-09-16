@@ -66,6 +66,11 @@ TOPUP_PACKS = [5.0, 10.0, 25.0]
 # Every new account gets this many analyses before the wallet is needed.
 FREE_CREDITS_ON_SIGNUP = 10
 
+# During the launch-free window every analysis is free, so a per-day cap is
+# what stops one enthusiastic (or scripted) account from burning the whole LLM
+# budget in an afternoon. Counted per account per UTC day; admins are exempt.
+LAUNCH_FREE_DAILY_LIMIT = 10
+
 
 def should_use_free_credit(free_credits_remaining: Optional[int]) -> bool:
     """Free credits are spent before any money is. Treated as 0 when the

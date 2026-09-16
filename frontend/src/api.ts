@@ -179,6 +179,9 @@ export type WalletBalance = {
    *  purchase UI may be shown (an external payment path for digital content
    *  is what Apple's 3.1.1 prohibits, whether or not it charges today). */
   launch_free_active?: boolean;
+  /** Runs left today while the launch window is open (null otherwise). */
+  launch_free_daily_limit?: number | null;
+  launch_free_runs_left?: number | null;
 };
 
 export type TopupOrder = { order_id: string; amount: number; currency: string; checkout_url: string };
