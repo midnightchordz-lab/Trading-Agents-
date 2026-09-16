@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Header, Depends, Form, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Header, Depends, Request
 from fastapi.responses import HTMLResponse
 from pymongo.errors import DuplicateKeyError
 from dotenv import load_dotenv
@@ -1194,16 +1194,48 @@ async def pay_checkout(order_id: str):
     ))
 
 
-@api_router.post("/pay/callback", response_class=HTMLResponse)
-async def pay_callback(
-    razorpay_payment_id: str = Form(...),
-    razorpay_order_id: str = Form(...),
-    razorpay_signature: str = Form(...),
-):
-    """Razorpay redirects the browser/WebView here after payment. Treated as a
-    hint only — the signature is checked and the payment re-fetched from
-    Razorpay before anything is credited."""
-    order = await db.payments.find_one({"razorpay_order_id": razorpay_order_id})
+@api_router.api_route("/pay/callback", methods=["POST", "GET"], response_class=HTMLResponse)
+async def pay_callback(request: Request):
+    """Razorpay returns the customer here after checkout. The documented
+    contract is a form POST carrying the three razorpay_* fields — but only on
+    a successful authorisation. Cancels, failures and some bank / UPI redirect
+    chains arrive with no body at all, or as a GET with query params, so every
+    field is read defensively (a strict Form(...) signature 422s the user
+    mid-payment). Whatever arrives is a hint only: the signature is checked and
+    the payment re-fetched from Razorpay before anything is credited."""
+    fields: dict = {}
+    if request.method == "POST":
+        ctype = request.headers.get("content-type", "")
+        if "application/x-www-form-urlencoded" in ctype or "multipart/form-data" in ctype:
+            fields = dict(await request.form())
+        elif "application/json" in ctype:
+            try:
+                fields = await request.json()
+            except Exception:
+                fields = {}
+    q = request.query_params
+    razorpay_payment_id = fields.get("razorpay_payment_id") or q.get("razorpay_payment_id")
+    razorpay_order_id = (
+        fields.get("razorpay_order_id") or q.get("razorpay_order_id") or q.get("order_id")
+    )
+    razorpay_signature = fields.get("razorpay_signature") or q.get("razorpay_signature")
+
+    order = await db.payments.find_one({"razorpay_order_id": razorpay_order_id}) if razorpay_order_id else None
+
+    # Cancelled / failed / bodyless redirect — nothing to verify, nothing charged.
+    if not razorpay_payment_id or not razorpay_signature:
+        logger.info(f"payment callback without success fields for order {razorpay_order_id}")
+        if order:
+            await db.payments.update_one(
+                {"razorpay_order_id": order["razorpay_order_id"], "status": {"$ne": "captured"}},
+                {"$set": {
+                    "status": "failed",
+                    "failure": fields.get("error[description]") or q.get("error[description]"),
+                    "updated_at": now_iso(),
+                }},
+            )
+        return HTMLResponse(rzp.result_html("Payment wasn't completed — nothing was charged.", ok=False))
+
     if not order or not rzp.verify_checkout_signature(
         order["razorpay_order_id"], razorpay_payment_id, razorpay_signature
     ):

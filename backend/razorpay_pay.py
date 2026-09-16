@@ -105,7 +105,11 @@ display:flex;align-items:center;justify-content:center;height:100vh;text-align:c
     name: "{escape(brand, quote=True)}",
     description: "Wallet top-up",
     order_id: "{escape(order_id, quote=True)}",
-    callback_url: "{escape(callback_url, quote=True)}",
+    // Razorpay only POSTs the three razorpay_* fields to callback_url when
+    // redirect is on; the order id rides along as a query param so a failed /
+    // cancelled return (which carries no fields) can still be matched.
+    callback_url: "{escape(callback_url, quote=True)}?order_id={escape(order_id, quote=True)}",
+    redirect: true,
     modal: {{ confirm_close: true, escape: false, backdropclose: false }}
   }};
   window.onload = function () {{ new Razorpay(options).open(); }};
