@@ -88,7 +88,7 @@ async def link_device_wallet_to_user(device_id: Optional[str], user_id: str) -> 
     if not device_wallet or device_wallet.get("balance", 0) <= 0:
         return
     user_wallet = await db.wallets.find_one({"device_id": f"user:{user_id}"})
-    current = user_wallet["balance"] if user_wallet else 0.0
+    current = float((user_wallet or {}).get("balance") or 0.0)
     merged = round(current + device_wallet["balance"], 4)
     await db.wallets.update_one(
         {"device_id": f"user:{user_id}"},

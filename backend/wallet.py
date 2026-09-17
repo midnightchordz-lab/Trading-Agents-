@@ -63,6 +63,45 @@ PRICES = {
 # list — a client can never name its own price.
 TOPUP_PACKS = [5.0, 10.0, 25.0]
 
+# --- INR — a second, independently-priced currency for Indian users ---
+# Razorpay only offers UPI (and Indian Netbanking) on INR-denominated
+# transactions; a USD payment can never show them, no matter what account
+# settings say — that's a hard constraint of the underlying payment rails,
+# not a toggle. So there is no "enable UPI" code anywhere in this codebase:
+# setting the currency correctly IS the entire mechanism.
+#
+# These are NOT a literal FX conversion of the USD prices — they're round,
+# native-feeling numbers (the same ₹99/₹199/₹499 convention most Indian
+# consumer apps use), which reads as intentional rather than "converted from
+# a foreign price". Business call, not an engineering one — revisit these
+# numbers directly, don't just recompute from an exchange rate.
+CURRENCY_SYMBOL_INR = "\u20b9"
+PRICES_INR = {
+    "full_analysis": 20.0,
+    "compare": 30.0,
+    "portfolio_optimize": 5.0,
+}
+TOPUP_PACKS_INR = [99.0, 199.0, 499.0]
+
+# A currency is chosen once per account and then locked forever (see
+# create_topup_order). Anything that isn't INR resolves to USD, so a missing,
+# unknown or corrupt stored value always behaves exactly as it did before this
+# feature existed — it can never resolve to the *cheaper-numbered* table by
+# accident and silently devalue a real balance.
+SUPPORTED_CURRENCIES = ("USD", "INR")
+
+
+def prices_for(currency: str) -> dict:
+    return PRICES_INR if currency == "INR" else PRICES
+
+
+def topup_packs_for(currency: str) -> list:
+    return TOPUP_PACKS_INR if currency == "INR" else TOPUP_PACKS
+
+
+def currency_symbol_for(currency: str) -> str:
+    return CURRENCY_SYMBOL_INR if currency == "INR" else CURRENCY_SYMBOL
+
 # How many free analyses the launch-free window grants per user, per day —
 # unlimited-free-with-no-cap has real, unbounded cost exposure (nothing
 # stops scripted abuse while analyses cost nothing); a daily cap closes
@@ -110,8 +149,8 @@ def should_use_free_credit(free_credits_remaining: Optional[int]) -> bool:
         return False
 
 
-def is_valid_topup(amount: float) -> bool:
-    return any(abs(amount - p) < 0.001 for p in TOPUP_PACKS)
+def is_valid_topup(amount: float, currency: str = "USD") -> bool:
+    return any(abs(amount - p) < 0.001 for p in topup_packs_for(currency))
 
 
 def is_admin_phone(phone: Optional[str], admin_phones: list) -> bool:
@@ -129,12 +168,12 @@ def is_admin_phone(phone: Optional[str], admin_phones: list) -> bool:
 PRICE_MOVE_THRESHOLD = 0.015
 
 
-def get_price(action: str) -> float:
-    return PRICES.get(action, 0.0)
+def get_price(action: str, currency: str = "USD") -> float:
+    return prices_for(currency).get(action, 0.0)
 
 
-def has_sufficient_balance(balance: float, action: str) -> bool:
-    return balance >= get_price(action)
+def has_sufficient_balance(balance: float, action: str, currency: str = "USD") -> bool:
+    return balance >= get_price(action, currency)
 
 
 def should_charge_for_recheck(
@@ -181,8 +220,8 @@ def should_charge_for_recheck(
     return False
 
 
-def new_balance_after_charge(balance: float, action: str) -> float:
+def new_balance_after_charge(balance: float, action: str, currency: str = "USD") -> float:
     """Never lets a balance go negative — caller must check
     has_sufficient_balance() first; this just guards against a
     double-charge race producing a negative number."""
-    return max(0.0, round(balance - get_price(action), 4))
+    return max(0.0, round(balance - get_price(action, currency), 4))

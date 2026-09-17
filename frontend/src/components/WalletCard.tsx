@@ -40,6 +40,10 @@ export function WalletCard() {
   const [emailInput, setEmailInput] = useState("");
   const [phoneInput, setPhoneInput] = useState("");
   const [contactError, setContactError] = useState<string | null>(null);
+  // Which currency the user just picked, before any payment has locked it to
+  // the account. Only ever set while `currency_locked` is false; the backend
+  // is the source of truth from the first successful top-up onward.
+  const [chosenCurrency, setChosenCurrency] = useState<string | null>(null);
   const pendingOrder = useRef<string | null>(null);
 
   const refresh = useCallback(async (id: string) => {
@@ -98,7 +102,7 @@ export function WalletCard() {
     if (!deviceId) return;
     setBusy(true);
     try {
-      const order = await api.createTopupOrder(deviceId, amount, contact);
+      const order = await api.createTopupOrder(deviceId, amount, contact, chosenCurrency || undefined);
       setNeedContact(null);
       pendingOrder.current = order.order_id;
       if (Platform.OS === "web") {
@@ -148,11 +152,21 @@ export function WalletCard() {
     if (orderId) settle(orderId);
   };
 
-  const symbol = wallet?.symbol || "$";
-  const price = wallet?.prices?.full_analysis;
-  const packs = wallet?.packs || [];
+  const currencyLocked = wallet?.currency_locked !== false;
+  const options = wallet?.currency_options || [];
+  // Before a currency is locked the card shows whichever one the user just
+  // picked, rendered entirely from what the backend sent — the app never
+  // hardcodes an amount, a price or a symbol for either currency.
+  const pending = !currencyLocked && chosenCurrency ? options.find((o) => o.code === chosenCurrency) : undefined;
+  const symbol = pending?.symbol || wallet?.symbol || "$";
+  const price = (pending?.prices || wallet?.prices)?.full_analysis;
+  const packs = pending?.packs || wallet?.packs || [];
   const freeCredits = wallet?.free_credits_remaining ?? 0;
   const launchFree = wallet?.launch_free_active === true;
+  // Asked exactly once per account, and only where a currency is actually
+  // chosen: Apple bills in the buyer's own storefront currency, so the iOS
+  // path has nothing to ask.
+  const needsCurrencyChoice = !launchFree && !IS_IOS && wallet != null && !currencyLocked && !chosenCurrency;
 
   // iOS must sell through Apple; StoreKit is prepared only once an account is
   // known, because RevenueCat's App User ID is what decides whose wallet a
@@ -160,13 +174,13 @@ export function WalletCard() {
   useEffect(() => {
     if (!IS_IOS || launchFree || !user?.id) return;
     let cancelled = false;
-    prepareIap(user.id)
+    prepareIap(user.id, wallet?.currency)
       .then((s) => !cancelled && setIap(s))
       .catch(() => !cancelled && setIap({ available: false, packs: [], reason: "error" }));
     return () => {
       cancelled = true;
     };
-  }, [launchFree, user?.id]);
+  }, [launchFree, user?.id, wallet?.currency]);
 
   // Apple takes the money, then RevenueCat's signed webhook tells our backend
   // to credit — so the only honest way to know it landed is to watch the
@@ -257,6 +271,25 @@ export function WalletCard() {
             </Text>
           </View>
         )
+      ) : needsCurrencyChoice ? (
+        // One-time choice, then never asked again. INR is what makes UPI
+        // appear at Razorpay's checkout — UPI can only settle INR, so the
+        // currency IS the payment-method choice.
+        <View testID="currency-choice">
+          <Text style={styles.priceNote}>Choose the currency for your wallet — this is set once.</Text>
+          <View style={styles.topUpRow}>
+            {options.map((opt) => (
+              <Pressable
+                key={opt.code}
+                testID={`currency-${opt.code}`}
+                onPress={() => setChosenCurrency(opt.code)}
+                style={styles.topUpBtn}
+              >
+                <Text style={styles.topUpText}>{`${opt.symbol} ${opt.code}`}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
       ) : (
         <View style={styles.topUpRow}>
           {packs.map((amt) => (

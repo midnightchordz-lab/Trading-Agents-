@@ -125,14 +125,16 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
             used_free_credit = True
             billed = False
         else:
+            wallet_doc = await db.wallets.find_one({"device_id": wkey})
+            currency = (wallet_doc or {}).get("currency") or "USD"
             balance = await get_wallet_balance(wkey)
-            if not wal.has_sufficient_balance(balance, "full_analysis"):
+            if not wal.has_sufficient_balance(balance, "full_analysis", currency):
                 raise HTTPException(
                     status_code=402,
-                    detail=(f"Insufficient balance: need {wal.CURRENCY_SYMBOL}{wal.get_price('full_analysis'):.2f}, "
-                            f"have {wal.CURRENCY_SYMBOL}{balance:.2f}"),
+                    detail=(f"Insufficient balance: need {wal.currency_symbol_for(currency)}{wal.get_price('full_analysis', currency):.2f}, "
+                            f"have {wal.currency_symbol_for(currency)}{balance:.2f}"),
                 )
-            new_balance = wal.new_balance_after_charge(balance, "full_analysis")
+            new_balance = wal.new_balance_after_charge(balance, "full_analysis", currency)
             await db.wallets.update_one(
                 {"device_id": wkey},
                 {"$set": {"balance": new_balance, "updated_at": now_iso()}},
@@ -153,7 +155,10 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         "total_steps": TOTAL_STEPS,
         "error": None,
         "billed": billed,
-        "price_charged": wal.get_price("full_analysis") if billed else None,
+        # `currency` is only ever bound in the branch that actually charged;
+        # the outer conditional short-circuits for admin / free-credit runs,
+        # where no real currency was resolved for this request.
+        "price_charged": wal.get_price("full_analysis", currency if billed else "USD") if billed else None,
         "admin_bypass": admin_bypass if WALLET_ENFORCEMENT_ENABLED else False,
         "launch_free_active": launch_free_daily_ok if WALLET_ENFORCEMENT_ENABLED else False,
         "used_free_credit": used_free_credit,

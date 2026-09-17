@@ -144,7 +144,10 @@ async def consume_free_credit(user: dict) -> bool:
 
 async def get_wallet_balance(device_id: str) -> float:
     doc = await db.wallets.find_one({"device_id": device_id})
-    return doc["balance"] if doc else 0.0
+    # A wallet document can legitimately exist before it holds any money — the
+    # currency lock and the launch-free day counter both create one — so a
+    # missing `balance` reads as zero rather than raising.
+    return float((doc or {}).get("balance") or 0.0)
 
 
 def owner_hash_for(user: Optional[dict]) -> Optional[str]:

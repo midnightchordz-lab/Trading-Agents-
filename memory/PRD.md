@@ -472,3 +472,67 @@ analyses in parallel, not app behaviour. Re-run the failing file alone before in
 Remaining owner-side steps before a real purchase can succeed: the three Consumable products
 in App Store Connect imported into RevenueCat, and an App Store Connect In-App Purchase `.p8`
 uploaded to RevenueCat (Emergent does not store that file). Needs a real iOS build to test.
+
+## Two currencies — USD / INR, locked once per account (2026-06-20, session 11) — DONE
+Implemented from the user's `TWO_CURRENCY_USD_INR.md` spec, exactly as written (adapted only to the
+post-refactor file layout: the spec's `server.py` edits landed in `routes/payments.py`,
+`routes/analysis.py` and `deps.py`).
+
+**Why INR exists at all:** UPI settles INR only — a hard constraint of the payment rails, not a
+Razorpay setting. A Payment Link created with `currency: "INR"` shows UPI automatically; a USD one
+cannot. So there is NO "enable UPI" code anywhere; setting the currency correctly is the entire
+mechanism. **Verified on real live checkouts**, not inferred: the ₹99 link showed a UPI QR plus UPI
+as the first payment option (then Cards / Netbanking / Wallet); the $5 link showed **Cards only**.
+Both links were cancelled via the Razorpay API afterwards.
+
+- `wallet.py`: added `PRICES_INR` (₹20 / ₹30 / ₹5), `TOPUP_PACKS_INR` (₹99/₹199/₹499),
+  `CURRENCY_SYMBOL_INR`, `SUPPORTED_CURRENCIES`, and `prices_for` / `topup_packs_for` /
+  `currency_symbol_for`. `get_price`, `has_sufficient_balance`, `new_balance_after_charge` and
+  `is_valid_topup` all take an OPTIONAL `currency` defaulting to `"USD"`, so every existing
+  no-argument call site behaves byte-identically (the existing `tests/test_wallet.py` 14 tests pass
+  unchanged). Anything that isn't exactly `"INR"` resolves to USD — failing toward the *more
+  expensive* table, so a corrupt stored value can never devalue a balance.
+- `razorpay_pay.create_payment_link` now takes `currency` explicitly instead of reading
+  `wal.CURRENCY`.
+- `create_topup_order` locks the currency once, and **the safety case is the point**: a wallet with
+  a nonzero balance and no `currency` field predates this feature, so it can only have been earned
+  in USD → forced to USD regardless of what the request asks. Without it, someone holding a real
+  $12.50 could pick INR and have it silently become ₹12.50. Locked accounts ignore `currency` on
+  every later request.
+- `/wallet/balance` returns the account's real currency, its prices/packs/symbol, plus
+  `currency_locked` and `currency_options` (code + symbol + packs + prices for both). The app
+  renders those directly and holds NO currency knowledge of its own — no hardcoded amounts.
+- `/analyze`'s charge, its 402 message and `price_charged` all use the account's currency.
+- Frontend: `WalletCard` shows a one-time "$ USD / ₹ INR" choice before the first top-up
+  (Android/Web only — Apple bills in the buyer's own storefront currency, so iOS has nothing to
+  ask), then renders whatever the backend resolved.
+
+### iOS/RevenueCat interaction (asked for explicitly, beyond the spec)
+An INR-locked wallet receiving a USD-denominated Apple purchase must NOT have the USD face value
+added to it — that would credit ₹5 for a $5 purchase. `iap.PRODUCT_CREDIT_INR` mirrors the Razorpay
+INR packs and `iap.credit_amount_for(product_id, wallet_currency)` resolves the amount from the
+immutable product id + the account's own locked currency, never from the webhook body.
+`credit_iap_once` now takes that resolved currency (so the ledger records INR honestly), logs when
+Apple's charge currency differs from the wallet's (expected — Apple bills per storefront), and
+locks a previously-unlocked wallet to the credited currency so a balance is never left unlabelled.
+`/pay/iap/config?currency=INR` serves ₹ pack amounts for the iOS buttons.
+
+### Bug found and fixed while testing (introduced by this change)
+The currency-lock upsert could create a wallet document containing only `{device_id, currency}` —
+no `balance`. `deps.get_wallet_balance` did `doc["balance"]`, so `/pay/status` and the link callback
+500'd for any account whose first-ever action was a top-up. Fixed at the source
+(`$setOnInsert: {balance: 0.0}`) and hardened both readers (`get_wallet_balance`, the sign-in wallet
+merge) to treat a missing balance as zero — the pre-existing launch-free counter upsert can create
+the same shape.
+
+### Deliberately NOT changed
+`credit_wallet_once` is untouched per the spec, which means its `wallet_ledger` row still records
+`currency: wal.CURRENCY` ("USD") even for an INR payment. The `payments` row for the same
+transaction DOES record the real currency, so nothing is lost — but if the ledger is ever used for
+reporting, that one field should be switched to `order.get("currency")`. Flagged to the user rather
+than changed unilaterally.
+
+- Tests: `backend/tests/test_two_currency.py` (47) — backward compatibility, currency resolution,
+  cross-currency pack rejection, INR balance math, first-top-up locking, the existing-balance
+  protection (including that the balance itself is never touched), `/wallet/balance` shapes, the
+  ₹/$ 402 messages, and the IAP amount resolution + crediting. Full suite: **385 passed, 9 skipped**.

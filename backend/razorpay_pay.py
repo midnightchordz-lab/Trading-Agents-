@@ -25,7 +25,6 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
-import wallet as wal
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -80,16 +79,18 @@ async def fetch_payment(payment_id: str) -> dict:
 LINK_TTL_SECONDS = 60 * 60
 
 
-async def create_payment_link(*, amount: float, reference_id: str, notes: dict, callback_url: str, description: str, customer: dict) -> dict:
+async def create_payment_link(*, amount: float, currency: str, reference_id: str, notes: dict, callback_url: str, description: str, customer: dict) -> dict:
     """A one-time, Razorpay-hosted payment page. Amount goes in the smallest
     currency unit. callback_method must be "get" whenever callback_url is set,
-    and this account requires customer email + contact on every link."""
+    and this account requires customer email + contact on every link. Currency
+    is the account's own locked currency (USD or INR) — never a client-chosen
+    value per call, and it's what determines whether UPI shows at all."""
     return await razorpay_request(
         "POST",
         "/payment_links",
         json={
             "amount": int(round(amount * 100)),
-            "currency": wal.CURRENCY,
+            "currency": currency,
             "accept_partial": False,
             "description": description,
             "reference_id": reference_id,

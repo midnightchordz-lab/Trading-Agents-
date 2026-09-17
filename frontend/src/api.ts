@@ -186,6 +186,19 @@ export type WalletBalance = {
   /** Powers the on-screen countdown; remaining is null outside the window. */
   launch_free_daily_remaining?: number | null;
   launch_free_daily_cap?: number;
+  /** False until the account's first top-up locks a currency. The app asks
+   *  once — and only once — which currency to use, then never again. */
+  currency_locked?: boolean;
+  /** Everything the app needs to render either choice, so it holds no
+   *  currency knowledge of its own (no hardcoded amounts or symbols). */
+  currency_options?: CurrencyOption[];
+};
+
+export type CurrencyOption = {
+  code: string;
+  symbol: string;
+  packs: number[];
+  prices: Record<string, number>;
 };
 
 export type TopupOrder = { order_id: string; amount: number; currency: string; checkout_url: string };
@@ -264,13 +277,21 @@ export const api = {
   analyze: (symbol: string, name?: string, language?: string, deviceId?: string) =>
     j<Analysis>(`/analyze`, { method: "POST", body: JSON.stringify({ symbol, name, language, device_id: deviceId }) }),
   getWalletBalance: (deviceId: string) => j<WalletBalance>(`/wallet/balance?device_id=${encodeURIComponent(deviceId)}`),
-  createTopupOrder: (deviceId: string, amount: number, contact?: { email?: string; phone?: string }) =>
+  createTopupOrder: (
+    deviceId: string,
+    amount: number,
+    contact?: { email?: string; phone?: string },
+    // Only honoured on the account's very first top-up; the backend ignores
+    // it once a currency is locked.
+    currency?: string
+  ) =>
     j<TopupOrder>(`/pay/order`, {
       method: "POST",
-      body: JSON.stringify({ device_id: deviceId, amount, ...(contact || {}) }),
+      body: JSON.stringify({ device_id: deviceId, amount, ...(contact || {}), ...(currency ? { currency } : {}) }),
     }),
   getPaymentStatus: (orderId: string) => j<PaymentStatus>(`/pay/status/${orderId}`),
-  getIapConfig: () => j<IapConfig>(`/pay/iap/config`),
+  getIapConfig: (currency?: string) =>
+    j<IapConfig>(`/pay/iap/config${currency ? `?currency=${encodeURIComponent(currency)}` : ""}`),
   getAnalysis: (id: string) => j<Analysis>(`/analysis/${id}`),
   history: () => j<{ results: Analysis[] }>(`/history`),
   remove: (id: string) => j<{ ok: boolean }>(`/analysis/${id}`, { method: "DELETE" }),

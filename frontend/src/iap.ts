@@ -48,7 +48,7 @@ export type IapState = { available: boolean; packs: IapPack[]; reason?: string }
  * belongs to. Configuring before sign-in (or with a shared id) would alias
  * accounts and mis-credit real money.
  */
-export async function prepareIap(userId: string): Promise<IapState> {
+export async function prepareIap(userId: string, currency?: string): Promise<IapState> {
   const Purchases = loadPurchases();
   if (!Purchases) {
     return {
@@ -59,7 +59,7 @@ export async function prepareIap(userId: string): Promise<IapState> {
   }
   let config;
   try {
-    config = await api.getIapConfig();
+    config = await api.getIapConfig(currency);
   } catch {
     return { available: false, packs: [], reason: "config_unavailable" };
   }

@@ -35,6 +35,23 @@ PRODUCT_CREDIT = {
     "credits_25": 25.0,
 }
 
+# The same three packs expressed in INR, mirroring wallet.TOPUP_PACKS_INR.
+#
+# Why this table has to exist: a wallet balance is a bare number in the
+# account's own locked currency. An INR-locked account that buys `credits_5`
+# from the App Store must be credited ₹99, NOT 5 — adding the USD face value
+# to an INR balance would hand the user about 1/80th of what they paid, which
+# is exactly the silent-revaluation bug the two-currency spec exists to
+# prevent, only in the opposite (and worse) direction. Apple charges the user
+# in their own storefront currency from its India price tier, so `credits_5`
+# means "the small pack" in whichever currency the account lives in — the same
+# meaning it has on the Razorpay side.
+PRODUCT_CREDIT_INR = {
+    "credits_5": 99.0,
+    "credits_10": 199.0,
+    "credits_25": 499.0,
+}
+
 # Public SDK key — safe to ship to the app. Served to the client from the
 # backend rather than baked into the bundle so it can be rotated without a
 # new App Store build.
@@ -64,12 +81,23 @@ def verify_webhook_auth(supplied: Optional[str]) -> bool:
     return hmac.compare_digest(WEBHOOK_AUTH, supplied or "")
 
 
-def packs() -> list:
-    """Product ids + amounts, cheapest first, for the iOS top-up UI."""
+def packs(currency: str = "USD") -> list:
+    """Product ids + amounts, cheapest first, for the iOS top-up UI. Amounts
+    are in the account's locked currency so the buttons read ₹99 / ₹199 / ₹499
+    for an INR wallet and $5 / $10 / $25 for a USD one."""
+    table = PRODUCT_CREDIT_INR if currency == "INR" else PRODUCT_CREDIT
     return [
         {"product_id": pid, "amount": amount}
-        for pid, amount in sorted(PRODUCT_CREDIT.items(), key=lambda kv: kv[1])
+        for pid, amount in sorted(table.items(), key=lambda kv: kv[1])
     ]
+
+
+def credit_amount_for(product_id: str, wallet_currency: str = "USD") -> Optional[float]:
+    """How much to add to a balance for one Apple purchase, in the units that
+    balance is actually kept in. Resolved from the immutable product id and the
+    account's own locked currency — never from anything in the webhook body."""
+    table = PRODUCT_CREDIT_INR if wallet_currency == "INR" else PRODUCT_CREDIT
+    return table.get(product_id)
 
 
 def classify_event(event: dict) -> tuple:

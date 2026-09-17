@@ -42,6 +42,10 @@ class WalletTopup(BaseModel):
     # missing one once and it's stored on the account from then on.
     email: Optional[str] = None
     phone: Optional[str] = None
+    # Only meaningful the FIRST time a wallet ever tops up — see
+    # create_topup_order for the locking logic. Ignored on every request
+    # after that; an account's currency never changes once set.
+    currency: Optional[str] = None
 
 @api_router.get("/wallet/balance")
 async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] = Depends(require_user)):
@@ -53,13 +57,30 @@ async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] =
     free_credits = await get_free_credits_remaining(user)
     launch_free = wal.is_launch_free_period(LAUNCH_FREE_UNTIL, datetime.now(timezone.utc))
     daily_left = await launch_free_daily_remaining(key) if launch_free else None
+    wallet_doc = await db.wallets.find_one({"device_id": key})
+    stored_currency = (wallet_doc or {}).get("currency")
+    currency = stored_currency or "USD"
     return {
         "device_id": key,
         "balance": round(balance, 2),
-        "currency": wal.CURRENCY,
-        "symbol": wal.CURRENCY_SYMBOL,
-        "prices": wal.PRICES,
-        "packs": wal.TOPUP_PACKS,
+        "currency": currency,
+        "symbol": wal.currency_symbol_for(currency),
+        "prices": wal.prices_for(currency),
+        "packs": wal.topup_packs_for(currency),
+        # False until the account's first top-up locks a currency. The app uses
+        # this to decide whether to ask once — and only once — which currency
+        # to use; `currency_options` is what it renders, so the client needs no
+        # currency knowledge of its own (no hardcoded amounts or symbols).
+        "currency_locked": bool(stored_currency),
+        "currency_options": [
+            {
+                "code": code,
+                "symbol": wal.currency_symbol_for(code),
+                "packs": wal.topup_packs_for(code),
+                "prices": wal.prices_for(code),
+            }
+            for code in wal.SUPPORTED_CURRENCIES
+        ],
         "free_credits_remaining": free_credits,
         # Admins are never billed, and neither is anyone with free credits
         # left — so the app shows them no balance gate. Nor is anyone with
@@ -188,14 +209,38 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
     on trust."""
     if not rzp.payments_configured():
         raise HTTPException(status_code=503, detail="Payments aren't set up yet")
-    if not wal.is_valid_topup(body.amount):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Choose one of the top-up packs: {', '.join(str(int(p)) for p in wal.TOPUP_PACKS)}",
-        )
     key = wallet_key_for(user, body.device_id)
     if not key:
         raise HTTPException(status_code=400, detail="device_id is required")
+
+    # Currency is chosen once and locked to the account forever — never
+    # re-asked, never switched per top-up. A wallet that already has a
+    # REAL BALANCE but no currency yet predates this feature and can only
+    # have been earned in USD; lock it explicitly rather than let a later
+    # currency choice silently reinterpret an existing balance as a
+    # different currency (a $12.50 balance must never become ₹12.50).
+    existing_wallet = await db.wallets.find_one({"device_id": key})
+    if existing_wallet and existing_wallet.get("currency"):
+        currency = existing_wallet["currency"]
+    elif existing_wallet and existing_wallet.get("balance", 0) > 0:
+        currency = "USD"
+        await db.wallets.update_one({"device_id": key}, {"$set": {"currency": "USD"}})
+    else:
+        currency = body.currency if body.currency in wal.SUPPORTED_CURRENCIES else "USD"
+        await db.wallets.update_one(
+            {"device_id": key},
+            # $setOnInsert keeps a freshly created wallet well-formed: every
+            # reader treats `balance` as present, so locking a currency must
+            # not be able to leave a doc that has only a currency on it.
+            {"$set": {"currency": currency}, "$setOnInsert": {"balance": 0.0}},
+            upsert=True,
+        )
+
+    if not wal.is_valid_topup(body.amount, currency):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Choose one of the top-up packs: {', '.join(str(int(p)) for p in wal.topup_packs_for(currency))}",
+        )
 
     customer, missing = await resolve_payment_customer(user, body)
     if missing:
@@ -206,10 +251,11 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
     try:
         link = await rzp.create_payment_link(
             amount=body.amount,
+            currency=currency,
             reference_id=reference_id,
             notes={"wallet_key": key, "purpose": "wallet_topup"},
             callback_url=f"{public_base(request)}/api/pay/callback",
-            description=f"{wal.CURRENCY_SYMBOL}{body.amount:.0f} wallet top-up",
+            description=f"{wal.currency_symbol_for(currency)}{body.amount:.0f} wallet top-up",
             customer=customer,
         )
     except rzp.RazorpayError as e:
@@ -229,7 +275,7 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
         "reference_id": reference_id,
         "wallet_key": key,
         "amount": body.amount,
-        "currency": wal.CURRENCY,
+        "currency": currency,
         "status": "created",
         "receipt": reference_id,
         "short_url": link["short_url"],
@@ -240,7 +286,7 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
         # The app polls /pay/status with whatever id it gets back.
         "order_id": link["id"],
         "amount": body.amount,
-        "currency": wal.CURRENCY,
+        "currency": currency,
         "checkout_url": link["short_url"],
     }
 
@@ -303,7 +349,7 @@ async def pay_callback(request: Request):
         return HTMLResponse(rzp.result_html("Payment received — we're still confirming it.", ok=True))
     if status == "captured":
         return HTMLResponse(rzp.result_html(
-            f"Added {wal.CURRENCY_SYMBOL}{order['amount']:.0f} to your wallet.", ok=True))
+            f"Added {wal.currency_symbol_for(order.get('currency') or 'USD')}{order['amount']:.0f} to your wallet.", ok=True))
     return HTMLResponse(rzp.result_html("That payment didn't go through — nothing was charged.", ok=False))
 
 
@@ -343,7 +389,7 @@ async def link_callback(fields: dict, q, link_id: str) -> HTMLResponse:
         return HTMLResponse(rzp.result_html("Payment received — we're still confirming it.", ok=True))
     if status == "captured":
         return HTMLResponse(rzp.result_html(
-            f"Added {wal.CURRENCY_SYMBOL}{record['amount']:.0f} to your wallet.", ok=True))
+            f"Added {wal.currency_symbol_for(record.get('currency') or 'USD')}{record['amount']:.0f} to your wallet.", ok=True))
     return HTMLResponse(rzp.result_html("That payment didn't go through — nothing was charged.", ok=False))
 
 
@@ -460,25 +506,35 @@ async def pay_status(order_id: str, user: Optional[dict] = Depends(require_user)
 # --- Apple In-App Purchase top-ups (iOS only), via RevenueCat. See iap.py for
 # why this exists alongside Razorpay. ---
 @api_router.get("/pay/iap/config")
-async def iap_config():
+async def iap_config(currency: str = "USD"):
     """What the iOS app needs to open StoreKit: the RevenueCat public SDK key
     and the product ids to offer. Served from here rather than bundled so the
-    key can be rotated without shipping a new App Store build."""
+    key can be rotated without shipping a new App Store build.
+
+    `currency` is the account's own locked currency, passed by the app so the
+    pack buttons show ₹99/₹199/₹499 rather than $5/$10/$25 for an INR wallet.
+    It only affects the displayed amounts — what actually gets credited is
+    resolved server-side from the stored wallet currency in the webhook."""
+    resolved = currency if currency in wal.SUPPORTED_CURRENCIES else "USD"
     return {
         "enabled": iap.configured(),
         "ios_api_key": iap.IOS_PUBLIC_KEY if iap.configured() else "",
-        "packs": iap.packs(),
-        "currency": wal.CURRENCY,
-        "symbol": wal.CURRENCY_SYMBOL,
+        "packs": iap.packs(resolved),
+        "currency": resolved,
+        "symbol": wal.currency_symbol_for(resolved),
     }
 
 
-async def credit_iap_once(transaction_id: str, wallet_key: str, amount: float, product_id: str) -> bool:
+async def credit_iap_once(transaction_id: str, wallet_key: str, amount: float, product_id: str, currency: str) -> bool:
     """Credits an Apple purchase exactly once. Shares wallet_ledger (and its
     unique index) with Razorpay so there is still only ONE place in the system
     a balance can grow, whichever store the money came from. Keyed on Apple's
     own transaction id, which is stable across RevenueCat's at-least-once
-    webhook retries and across a re-delivered duplicate event."""
+    webhook retries and across a re-delivered duplicate event.
+
+    `amount` and `currency` are already resolved to the wallet's OWN locked
+    currency by the caller, so this only ever adds a number to a balance kept
+    in the same units — never a USD face value into an INR-locked balance."""
     ledger_id = f"apple:{transaction_id}"
     try:
         await db.wallet_ledger.insert_one({
@@ -486,7 +542,7 @@ async def credit_iap_once(transaction_id: str, wallet_key: str, amount: float, p
             "order_id": None,
             "wallet_key": wallet_key,
             "amount": amount,
-            "currency": wal.CURRENCY,
+            "currency": currency,
             "source": "apple_iap",
             "product_id": product_id,
             "created_at": now_iso(),
@@ -499,7 +555,15 @@ async def credit_iap_once(transaction_id: str, wallet_key: str, amount: float, p
          "$set": {"device_id": wallet_key, "updated_at": now_iso()}},
         upsert=True,
     )
-    logger.info(f"wallet credited {wal.CURRENCY} {amount} for {wallet_key} (apple iap {transaction_id})")
+    # An Apple purchase into a wallet that had never chosen a currency locks it
+    # too, so the account's currency is always explicit once it holds real
+    # money — rather than leaving an unlabelled balance that a later Razorpay
+    # top-up would have to infer.
+    await db.wallets.update_one(
+        {"device_id": wallet_key, "currency": {"$exists": False}},
+        {"$set": {"currency": currency}},
+    )
+    logger.info(f"wallet credited {currency} {amount} for {wallet_key} (apple iap {transaction_id})")
     return True
 
 
@@ -529,8 +593,26 @@ async def iap_webhook(request: Request, authorization: Optional[str] = Header(No
         logger.warning(f"iap webhook rejected: {detail['reason']} (event {event_id})")
         raise HTTPException(status_code=400, detail=detail["reason"])
 
+    # A balance is a bare number in the account's OWN locked currency, so how
+    # much to add depends on that currency and not on what Apple charged or
+    # what the event says. An INR-locked wallet buying `credits_5` gets ₹99,
+    # never 5 — blindly adding a USD face value to an INR balance would hand
+    # the user roughly 1/80th of what they paid.
+    wallet_doc = await db.wallets.find_one({"device_id": detail["wallet_key"]})
+    wallet_currency = (wallet_doc or {}).get("currency") or "USD"
+    amount = iap.credit_amount_for(detail["product_id"], wallet_currency)
+    event_currency = (event.get("currency") or "").upper()
+    if event_currency and event_currency != wallet_currency:
+        # Expected and harmless (Apple bills in the buyer's storefront
+        # currency), but worth surfacing: a persistent mismatch means the App
+        # Store price tier for that storefront has drifted from what we credit.
+        logger.info(
+            f"iap currency mismatch: apple charged {event_currency}, "
+            f"crediting {wallet_currency} {amount} to {detail['wallet_key']}"
+        )
+
     credited = await credit_iap_once(
-        detail["transaction_id"], detail["wallet_key"], detail["amount"], detail["product_id"]
+        detail["transaction_id"], detail["wallet_key"], amount, detail["product_id"], wallet_currency
     )
     await db.webhook_events.update_one(
         {"event_id": f"rc:{event_id}"},
