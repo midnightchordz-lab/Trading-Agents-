@@ -579,3 +579,53 @@ a `consent` sub-document, because an account that hasn't consented genuinely can
   unblocked, anonymous requests never consent-gated (and market endpoints untouched), admin not
   gated, deletion removing both records, and the pre-deletion token rejected on `/auth/me`,
   `/history` and `/analyze` afterwards. Full suite: **399 passed, 9 skipped**.
+
+## Security audit (2026-06-20, session 13) — DONE
+Full read-only audit of all 27 routes. Verdict: CONDITIONAL PASS. The three fixes from the
+session-9 audit were confirmed NOT regressed by the big refactor (wallet key still derived from the
+session, `hmac.compare_digest` on admin/webhook checks, fail-closed on a default `JWT_SECRET`). No
+secret leakage, no cross-account data access (owner_hash/viewer_hashes IDOR checks held), no
+unauthenticated state-changing endpoint. Two real money-flow findings, both fixed:
+
+### SEC-001 [HIGH] Apple sandbox purchases credited a real, spendable wallet
+Apple's sandbox completes a purchase for free, and a sandbox event is identical to a paid one apart
+from `environment` — which nothing checked. Anyone with a sandbox tester account had an unlimited
+free top-up button.
+
+Not fixed by simply refusing them: **App Store reviewers purchase in sandbox and reject apps that
+take a purchase without delivering the content**, so a blanket rejection trades a security bug for a
+review rejection. Instead sandbox purchases still credit, but only
+`iap.SANDBOX_CREDIT_LIMIT = 5` times per account, after which the webhook answers 200 with
+`ignored` (a 4xx would make RevenueCat retry forever) and credits nothing. Every credit now records
+its `environment` on the ledger row, so sandbox-funded balance is auditable and reversible, and each
+one logs a warning. A missing `environment` normalises to `"UNKNOWN"` — i.e. fails toward the capped
+path, never the unlimited one. Production credits are never capped and do NOT consume the sandbox
+allowance (a paying customer keeps their headroom; paying once buys an abuser none).
+
+### SEC-002 [MEDIUM, confirmed] Non-atomic wallet debit funded several analyses per charge
+`/analyze` read the balance, checked affordability, then wrote the reduced value. N requests
+arriving together each read the same balance, each passed, and each launched a paid LLM run off one
+charge. Replaced with a single conditional update —
+`update_one({device_id, balance: {$gte: price}}, {$inc: {balance: -price}})` — so "can they afford
+it" and "take it" are the same operation and exactly one request can win. `modified_count != 1` is
+the insufficient-funds path.
+
+### Hardening applied
+`POST /api/portfolio/optimize` needs no session and fanned every holding out to two external Yahoo
+calls with no cap — a free upstream-quota amplifier. `holdings` is now `Field(max_length=50)`.
+
+### Hardening noted, deliberately not changed
+- CORS `allow_origins=["*"]` is safe here: sessions are bearer tokens and `allow_credentials=False`.
+  If origins are ever narrowed, keep credentials off.
+- Symbol path params interpolate into a FIXED Yahoo host, so this is not SSRF; an allowlist/format
+  check would be defence in depth.
+- **Owner action, not code**: confirm the per-storefront App Store price tiers for `credits_5/10/25`
+  line up with `iap.PRODUCT_CREDIT` / `PRODUCT_CREDIT_INR`, so a cheap storefront tier can't buy
+  richer-currency credit. IAP crediting is intentionally decoupled from Apple's charged amount.
+
+- Tests: `backend/tests/test_security_fixes_iter20.py` (10) — sandbox still credits for review, stops
+  at the cap, unlabelled environment treated as sandbox, production uncapped and not consuming the
+  sandbox allowance, environment recorded on every ledger row; and for SEC-002, four and five
+  concurrent analyses against one and two runs' worth of balance funding exactly one and two runs,
+  a balance that can never go negative, and the 402 still naming the right currency.
+  Full suite: **412 passed, 9 skipped**.

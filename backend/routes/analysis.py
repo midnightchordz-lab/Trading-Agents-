@@ -139,18 +139,24 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         else:
             wallet_doc = await db.wallets.find_one({"device_id": wkey})
             currency = (wallet_doc or {}).get("currency") or "USD"
-            balance = await get_wallet_balance(wkey)
-            if not wal.has_sufficient_balance(balance, "full_analysis", currency):
+            price = wal.get_price("full_analysis", currency)
+            # Debited with ONE conditional update, never read-then-write: two
+            # requests arriving together would otherwise both read the same
+            # balance, both pass the check, and both write the same reduced
+            # value — funding two paid runs off one charge. The `$gte` filter
+            # makes "can they afford it" and "take it" the same operation, so
+            # exactly one of the two can win.
+            charged = await db.wallets.update_one(
+                {"device_id": wkey, "balance": {"$gte": price}},
+                {"$inc": {"balance": -price}, "$set": {"updated_at": now_iso()}},
+            )
+            if charged.modified_count != 1:
+                balance = await get_wallet_balance(wkey)
                 raise HTTPException(
                     status_code=402,
-                    detail=(f"Insufficient balance: need {wal.currency_symbol_for(currency)}{wal.get_price('full_analysis', currency):.2f}, "
+                    detail=(f"Insufficient balance: need {wal.currency_symbol_for(currency)}{price:.2f}, "
                             f"have {wal.currency_symbol_for(currency)}{balance:.2f}"),
                 )
-            new_balance = wal.new_balance_after_charge(balance, "full_analysis", currency)
-            await db.wallets.update_one(
-                {"device_id": wkey},
-                {"$set": {"balance": new_balance, "updated_at": now_iso()}},
-            )
 
     analysis = {
         "id": str(uuid.uuid4()),

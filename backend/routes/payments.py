@@ -525,7 +525,7 @@ async def iap_config(currency: str = "USD"):
     }
 
 
-async def credit_iap_once(transaction_id: str, wallet_key: str, amount: float, product_id: str, currency: str) -> bool:
+async def credit_iap_once(transaction_id: str, wallet_key: str, amount: float, product_id: str, currency: str, environment: str) -> bool:
     """Credits an Apple purchase exactly once. Shares wallet_ledger (and its
     unique index) with Razorpay so there is still only ONE place in the system
     a balance can grow, whichever store the money came from. Keyed on Apple's
@@ -545,6 +545,9 @@ async def credit_iap_once(transaction_id: str, wallet_key: str, amount: float, p
             "currency": currency,
             "source": "apple_iap",
             "product_id": product_id,
+            # Recorded so sandbox-funded balance stays auditable and reversible,
+            # and so the sandbox cap in iap_webhook can count it.
+            "environment": environment,
             "created_at": now_iso(),
         })
     except DuplicateKeyError:
@@ -611,8 +614,32 @@ async def iap_webhook(request: Request, authorization: Optional[str] = Header(No
             f"crediting {wallet_currency} {amount} to {detail['wallet_key']}"
         )
 
+    # Apple's sandbox completes purchases for free, so an unlimited sandbox
+    # credit path is a free top-up button. It can't be refused outright —
+    # App Store reviewers purchase in sandbox and reject apps that don't
+    # deliver — so it credits a few times per account and then stops. See
+    # iap.SANDBOX_CREDIT_LIMIT.
+    environment = detail["environment"]
+    if environment != iap.PRODUCTION_ENVIRONMENT:
+        prior_sandbox = await db.wallet_ledger.count_documents({
+            "wallet_key": detail["wallet_key"],
+            "source": "apple_iap",
+            "environment": {"$ne": iap.PRODUCTION_ENVIRONMENT},
+        })
+        if prior_sandbox >= iap.SANDBOX_CREDIT_LIMIT:
+            logger.warning(
+                f"iap sandbox credit refused for {detail['wallet_key']}: "
+                f"{prior_sandbox} non-production credits already granted"
+            )
+            return {"ok": True, "ignored": "sandbox credit limit reached"}
+        logger.warning(
+            f"iap crediting a {environment} (non-production) purchase for "
+            f"{detail['wallet_key']} — {prior_sandbox + 1}/{iap.SANDBOX_CREDIT_LIMIT}"
+        )
+
     credited = await credit_iap_once(
-        detail["transaction_id"], detail["wallet_key"], amount, detail["product_id"], wallet_currency
+        detail["transaction_id"], detail["wallet_key"], amount, detail["product_id"],
+        wallet_currency, environment,
     )
     await db.webhook_events.update_one(
         {"event_id": f"rc:{event_id}"},

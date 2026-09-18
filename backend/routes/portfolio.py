@@ -7,7 +7,7 @@ import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import portfolio_optimizer as pfopt
 from core import db, logger
@@ -47,7 +47,11 @@ class PortfolioHolding(BaseModel):
 
 
 class PortfolioOptimizeRequest(BaseModel):
-    holdings: list[PortfolioHolding]
+    # Capped because this endpoint needs no session and fans every holding out
+    # to two external Yahoo calls — an uncapped list is a free amplifier for
+    # anyone who wants to burn our upstream quota. 50 is far beyond any real
+    # portfolio a phone screen can show.
+    holdings: list[PortfolioHolding] = Field(max_length=50)
     objective: str = "hrp"  # "hrp" | "max_sharpe" | "min_volatility"
     use_agent_views: bool = False
     cash: float = 0.0  # additional uninvested cash to include in total value

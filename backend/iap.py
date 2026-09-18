@@ -66,6 +66,25 @@ WEBHOOK_AUTH = os.environ.get("REVENUECAT_WEBHOOK_AUTH", "")
 CREDITED_EVENT_TYPE = "NON_RENEWING_PURCHASE"
 APPLE_STORES = ("APP_STORE", "MAC_APP_STORE")
 
+# Apple's sandbox lets a tester complete a purchase for free. Those events are
+# indistinguishable from paid ones apart from `environment`, so crediting them
+# without limit would be a free top-up tap for anyone holding a sandbox tester
+# account (and for a StoreKit-config build).
+#
+# They cannot simply be refused, though: App Store reviewers test in-app
+# purchases in sandbox and reject apps that take a purchase without delivering
+# the content. So sandbox purchases DO credit — enough times for a review pass
+# and the owner's own testing — and then stop. Each one is recorded with its
+# environment on the ledger, so sandbox-funded balance stays auditable.
+PRODUCTION_ENVIRONMENT = "PRODUCTION"
+SANDBOX_CREDIT_LIMIT = 5
+
+
+def normalise_environment(event: dict) -> str:
+    """Upper-cased environment, with a missing value treated as NOT production
+    — an unlabelled purchase must fail toward the capped path."""
+    return (event.get("environment") or "UNKNOWN").upper()
+
 
 def configured() -> bool:
     """True once the iOS purchase path is usable end to end. Both halves are
@@ -138,5 +157,5 @@ def classify_event(event: dict) -> tuple:
         "amount": amount,
         "product_id": product_id,
         "transaction_id": transaction_id,
-        "environment": event.get("environment") or "",
+        "environment": normalise_environment(event),
     }
