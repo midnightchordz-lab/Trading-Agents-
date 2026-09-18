@@ -20,7 +20,7 @@ import mailer
 import sms
 import wallet as wal
 from core import db, logger, now_iso
-from deps import APPLE_SERVICES_ID, AUTH_DEBUG_RETURN_OTP, JWT_SECRET, get_current_user
+from deps import APPLE_SERVICES_ID, AUTH_DEBUG_RETURN_OTP, CONSENT_VERSION, JWT_SECRET, get_current_user
 
 api_router = APIRouter(prefix="/api")
 
@@ -249,7 +249,36 @@ async def auth_apple(body: SocialSignIn):
 
 @api_router.get("/auth/me")
 async def auth_me(user: dict = Depends(get_current_user)):
-    return {"id": user["id"], "phone": user.get("phone"), "email": user.get("email")}
+    consent = user.get("consent") or {}
+    return {
+        "id": user["id"], "phone": user.get("phone"), "email": user.get("email"),
+        "consent_given": bool(consent.get("agreed")) and consent.get("version") == CONSENT_VERSION,
+        "consent_version_required": CONSENT_VERSION,
+    }
+
+
+class ConsentRequest(BaseModel):
+    agreed: bool
+
+
+@api_router.post("/consent")
+async def record_consent(body: ConsentRequest, user: dict = Depends(get_current_user)):
+    """Records explicit, affirmative consent — never implied by continued
+    use, never pre-checked client-side. DPDP requires this be as easy to
+    give as to withdraw; withdrawal is handled by DELETE /account below,
+    since this app cannot function without the baseline data (phone/email,
+    wallet) consent covers — there's no coherent partial-withdrawal state
+    to represent, so withdrawing means deleting the account."""
+    if not body.agreed:
+        raise HTTPException(
+            status_code=400,
+            detail="This endpoint only records agreement. To withdraw consent, delete your account instead.",
+        )
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"consent": {"agreed": True, "agreed_at": now_iso(), "version": CONSENT_VERSION}}},
+    )
+    return {"consent_given": True, "consent_version": CONSENT_VERSION}
 
 
 @api_router.delete("/account")

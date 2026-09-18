@@ -14,6 +14,7 @@ import { AlertsProvider } from "@/src/alerts";
 import { initLanguage } from "@/src/i18n";
 import { useAuthGate, AuthContext } from "@/src/auth";
 import { LoginScreen } from "@/src/components/LoginScreen";
+import { ConsentScreen } from "@/src/components/ConsentScreen";
 
 // Login is required before any screen renders — set to false to make it
 // optional again without removing the mechanism.
@@ -64,6 +65,20 @@ export default function RootLayout() {
         <SafeAreaProvider>
           <StatusBar style="dark" />
           <LoginScreen onAuthenticated={refreshAuth} />
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    );
+  }
+
+  // Signed in, but hasn't agreed to the current privacy notice yet — shown
+  // once, before anything else renders. The backend blocks /analyze with
+  // `consent_required` until this is done, so skipping it isn't an option.
+  if (user && user.consent_given === false) {
+    return (
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <SafeAreaProvider>
+          <StatusBar style="dark" />
+          <ConsentScreen onAgreed={refreshAuth} />
         </SafeAreaProvider>
       </GestureHandlerRootView>
     );

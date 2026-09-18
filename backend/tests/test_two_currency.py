@@ -56,6 +56,7 @@ def mk_user(*, balance=None, currency=None, free_credits=0):
         "email": f"{uid}@example.com",
         "phone": f"+1555{uuid.uuid4().int % 10_000_000:07d}",
         "free_credits_remaining": free_credits,
+        "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.0"},
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     doc = {"device_id": f"user:{uid}"}

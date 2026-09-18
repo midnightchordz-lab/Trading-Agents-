@@ -29,6 +29,7 @@ _db.users.insert_one({
     "email": f"{_USER_ID}@example.com",
     "google_sub": None,
     "apple_sub": None,
+    "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.0"},
     "created_at": datetime.now(timezone.utc).isoformat(),
 })
 # Fund the test user's wallet so priced actions work whether or not wallet

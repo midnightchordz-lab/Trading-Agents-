@@ -95,6 +95,11 @@ def is_admin(user: Optional[dict]) -> bool:
 
 # --- Wallet / usage-based pricing (additive; OFF by default — see WALLET_ENFORCEMENT_ENABLED) ---
 WALLET_ENFORCEMENT_ENABLED = os.environ.get("WALLET_ENFORCEMENT_ENABLED", "false").lower() == "true"
+# Bump this whenever the privacy notice / data practices materially change
+# — a stored consent only counts for the version it was actually given
+# against. DPDP (India) requires informed, specific consent; a user who
+# agreed to an older notice hasn't agreed to a materially different one.
+CONSENT_VERSION = "1.0"
 # Launch promotion: everyone bypasses billing until this date, automatically
 # — no manual flag to remember to flip weeks later. Empty by default (no
 # free period unless explicitly configured). ISO date, e.g. "2026-10-16".

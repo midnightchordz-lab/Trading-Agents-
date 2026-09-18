@@ -48,6 +48,7 @@ def owner_hash(user_id: str) -> str:
 def mint_user():
     uid = f"TEST_hist-{uuid.uuid4()}"
     _db.users.insert_one({"id": uid, "email": f"{uid}@example.com",
+                          "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.0"},
                           "created_at": datetime.now(timezone.utc).isoformat()})
     tok = au.create_session_token(uid, JWT_SECRET)
     return uid, {"Content-Type": "application/json", "Authorization": f"Bearer {tok}"}

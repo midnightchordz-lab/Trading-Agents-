@@ -43,6 +43,7 @@ def _mint_user(email=None, phone=None):
         "id": uid,
         "email": email,
         "phone": phone,
+        "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.0"},
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     _db.wallets.update_one(

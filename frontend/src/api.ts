@@ -154,7 +154,16 @@ export type Timeframes = {
   long_term: TimeframeCall;
 };
 
-export type SessionUser = { id: string; phone?: string | null; email?: string | null };
+export type SessionUser = {
+  id: string;
+  phone?: string | null;
+  email?: string | null;
+  /** False until the account has affirmatively agreed to the CURRENT privacy
+   *  notice. The app shows the consent screen once while this is false; the
+   *  backend independently 403s /analyze with `consent_required` until then. */
+  consent_given?: boolean;
+  consent_version_required?: string;
+};
 
 // Every request carries the stored session token. auth.ts registers the
 // getter on import so api.ts stays free of a circular dependency.
@@ -313,4 +322,11 @@ export const api = {
   authMe: (token: string) =>
     j<SessionUser>(`/auth/me`, { headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` } }),
   deleteAccount: () => j<{ deleted: boolean }>(`/account`, { method: "DELETE" }),
+  // Only ever sends true: the backend rejects `agreed: false` outright rather
+  // than storing a "no", and withdrawal is deleteAccount.
+  recordConsent: () =>
+    j<{ consent_given: boolean; consent_version: string }>(`/consent`, {
+      method: "POST",
+      body: JSON.stringify({ agreed: true }),
+    }),
 };

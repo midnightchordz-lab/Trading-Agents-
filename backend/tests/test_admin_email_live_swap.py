@@ -79,6 +79,7 @@ def test_admin_via_email_env_driven():
         _db.users.insert_one({
             "id": uid, "phone": None, "email": admin_email,
             "google_sub": None, "apple_sub": None,
+            "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.0"},
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         _db.wallets.update_one(

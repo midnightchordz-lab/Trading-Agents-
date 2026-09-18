@@ -58,6 +58,7 @@ def _mk_user(phone=None, email=None) -> tuple[str, dict]:
         "email": email or f"{uid}@example.com",
         "google_sub": None,
         "apple_sub": None,
+        "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.0"},
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     tok = au.create_session_token(uid, JWT_SECRET)

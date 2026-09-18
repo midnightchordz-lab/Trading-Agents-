@@ -536,3 +536,46 @@ than changed unilaterally.
   cross-currency pack rejection, INR balance math, first-top-up locking, the existing-balance
   protection (including that the balance itself is never touched), `/wallet/balance` shapes, the
   ₹/$ 402 messages, and the IAP amount resolution + crediting. Full suite: **385 passed, 9 skipped**.
+
+## Consent recording + consent gate + account deletion (2026-06-20, session 12) — DONE
+Implemented from the user's `CONSENT_AND_ACCOUNT_DELETION.md`. DPDP (India) requires informed,
+specific, **affirmative** consent presented with the data request itself — not implied by continued
+use — plus withdrawal "as easy as giving consent".
+
+**Part A — the three backend edits, exactly as specced** (the spec was written against the old
+monolithic `server.py`; the same three edits landed in the post-refactor files):
+- `deps.py`: `CONSENT_VERSION = "1.0"`. A stored consent only counts for the version it was given
+  against, so bumping this re-asks everyone — someone who agreed to an older notice hasn't agreed
+  to a materially different one.
+- `routes/auth_routes.py`: `/auth/me` now returns `consent_given` + `consent_version_required`, and
+  `POST /consent` records `{agreed, agreed_at, version}`. `agreed: false` is **rejected with 400,
+  never stored** — this endpoint only records agreement; withdrawal is account deletion.
+- `routes/analysis.py`: `/analyze` returns **403 `consent_required`** for a signed-in account
+  without current consent. Specific reason, not a generic error, so the app knows it still owes the
+  screen.
+- `DELETE /account` already existed from the iOS-blockers work, byte-identical to the spec's
+  version (deletes `users` + `wallets`, deliberately NOT `payments` / `wallet_ledger` / `analyses`),
+  so it was left untouched rather than rewritten.
+
+**One deliberate deviation, and why:** the spec's gate reads `if user and not admin_bypass`. In this
+codebase `admin_bypass = is_admin(user) or launch_free_daily_ok`, so during a launch-free promotion
+that expression would switch the legal gate OFF for every ordinary user. Gated on `is_admin(user)`
+specifically instead, which is what the spec's own comment describes ("admin/reviewer accounts
+aren't real end-users"). A promotion must never quietly disable a consent gate.
+
+**Part B — the consent screen** (`frontend/src/components/ConsentScreen.tsx`): the notice text
+verbatim from the spec, rendered in the app's brutalist style, shown from `app/_layout.tsx` when
+`user.consent_given === false` — after sign-in, before anything else renders. The checkbox
+**starts unchecked always** and Continue is disabled until it's ticked (belt and braces with the
+backend's own affirmative-only rule). Links out to the Privacy Policy and Terms.
+
+**Test fixtures had to change (not production behaviour):** every signed-in test account now seeds
+a `consent` sub-document, because an account that hasn't consented genuinely can't analyse any more
+— that's the feature. 10 helper inserts touched, no assertions weakened.
+
+- Tests: `backend/tests/test_consent.py` (15) — fresh account blocked with the specific reason,
+  an older-version or `agreed: false` record not counting, `agreed: false` → 400 with nothing
+  stored, a missing `agreed` field → 422 (never a silent yes), consent recorded + `/analyze`
+  unblocked, anonymous requests never consent-gated (and market endpoints untouched), admin not
+  gated, deletion removing both records, and the pre-deletion token rejected on `/auth/me`,
+  `/history` and `/analyze` afterwards. Full suite: **399 passed, 9 skipped**.

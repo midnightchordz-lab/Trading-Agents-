@@ -53,6 +53,7 @@ def _mk_user(phone=None, email=None):
         "email": email if email is not None else f"{uid}@example.com",
         "google_sub": None,
         "apple_sub": None,
+        "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.0"},
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     tok = au.create_session_token(uid, JWT_SECRET)

@@ -131,6 +131,7 @@ def _make_account(email: str) -> tuple:
     uid = f"deltest-{uuid.uuid4()}"
     _db.users.insert_one({
         "id": uid, "phone": None, "email": email, "free_credits_remaining": 3,
+        "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.0"},
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     _db.wallets.insert_one({"device_id": f"user:{uid}", "balance": 7.5})

@@ -19,6 +19,7 @@ from core import db, logger, now_iso
 from deps import (
     LAUNCH_FREE_UNTIL,
     WALLET_ENFORCEMENT_ENABLED,
+    CONSENT_VERSION,
     consume_free_credit,
     get_current_user,
     get_free_credits_remaining,
@@ -83,6 +84,17 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
             upsert=True,
         )
     admin_bypass = is_admin(user) or launch_free_daily_ok
+
+    # Consent is about personal data — an anonymous device-only user (no
+    # sign-in) hasn't given us any, so this only applies to signed-in
+    # accounts, and admin/reviewer accounts aren't real end-users whose
+    # DPDP rights are in play here. Gated on is_admin specifically, NOT on
+    # admin_bypass: a launch-free user is a real end-user, and a promotion
+    # must never quietly switch a legal gate off.
+    if user and not is_admin(user):
+        consent = user.get("consent") or {}
+        if not (consent.get("agreed") and consent.get("version") == CONSENT_VERSION):
+            raise HTTPException(status_code=403, detail="consent_required")
 
     used_free_credit = False
     billed = WALLET_ENFORCEMENT_ENABLED and not admin_bypass
