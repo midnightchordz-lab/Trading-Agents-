@@ -277,7 +277,14 @@ async function j<T>(path: string, opts?: RequestInit): Promise<T> {
       const body = await res.json();
       detail = body?.detail || detail;
     } catch {}
-    throw new Error(detail);
+    const error: Error & { status?: number } = new Error(detail);
+    // The status, without touching the message: callers match machine-readable
+    // prefixes like "contact_required:email,phone" on it, so nothing may be
+    // appended — but a caller that shows the error to a user needs to be able
+    // to say WHICH failure it was ("Not authenticated" and "Not Found" look
+    // the same on screen and mean very different things).
+    error.status = res.status;
+    throw error;
   }
   return res.json();
 }

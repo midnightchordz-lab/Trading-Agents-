@@ -1,0 +1,37 @@
+{
+  "summary": "Iter 24 (wallet failure visibility + /api/pay/health): backend + frontend both green. 4/4 tests in test_pay_health.py pass; the unauthenticated GET /api/pay/health returns exactly {razorpay, razorpay_mode, razorpay_webhook_secret_set, apple_iap, currencies, wallet_enforcement} with values matching rzp.payments_configured() / bool(rzp.WEBHOOK_SECRET) / iap.configured() / list(wal.SUPPORTED_CURRENCIES) / WALLET_ENFORCEMENT_ENABLED, and the leak test asserts no >=12-char .env value (nor rzp_live_/rzp_test_) appears in the body. Focused regression (test_pay_health + test_wallet + test_checkout_502 + test_no_committed_secrets) = 72/72 green. Full backend regression (excluding LLM/Yahoo-dependent e2e + IAP webhook net calls) ran to completion with no F markers, only 8 documented skips (matches expected ~9 skipped). FRONTEND (mobile viewport 390x844, Expo web preview): all 5 wallet-card scenarios pass. (1) Baseline signed-in user: WALLET $0.00, price line 'Full analysis: $0.25 · re-checking an unchanged verdict is free', 3 topup packs +$5/+$10/+$25, footer 'Secure payment page hosted by Razorpay.', no wallet-load-error, no wallet-unconfigured. (2) With /api/wallet/balance forced to 401, wallet-load-error renders EXACTLY 'Couldn\\'t load your balance — Not authenticated (HTTP 401)' and wallet-retry button appears; wallet-unconfigured is NOT rendered and the string \"Payments aren't switched on\" appears nowhere. (3) Tapping RETRY with interception removed clears wallet-load-error and re-renders 3 topup packs. (4) With prices+packs stripped from an otherwise-200 balance response, wallet-unconfigured shows the reworded copy 'Top-ups are unavailable right now. Your balance and free analyses still work.' and the old 'isn\\'t active in this build yet' copy is absent from the page. (5) api.ts error-shape regression: tapping +$5 as an email-only account produces contact-prompt with ONLY the phone field (proves contact_required:phone parsed correctly out of error.message — no status pollution), entering 9999999999 keeps the sheet open with testID contact-error text 'Payments won\\'t accept a made-up number. Enter your real mobile number.' — the client-side rule fires before any Razorpay call. I did NOT drive the happy-path +919812345678 -> Razorpay page step to avoid creating a live payment link. Silent-catch survey: only one truly empty catch in frontend/src or frontend/app is api.ts:279 (JSON parse fallback for error body — safe, falls back to 'HTTP <n>'); every other .catch()/catch(e) either sets a visible error/failed state or logs — see critical_code_review_comments for the two that could still hide a failure quietly (QuoteCard chart and portfolio quote fetch).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_pay_health.py",
+    "/app/test_reports/pytest/iteration_24_focused.xml"
+  ],
+  "action_items": [
+    "None required for this iteration's brief — the visible-failure fix, the /api/pay/health endpoint, the reworded wallet-unconfigured copy, and the api.ts error-shape change all work end-to-end.",
+    "Consider (NOT part of this pass, reporting only): QuoteCard.tsx:39 .catch(() => setChart(null)) silently degrades a failed /chart call to 'no chart'; the range switch simply shows the sparkline again, so a user won't know the requested range failed. Same shape as the original wallet bug (a failed load reads as a valid but empty state).",
+    "Consider (reporting only): app/(tabs)/portfolio.tsx:237 .catch(() => [s, null]) swallows per-symbol quote errors and the surrounding code deliberately keeps the previous value ('a single upstream hiccup shouldn't blank the whole panel'). Reasonable, but a persistent failure for one symbol is completely invisible to the user."
+  ],
+  "critical_code_review_comments": [
+    "api.ts j(): the only remaining empty catch (line 279) is the JSON.parse fallback for the error body; if the body isn't JSON the code falls back to `HTTP <status>` as the message. Safe.",
+    "WalletCard.refresh sets loadError from e.message + `(HTTP <status>)` — matches the required prefix exactly ('Couldn\\'t load your balance — <msg> (HTTP <code>)').",
+    "Server-side /api/pay/health does not include RAZORPAY_KEY_ID nor any credential; grep of full response text against every backend/.env value of length >=12 (excluding MONGO_URL/DB_NAME/PUBLIC_BASE_URL as the test allows) finds nothing.",
+    "Silent-catch survey outside WalletCard: NewsList (sets failed=true — visible), LoginScreen (Alerts), ConsentScreen (Alert), AccountCard (setDeleteError visible), analyze onPress (Alert.alert), portfolioOptimize (setError). Only QuoteCard chart-fetch and portfolio per-symbol quote silently succeed on failure; both are called out as follow-ups above."
+  ],
+  "updated_files": [
+    "/app/backend/.env (temporarily flipped AUTH_DEBUG_RETURN_OTP=true to mint a UI login via debug OTP for playwright, then set back to false and backend restarted — verified with `grep AUTH_DEBUG_RETURN_OTP backend/.env` = false)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "Two ad-hoc UI test accounts created via email OTP (walletqa1@example.com, walletqa2@example.com). No wallet balance seeded; free-credit signup grant is what backed the baseline render.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "AUTH_DEBUG_RETURN_OTP is back to false in backend/.env and backend has been restarted — test_no_committed_secrets / any 'debug OTP must be off in prod' asserters will still be green. If you need a UI login, flip it to true, restart backend, then flip it back. The two follow-up silent-failure sites listed under action_items (QuoteCard chart, portfolio per-symbol quote) are reports only, not asked to be fixed. Full backend regression file `iteration_24_full.xml` did not get written because the pytest was backgrounded with output redirection; the run itself completed with only s (skip) markers and no F/E — re-run with `python -m pytest -q --junitxml=...` in the foreground if a fresh xml is needed.",
+  "rca_of_issue": "The user's production wallet card showed the em-dash-and-'payments aren\\'t switched on' state because WalletCard.refresh had a `catch {} // supplementary display; fail quietly` and rendered wallet=null identically to a wallet from a server with no payment config. A failed /api/wallet/balance call (auth/network) was therefore reported to the user as a deliberate configuration state. The fix in this iteration (a) makes the failure visible with the HTTP status and a retry (wallet-load-error + wallet-retry), (b) rewords the true-unconfigured path to say 'Top-ups are unavailable right now. Your balance and free analyses still work.', and (c) adds an unauthenticated GET /api/pay/health so the same question ('is payments configured on this deployment') is answerable from outside without a session token. Reproduction from the outside is intentionally now trivial: `await page.route('**/api/wallet/balance*', r => r.fulfill({status:401,...}))` renders the new copy with the status code, distinguishable from the true-unconfigured state."
+}

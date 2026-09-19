@@ -1154,3 +1154,54 @@ insurance, and the comment in the code says so rather than implying it was the f
   to the running server. My first version of the three error-mapping tests did that and created
   REAL live payment links while asserting a 502. They now call the route function in-process
   (`call_route`), and the stray links were cancelled.
+
+## "Payments aren't switched on yet" on the deployed build (2026-06-21, session 15) — root-caused, made self-reporting
+The user published, then sent a screenshot of the deployed app: no balance, no packs,
+"Usage-based pricing isn't active in this build yet", "Payments aren't switched on yet". Their
+reasonable read was that the Razorpay work hadn't taken effect.
+
+**What the screenshot actually showed.** The dash beside WALLET is our own `wallet == null`
+marker, so `GET /api/wallet/balance` had FAILED on their device. `WalletCard.refresh()` swallowed
+it — `catch {} // supplementary display; fail quietly` — and a null wallet renders identically to a
+wallet from a server with no payment config: no balance, no price line, no packs, footer saying
+payments are off. **A transport failure was being presented to the user as a deliberate product
+state**, which is why it looked like the fix hadn't landed.
+
+**What I could and couldn't determine.** Verified from outside:
+- Preview backend, that same account: ₹99, packs [99,199,499], `payments_live: true`, currency
+  locked INR, identity correct. Healthy.
+- Deployed backend (`trade-agent-app.emergent.host`): running that morning's code (a NaN payload to
+  `/api/portfolio/optimize` returns my new 422 handler, not a 500), `/api/pay/iap/config` 200, ten
+  consecutive `/wallet/balance` probes 401 in ~0.15s each, `/api/` 200, OTP POST 200 in ~1.5s.
+  Stable and fast.
+- I could NOT reproduce their failure: a deployed environment has its own `JWT_SECRET` and its own
+  database, so no token can be minted for it from here, and the deployment logs available to me
+  showed only health checks. Guessing a cause and calling it fixed would have been dishonest.
+
+**So the fix is to make it diagnose itself, in one tap:**
+- `WalletCard` now shows `wallet-load-error` — "Couldn't load your balance — <server's words>
+  (HTTP <status>)" — plus a RETRY button. "Not authenticated (HTTP 401)" and "Not Found (HTTP 404)"
+  look identical without the status and mean completely different things, and the user can only
+  report what they can see.
+- `api.ts` attaches `error.status` **without touching `error.message`**, because the checkout flow
+  matches machine-readable prefixes (`contact_required:`, `contact_invalid:`, `busy:`) on the
+  message — appending anything there would have broken the field-list parsing. Verified.
+- New unauthenticated `GET /api/pay/health` → `{razorpay, razorpay_mode, razorpay_webhook_secret_set,
+  apple_iap, currencies, wallet_enforcement}`, no secrets (a test greps the response for every
+  `.env` value, and for `rzp_live_`/`rzp_test_`). Added because the half hour I spent unable to
+  answer "are payments configured on THAT deployment" was the actual bottleneck.
+- Reworded the two dead-end messages. A 200 response with no prices now says "Top-ups are
+  unavailable right now. Your balance and free analyses still work." — that shape only happens when
+  a build and its backend are out of step, and the old wording read like a decision rather than a
+  mismatch.
+- Tests: `tests/test_pay_health.py` (4). Full suite **653 passed, 9 skipped**. Verified by the
+  testing agent (iteration_24): forced 401 shows the new error + status + RETRY, RETRY recovers,
+  stripped prices show the new wording, and the checkout error protocol still parses cleanly.
+
+**Reported by the testing agent, NOT fixed (same class of silent failure, worth a decision):**
+`QuoteCard.tsx:39` sets the chart to null on failure, so a failed range switch looks like "no
+chart"; `portfolio.tsx:237` keeps the previous price per symbol, so a persistent quote failure is
+invisible. Both are read-only displays rather than money, so they were left alone.
+
+**A mistake to not repeat:** while probing the deployed OTP endpoint I sent three real SMS codes to
++919812345678, a number used in tests. Probe with email identifiers, never a phone.

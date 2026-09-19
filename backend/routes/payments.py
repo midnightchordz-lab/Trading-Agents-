@@ -77,6 +77,25 @@ def suggest_currency(user: Optional[dict], region: Optional[str]) -> str:
     return "USD"
 
 
+@api_router.get("/pay/health")
+async def pay_health():
+    """Is this deployment able to take money? No session, no secrets.
+
+    Added because diagnosing the deployed build took half an hour of guessing:
+    every endpoint that could answer "are payments configured here" needed a
+    session token, and a production token can't be minted from outside. One
+    unauthenticated GET now answers it for any environment, and exposes
+    nothing a user couldn't infer from the top-up screen itself."""
+    return {
+        "razorpay": rzp.payments_configured(),
+        "razorpay_mode": ("live" if rzp.KEY_ID.startswith("rzp_live_") else "test") if rzp.KEY_ID else None,
+        "razorpay_webhook_secret_set": bool(rzp.WEBHOOK_SECRET),
+        "apple_iap": iap.configured(),
+        "currencies": list(wal.SUPPORTED_CURRENCIES),
+        "wallet_enforcement": WALLET_ENFORCEMENT_ENABLED,
+    }
+
+
 @api_router.get("/wallet/balance")
 async def wallet_balance(
     device_id: Optional[str] = None,

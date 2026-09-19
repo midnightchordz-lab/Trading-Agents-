@@ -41,12 +41,22 @@ export function WalletCard() {
   const [phoneInput, setPhoneInput] = useState("");
   const [contactError, setContactError] = useState<string | null>(null);
   const pendingOrder = useRef<string | null>(null);
+  // Why the balance is missing, when it is. Distinguishes "we couldn't load
+  // it" from "payments are off", which the card used to conflate.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const refresh = useCallback(async (id: string) => {
     try {
       setWallet(await api.getWalletBalance(id));
-    } catch {
-      // supplementary display; fail quietly
+      setLoadError(null);
+    } catch (e: any) {
+      // NOT silent. Failing quietly here is what produced a card that said
+      // "payments aren't switched on yet" on a deployed build where payments
+      // were in fact configured — the balance call had simply failed, and a
+      // null wallet reads exactly like an unconfigured one. Now the card says
+      // what happened, with the status code, and offers a retry.
+      const status = e?.status ? ` (HTTP ${e.status})` : "";
+      setLoadError(`${e?.message || "no response from the server"}${status}`);
     }
   }, []);
 
@@ -242,6 +252,17 @@ export function WalletCard() {
             ? `Free during launch — ${wallet.launch_free_daily_remaining} of ${wallet.launch_free_daily_cap ?? 10} analyses left today.`
             : "Every analysis is free during launch — no payment needed."}
         </Text>
+      ) : loadError ? (
+        <View testID="wallet-load-error">
+          <Text style={styles.priceNote}>{`Couldn't load your balance — ${loadError}`}</Text>
+          <Pressable
+            testID="wallet-retry"
+            onPress={() => deviceId && refresh(deviceId)}
+            style={styles.topUpBtn}
+          >
+            <Text style={styles.topUpText}>RETRY</Text>
+          </Pressable>
+        </View>
       ) : price ? (
         <Text style={styles.priceNote}>
           {freeCredits > 0
@@ -249,7 +270,13 @@ export function WalletCard() {
             : `Full analysis: ${symbol}${price.toFixed(2)} · re-checking an unchanged verdict is free`}
         </Text>
       ) : (
-        <Text style={styles.priceNote}>Usage-based pricing isn&apos;t active in this build yet.</Text>
+        // No prices in the payload means this app is talking to a server that
+        // predates usage-based pricing — which only happens when a build and
+        // its backend are out of step. Saying so beats "isn't active in this
+        // build yet", which read like a decision rather than a mismatch.
+        <Text testID="wallet-unconfigured" style={styles.priceNote}>
+          Top-ups are unavailable right now. Your balance and free analyses still work.
+        </Text>
       )}
 
       {launchFree ? (
@@ -306,7 +333,7 @@ export function WalletCard() {
           <Text style={styles.busyText}>Confirming payment…</Text>
         </View>
       ) : null}
-      {launchFree ? null : (
+      {launchFree ? null : price || wallet?.payments_live ? (
         <Text style={styles.placeholderNote}>
           {IS_IOS
             ? iap?.available
@@ -314,9 +341,9 @@ export function WalletCard() {
               : "Purchases are handled by the App Store."
             : wallet?.payments_live
               ? "Secure payment page hosted by Razorpay."
-              : "Payments aren't switched on yet."}
+              : "Top-ups are unavailable right now — everything else works as normal."}
         </Text>
-      )}
+      ) : null}
 
       <Modal visible={!!needContact} animationType="slide" transparent onRequestClose={() => setNeedContact(null)}>
         <KeyboardAvoidingView
