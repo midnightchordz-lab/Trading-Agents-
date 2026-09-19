@@ -68,7 +68,7 @@ function buildHtml(
   .lbl{position:absolute;left:6px;font-size:10px;color:#3F3F55;z-index:2;pointer-events:none}
   .wrap{position:relative}
 </style>
-<!-- integrity computed against the real file with `openssl dgst -sha384` and
+<!-- integrity computed against the real file with openssl dgst -sha384 and
      confirmed stable across refetches. The chart engine is third-party code
      loaded from a CDN, and the iframe sandbox is what stops it reaching our
      origin; this is what stops a swapped CDN file running at all. If the
