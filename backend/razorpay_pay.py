@@ -23,6 +23,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import httpx
 from dotenv import load_dotenv
@@ -38,8 +39,21 @@ KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 
 
+# Result of the startup credential probe: None until it has run, True/False
+# after. Exposed (without any secret) by GET /api/pay/health, because the
+# failure this catches — a deployed container carrying a rotated-out key pair —
+# is otherwise invisible until a real customer taps top-up and gets a 502.
+CREDENTIALS_OK: Optional[bool] = None
+
+
 def payments_configured() -> bool:
     return bool(KEY_ID and KEY_SECRET)
+
+
+def key_tail() -> str:
+    """Last 4 chars of the PUBLIC key id, to tell one deployed environment's
+    key from another's. The full key id is already sent to clients."""
+    return KEY_ID[-4:] if KEY_ID else ""
 
 
 def is_live_mode() -> bool:

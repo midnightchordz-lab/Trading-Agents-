@@ -64,3 +64,45 @@ def test_leaks_no_credential():
             assert value not in raw, f"{name} exposed by /pay/health"
     # Not even a key id, which is public but still an account identifier.
     assert "rzp_live_" not in raw and "rzp_test_" not in raw
+
+
+def test_reports_whether_the_keys_actually_authenticate():
+    """The failure that caused real customers' "couldn't start checkout" was a
+    DEPLOYED container holding a rotated-out key pair: `razorpay` was true
+    (both env vars present) while every top-up 502'd. Configured and accepted
+    are different questions, so health answers both."""
+    body = health()
+    assert body["razorpay_credentials_ok"] in (True, False, None)
+    if rzp.payments_configured():
+        # The startup probe runs on this backend, so by the time tests run it
+        # must have reached a verdict.
+        assert body["razorpay_credentials_ok"] is not None
+
+
+def test_key_tail_identifies_the_environment_without_exposing_the_key():
+    body = health()
+    tail = body["razorpay_key_tail"]
+    assert tail == (rzp.KEY_ID[-4:] if rzp.KEY_ID else "")
+    if rzp.KEY_ID:
+        # 4 chars can't be walked back to a key id, and the key id is public
+        # anyway (the app receives it) — but the full value still never appears.
+        assert len(tail) == 4
+        assert rzp.KEY_ID not in requests.get(f"{BASE}/pay/health", timeout=20).text
+
+
+def test_env_files_are_not_git_ignored():
+    """Three separate production payment outages traced back to the ROOT
+    .gitignore excluding `.env` / `.env.*` / `*.env`: the deploy build context
+    is the repo, so the container shipped with a stale environment and kept the
+    old (deactivated) Razorpay keys while the preview had the new ones. The
+    pattern has regenerated twice, so it is asserted rather than remembered."""
+    import subprocess
+    root = Path(__file__).parent.parent.parent
+    for rel in ("backend/.env", "frontend/.env"):
+        done = subprocess.run(
+            ["git", "check-ignore", "-v", rel], cwd=root, capture_output=True, text=True
+        )
+        assert done.returncode != 0, (
+            f"{rel} is git-ignored by {done.stdout.strip()} — a deploy will ship "
+            "without it and payments will fail with 'Authentication failed'."
+        )

@@ -3,7 +3,7 @@ import { View, Text, Pressable, StyleSheet } from "react-native";
 import { Tabs } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
-import { ChartLineUp, ClockCounterClockwise, UsersThree, Bell } from "phosphor-react-native";
+import { ChartLineUp, ClockCounterClockwise, UsersThree, Bell, Wallet } from "phosphor-react-native";
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { fonts, accents, TERMINAL } from "@/src/theme";
 import { useTranslation } from "react-i18next";
@@ -11,6 +11,7 @@ import { useTranslation } from "react-i18next";
 const TABS: Record<string, { labelKey: string; Icon: any; color: string }> = {
   index: { labelKey: "tabs.analyze", Icon: ChartLineUp, color: accents.blue },
   history: { labelKey: "tabs.history", Icon: ClockCounterClockwise, color: accents.pink },
+  portfolio: { labelKey: "tabs.portfolio", Icon: Wallet, color: accents.lime },
   alerts: { labelKey: "tabs.alerts", Icon: Bell, color: accents.amber },
   agents: { labelKey: "tabs.agents", Icon: UsersThree, color: accents.teal },
 };
@@ -61,7 +62,7 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="index" />
       <Tabs.Screen name="history" />
-      <Tabs.Screen name="portfolio" options={{ href: null }} />
+      <Tabs.Screen name="portfolio" />
       <Tabs.Screen name="alerts" />
       <Tabs.Screen name="agents" />
     </Tabs>

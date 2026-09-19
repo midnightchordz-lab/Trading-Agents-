@@ -158,8 +158,10 @@ async def ensure_payment_indexes():
         # keys otherwise looks fine until a customer taps top-up and gets a 502.
         try:
             await rzp.razorpay_request("GET", "/payments?count=1")
+            rzp.CREDENTIALS_OK = True
             logger.info("razorpay credentials authenticated")
         except rzp.RazorpayError as e:
+            rzp.CREDENTIALS_OK = False
             logger.error(f"RAZORPAY CREDENTIALS REJECTED [{e.code}]: {e.description} — top-ups will fail")
         except Exception as e:
             logger.warning(f"razorpay credential check skipped: {e}")

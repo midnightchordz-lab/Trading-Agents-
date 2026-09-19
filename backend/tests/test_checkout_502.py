@@ -343,19 +343,43 @@ def test_a_razorpay_field_rejection_becomes_an_inline_error():
     assert "Recurring digits" in caught.value.detail
 
 
-def test_an_unrelated_razorpay_failure_is_still_a_502():
-    """Don't blame the customer for our own problems."""
+def test_stale_keys_become_a_plain_unavailable_message():
+    """A rejected key pair is OUR problem — the deployed container is carrying
+    rotated-out credentials. "Razorpay: Authentication failed" reads like the
+    customer's own card was declined, so it is replaced by a plain
+    "temporarily unavailable, nothing was charged" and the health probe is
+    flipped so the environment can be diagnosed without log access."""
     uid, _ = seed_account(currency="INR")
     user_doc = db.users.find_one({"id": uid})
     real = pay.rzp.create_payment_link
+    before = pay.rzp.CREDENTIALS_OK
     pay.rzp.create_payment_link = failing_link(401, "Authentication failed")
     try:
         with pytest.raises(HTTPException) as caught:
             call_route(user_doc, amount=99, email="a@example.com", phone="+919812345678")
     finally:
         pay.rzp.create_payment_link = real
+        pay.rzp.CREDENTIALS_OK = before
+    assert caught.value.status_code == 503
+    assert "temporarily unavailable" in caught.value.detail
+    assert "nothing was charged" in caught.value.detail
+    # Never leak Razorpay's wording for this one; it misleads the customer.
+    assert "Authentication failed" not in caught.value.detail
+
+
+def test_an_unrelated_razorpay_failure_is_still_a_502():
+    """Don't blame the customer for our own problems."""
+    uid, _ = seed_account(currency="INR")
+    user_doc = db.users.find_one({"id": uid})
+    real = pay.rzp.create_payment_link
+    pay.rzp.create_payment_link = failing_link(500, "Server error, the payment could not be created")
+    try:
+        with pytest.raises(HTTPException) as caught:
+            call_route(user_doc, amount=99, email="a@example.com", phone="+919812345678")
+    finally:
+        pay.rzp.create_payment_link = real
     assert caught.value.status_code == 502
-    assert "Authentication failed" in caught.value.detail
+    assert "Server error" in caught.value.detail
 
 
 @pytest.mark.parametrize("description,field", [

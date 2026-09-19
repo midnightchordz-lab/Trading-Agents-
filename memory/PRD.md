@@ -1205,3 +1205,62 @@ invisible. Both are read-only displays rather than money, so they were left alon
 
 **A mistake to not repeat:** while probing the deployed OTP endpoint I sent three real SMS codes to
 +919812345678, a number used in tests. Probe with email identifiers, never a phone.
+
+## Deployed payments 502 — ROOT CAUSED AND FIXED (2026-06-22, session 16) — DONE
+The user reported, again, "HTTP 502 / couldn't start checkout" on the deployed build, right after
+being asked to type an email at top-up. Reproduced first, not guessed: a fresh phone-signup account
+on the PREVIEW backend goes 400 `contact_required:email` -> supplies email -> **200 with a real
+Razorpay link** (created and cancelled). So the code path is fine and the difference is the
+environment.
+
+**Root cause (confirmed by the deployed container's own logs, via deployment_agent):**
+`/api/pay/order` on the deployed host fails with Razorpay **"Authentication failed"** — it is still
+running the OLD, deactivated key pair. And the reason the deploy never picked up the new one:
+the root **`.gitignore` was excluding `.env` / `.env.*` / `*.env` again** (the deploy build context
+is the repo, so the container shipped with a stale environment). Independent proof before touching
+anything: `GET /api/pay/health` returned `razorpay_webhook_secret_set: false` on
+`trade-agent-app.emergent.host` and `true` on the preview — two different environments.
+- This is the THIRD time that .gitignore pattern has caused a production payment outage. Removed,
+  and replaced with a comment saying why it must not come back, plus
+  `tests/test_pay_health.py::test_env_files_are_not_git_ignored`, which runs
+  `git check-ignore -v backend/.env` and fails the suite if the pattern reappears.
+- **The user must REDEPLOY.** Verification is now one command, no log access needed:
+  `curl https://<deployed>/api/pay/health` must show `razorpay_credentials_ok: true` and
+  `razorpay_key_tail: "2LyM"` (the live pair in `backend/.env`; preview already reports both).
+
+**Two supporting changes:**
+- `/api/pay/health` gained `razorpay_credentials_ok` (the startup probe's verdict — null before it
+  runs, false when Razorpay REJECTED this container's keys) and `razorpay_key_tail` (last 4 chars of
+  the public key id, enough to tell a stale environment from a current one, still no secret).
+  `rzp.CREDENTIALS_OK` is set by the startup probe in `server.py` and also flipped to False the
+  moment `/pay/order` sees an auth failure.
+- A Razorpay auth failure on `/pay/order` is now **503 "Payments are temporarily unavailable —
+  nothing was charged. Please try again later."** It used to be `502 "Razorpay: Authentication
+  failed"`, which the app showed verbatim — that reads to a customer like their own card was
+  declined, when it is entirely our own broken credentials. Any OTHER Razorpay failure still returns
+  the 502 with Razorpay's description (test split in two accordingly).
+
+## Portfolio tab unhidden (2026-06-22, session 16) — DONE
+`options={{ href: null }}` removed and `portfolio` added to the tab-bar map (Wallet icon,
+lime accent, existing `tabs.portfolio` i18n key in all five locales). Five tabs now: ANALYZE /
+HISTORY / PORTFOLIO / ALERTS / AGENTS. Screen code untouched. Verified by the testing agent
+(iteration_25): all five render at 390px with no label clipping, `tab-portfolio` navigates, two
+holdings added -> Live P/L per holding + totals -> RUN OPTIMIZER returns TRIM/ADD actions, zero
+console errors, other four tabs unregressed. Pre-existing minor: the ADD HOLDING row clips below
+400px until a field is focused.
+
+## Test suite: 4m22s -> 2m33s (2026-06-22, session 16) — DONE
+The suite was **110 seconds of pure network latency**. Most modules talk to the backend over
+`EXPO_PUBLIC_BACKEND_URL`, i.e. the public preview host, so every request left the container and
+crossed the ingress: measured **146ms vs 2ms** on the loopback, and the analysis-polling tests poll
+for a minute each.
+- `tests/conftest.py` (new) points `EXPO_PUBLIC_BACKEND_URL` at `http://localhost:8001` before the
+  test modules are imported (they read it at import time, and conftest is imported first).
+  `TEST_VIA_INGRESS=1` restores the old behaviour; `TEST_BACKEND_URL` overrides the target.
+  Same backend process, so nothing about what is asserted changes.
+- `tests/test_ingress.py` (new, 3) keeps the proxy path covered on purpose — `/api/*` reaching port
+  8001, a quote, and `X-Forwarded-For` surviving the proxy — through the public host.
+- **Measured, not assumed: more workers is the WRONG lever.** `-n 4 --dist loadscope` came out
+  SLOWER (276s) *and* failed 5 tests, exactly the external rate-limiting the suite note warns
+  about. `addopts` stays `-n 2 --dist loadscope`.
+- Result: **660 passed, 9 skipped in 2m33s** (was 657 in 4m22s).

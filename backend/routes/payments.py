@@ -90,6 +90,13 @@ async def pay_health():
         "razorpay": rzp.payments_configured(),
         "razorpay_mode": ("live" if rzp.KEY_ID.startswith("rzp_live_") else "test") if rzp.KEY_ID else None,
         "razorpay_webhook_secret_set": bool(rzp.WEBHOOK_SECRET),
+        # null until the startup probe has run; False means this container's
+        # key pair was REJECTED by Razorpay (almost always a deployed image
+        # carrying rotated-out keys), so every top-up here will 502.
+        "razorpay_credentials_ok": rzp.CREDENTIALS_OK,
+        # Public key id's last 4 chars — tells "this environment has the new
+        # keys" from "this one is stale" without exposing anything secret.
+        "razorpay_key_tail": rzp.key_tail(),
         "apple_iap": iap.configured(),
         "currencies": list(wal.SUPPORTED_CURRENCIES),
         "wallet_enforcement": WALLET_ENFORCEMENT_ENABLED,
@@ -593,6 +600,18 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
             # Razorpay refused something the customer typed. Ask for that field
             # again with Razorpay's reason, rather than failing the whole flow.
             raise HTTPException(status_code=400, detail=f"contact_invalid:{field}:{e.description}")
+        if "authentication failed" in (e.description or "").lower():
+            # Nothing the customer can fix and nothing about their input: this
+            # container's Razorpay keys are wrong (in practice a deployed image
+            # holding a rotated-out pair). Say so plainly instead of showing
+            # "Razorpay: Authentication failed", which reads like the user's
+            # own payment was declined.
+            rzp.CREDENTIALS_OK = False
+            logger.error("RAZORPAY CREDENTIALS REJECTED on /pay/order — this deployment's keys are stale")
+            raise HTTPException(
+                status_code=503,
+                detail="Payments are temporarily unavailable — nothing was charged. Please try again later.",
+            )
         raise HTTPException(status_code=502, detail=f"Razorpay: {e.description}")
     except Exception as e:
         logger.error(f"razorpay payment link creation failed: {e}")

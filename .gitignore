@@ -83,6 +83,9 @@ android-sdk/
 credentials.json
 *.key
 .credentials
-.env
-.env.*
-*.env
+# NOTE: do NOT ignore .env / .env.* / *.env here. The Emergent deploy build
+# context is built from the repo, so ignoring them ships a container with a
+# STALE environment (this has already caused live Razorpay keys to be missing
+# in production three times: payments then fail with "Authentication failed"
+# and the app shows "Couldn't start checkout · HTTP 502"). Verify with
+# `git check-ignore -v backend/.env` — it must print nothing.
