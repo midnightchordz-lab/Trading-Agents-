@@ -414,16 +414,26 @@ async def pay_webhook(request: Request):
         return {"ok": True, "duplicate": True}
 
     event = json.loads(raw or b"{}")
+    if not isinstance(event, dict):
+        return {"ok": True}
     name = event.get("event")
     payload = event.get("payload", {}) or {}
     entity = (payload.get("payment", {}) or {}).get("entity", {})
-    payment_id, order_id = entity.get("id"), entity.get("order_id")
+    # Coerced to plain strings before they go near a lookup, for the same
+    # reason as /pay/callback: a dict here would be read by MongoDB as a query
+    # OPERATOR and could match an arbitrary payment record. Unlike the callback
+    # this body is signature-verified against the raw bytes, so it can't be
+    # forged without the webhook secret — this is defence in depth, not a hole
+    # anyone can reach today.
+    payment_id = entity.get("id") if isinstance(entity.get("id"), str) else None
+    order_id = entity.get("order_id") if isinstance(entity.get("order_id"), str) else None
 
     # Payment Links carry their own entity and are the authoritative event for
     # the top-up flow — the underlying order id may not be on our record yet.
     link_entity = (payload.get("payment_link", {}) or {}).get("entity", {})
-    if link_entity.get("id"):
-        record = await db.payments.find_one({"razorpay_payment_link_id": link_entity["id"]})
+    link_id = link_entity.get("id") if isinstance(link_entity.get("id"), str) else None
+    if link_id:
+        record = await db.payments.find_one({"razorpay_payment_link_id": link_id})
         if not record:
             return {"ok": True}
         if name == "payment_link.paid" and payment_id:

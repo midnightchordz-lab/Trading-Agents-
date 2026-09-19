@@ -138,6 +138,16 @@ def has_launch_free_daily_quota(count_today: int) -> bool:
 
 # Every new account gets this many analyses before the wallet is needed.
 FREE_CREDITS_ON_SIGNUP = 10
+# A brand-new account gets FREE_CREDITS_ON_SIGNUP real LLM analyses, so a
+# disposable email address is worth exactly that much in free compute. These
+# two caps are what stops one person harvesting it repeatedly: a device may
+# seed a free-credit grant once ever, and one network may seed a handful per
+# day. Deliberately NOT a sign-in block — an account past either cap is
+# created and fully usable, it just starts at zero free credits and pays like
+# anyone else. Blocking the sign-in itself would lock out genuine people
+# sharing an office or a carrier NAT.
+FREE_CREDIT_GRANTS_PER_DEVICE = 1
+FREE_CREDIT_GRANTS_PER_IP_PER_DAY = 5
 
 
 def should_use_free_credit(free_credits_remaining: Optional[int]) -> bool:

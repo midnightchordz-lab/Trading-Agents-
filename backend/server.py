@@ -82,6 +82,9 @@ async def ensure_payment_indexes():
         # Private per-account history reads on these two.
         await db.analyses.create_index("owner_hash")
         await db.analyses.create_index("viewer_hashes")
+        # Signup abuse guard reads these two on every new account.
+        await db.free_credit_grants.create_index("device_id")
+        await db.free_credit_grants.create_index([("ip", 1), ("created_at", -1)])
     except Exception as e:
         logger.warning(f"payment index setup failed: {e}")
     if rzp.payments_configured():

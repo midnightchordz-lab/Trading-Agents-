@@ -699,3 +699,52 @@ device-id namespace collisions, market-symbol validation, and the Starlette vers
   wallet at 0.00, a list body not crashing the callback, legitimate callback behaviour unchanged,
   and the secret check refusing four weak values (including with enforcement off) while starting
   on a real one. Full suite: **430 passed, 9 skipped**.
+
+## Webhook injection hardening + signup abuse guard (2026-06-20, session 15) — DONE
+
+### Webhook hardening (the deferred half of SECURITY_FIXES finding 4)
+`/pay/webhook` passed `entity["id"]`, `entity["order_id"]` and `link_entity["id"]` straight from the
+JSON body into Mongo lookups — the same shape as the callback bug, where a dict is read as a query
+OPERATOR and can match an arbitrary payment record. All three are now coerced to str-or-None
+before use, and a non-dict top-level body returns early instead of raising.
+
+Honest severity: this body is verified against the raw bytes with an HMAC signature BEFORE it is
+parsed, so nobody can reach the parser without the webhook secret. This is defence in depth, not a
+reachable hole — the tests say so explicitly, and because the signature gate means operator
+payloads never reach the parser, one test asserts the coercion against the source so the class
+can't pass with the fix reverted.
+
+### Signup abuse guard — free-credit farming
+**What the finding actually is, checked before building anything:** free credits live on the USER
+(`users.free_credits_remaining`), not the device, so rotating a device id on its own grants nothing
+— and an anonymous caller gets 0. The real farming path is creating another ACCOUNT: every
+disposable email address is worth `FREE_CREDITS_ON_SIGNUP = 10` real LLM analyses. The device id is
+a signal for catching that, not the vulnerability itself.
+
+Two caps, in `wallet.py`, enforced by `signup_free_credits()` in `routes/auth_routes.py` and applied
+at all THREE account-creation sites (OTP, Google, Apple):
+- `FREE_CREDIT_GRANTS_PER_DEVICE = 1` — a device may seed a free-credit grant once, ever.
+- `FREE_CREDIT_GRANTS_PER_IP_PER_DAY = 5` — the backstop for the named attack, rotating the device
+  id every time. Per day, not forever, so an office isn't permanently barred.
+Grants are recorded in a new `free_credit_grants` collection (`{user_id, device_id, ip,
+created_at}`, indexed on `device_id` and `(ip, created_at)`) and ONLY when credits were actually
+granted — a withheld grant can't inflate the counter that denied it.
+
+**The deliberate shape: exceeding a cap costs FREE CREDITS, never ACCESS.** The account is created
+and fully usable, it just starts at zero and pays like everyone else. Blocking sign-in on a shared
+office or carrier-NAT address would lock out genuine users — a far worse outcome than someone
+getting ten free analyses. A missing device id is likewise not treated as abuse.
+
+**IP source verified against this deployment, not assumed**: probed the live ingress, which sends
+`x-forwarded-for: <client>, <cloudflare>, <load-balancer>` and no trusted single-client header, so
+the left-most entry is the right one to read. It is client-supplied and therefore spoofable —
+documented in the code as the reason it is one of two signals and the reason a breach costs credits
+rather than access. (The temporary probe endpoint used to confirm this was removed; `git diff` on
+`routes/market.py` is clean.)
+
+- Tests: `backend/tests/test_signup_abuse_and_webhook.py` (14) — a genuine first signup unaffected,
+  a signup with no device id unaffected, re-signing-in never re-granting, a second account from the
+  same device getting 0, a withheld grant recording nothing, device-id rotation caught by the
+  address cap at exactly the cap, an innocent address unaffected by someone else's abuse,
+  three-day-old grants not counting, four operator payloads settling nothing, an unsigned webhook
+  always rejected, and the coercion asserted in source. Full suite: **446 passed, 9 skipped**.

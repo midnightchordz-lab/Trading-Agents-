@@ -8,11 +8,12 @@ fields, so anything else writing them would be a privilege escalation.
 import asyncio
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
 import requests
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 import auth as au
@@ -65,16 +66,78 @@ async def send_welcome_if_new(user: dict) -> None:
         await db.users.update_one({"id": user["id"]}, {"$set": {"welcome_sent_at": None}})
 
 
-async def find_or_create_user(identifier_type: str, identifier: str) -> dict:
+async def signup_free_credits(device_id: Optional[str], request: Optional[Request]) -> int:
+    """How many free credits a BRAND-NEW account should start with.
+
+    Free credits are per account, not per device, so rotating a device id on
+    its own grants nothing — the actual farming path is creating another
+    account, since any disposable email address is worth
+    wal.FREE_CREDITS_ON_SIGNUP real LLM analyses. The device id and the client
+    IP are the two signals we have for spotting the same person doing it
+    repeatedly: a device may seed a grant once ever, and a single network only
+    a handful per day.
+
+    Returns 0 rather than refusing the sign-in. The account is still created
+    and fully usable — it just pays like everyone else. Blocking sign-in on a
+    shared office or carrier-NAT address would lock out genuine users, which is
+    a far worse outcome than someone getting ten free analyses."""
+    ip = client_ip(request)
+    if device_id:
+        seen = await db.free_credit_grants.count_documents({"device_id": device_id})
+        if seen >= wal.FREE_CREDIT_GRANTS_PER_DEVICE:
+            logger.info(f"free credits withheld: device {device_id} already seeded {seen} account(s)")
+            return 0
+    if ip:
+        since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        recent = await db.free_credit_grants.count_documents({"ip": ip, "created_at": {"$gt": since}})
+        if recent >= wal.FREE_CREDIT_GRANTS_PER_IP_PER_DAY:
+            logger.info(f"free credits withheld: {recent} grants from this address in the last day")
+            return 0
+    return wal.FREE_CREDITS_ON_SIGNUP
+
+
+async def record_free_credit_grant(user_id: str, device_id: Optional[str], request: Optional[Request]) -> None:
+    """Logged only when credits were actually granted, so a withheld grant
+    never consumes the allowance it was already denied."""
+    await db.free_credit_grants.insert_one({
+        "user_id": user_id,
+        "device_id": device_id,
+        "ip": client_ip(request),
+        "created_at": now_iso(),
+    })
+
+
+def client_ip(request: Optional[Request]) -> str:
+    """Left-most x-forwarded-for entry — the original client as seen by the
+    ingress (verified against this deployment: the chain arrives as
+    `client, cloudflare, load-balancer`, and no trusted single-client header is
+    set). That entry is CLIENT-SUPPLIED and therefore spoofable, which is
+    exactly why it is one of two signals and why exceeding it costs free
+    credits rather than access — a false positive must never lock anyone
+    out."""
+    if not request:
+        return ""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else ""
+
+
+async def find_or_create_user(identifier_type: str, identifier: str,
+                              device_id: Optional[str] = None,
+                              request: Optional[Request] = None) -> dict:
     key = "phone" if identifier_type == "phone" else "email"
     existing = await db.users.find_one({key: identifier})
     if existing:
         return existing
+    granted = await signup_free_credits(device_id, request)
     user = {"id": str(uuid.uuid4()), "phone": None, "email": None, "google_sub": None,
-            "apple_sub": None, "free_credits_remaining": wal.FREE_CREDITS_ON_SIGNUP,
+            "apple_sub": None, "free_credits_remaining": granted,
             "created_at": now_iso()}
     user[key] = identifier
     await db.users.insert_one({**user})
+    if granted:
+        await record_free_credit_grant(user["id"], device_id, request)
     return user
 
 
@@ -154,7 +217,7 @@ async def auth_otp_request(body: OtpRequest):
 
 
 @api_router.post("/auth/otp/verify")
-async def auth_otp_verify(body: OtpVerify):
+async def auth_otp_verify(body: OtpVerify, request: Request):
     id_type, identifier = au.normalize_identifier(body.identifier)
     if not id_type:
         raise HTTPException(status_code=400, detail="Enter a valid phone number or email address")
@@ -181,7 +244,7 @@ async def auth_otp_verify(body: OtpVerify):
     if claimed.modified_count == 0:
         raise HTTPException(status_code=400, detail="This code was already used — request a new one")
 
-    user = await find_or_create_user(id_type, identifier)
+    user = await find_or_create_user(id_type, identifier, body.device_id, request)
     await link_device_wallet_to_user(body.device_id, user["id"])
     asyncio.create_task(send_welcome_if_new(user))
     token = au.create_session_token(user["id"], JWT_SECRET)
@@ -194,7 +257,7 @@ class GoogleSession(BaseModel):
 
 
 @api_router.post("/auth/session")
-async def auth_session(body: GoogleSession):
+async def auth_session(body: GoogleSession, request: Request):
     """Exchanges the one-time Emergent session_id for one of our own session
     tokens, creating/reusing a user keyed on the Google email."""
     try:
@@ -213,10 +276,13 @@ async def auth_session(body: GoogleSession):
 
     user = await db.users.find_one({"email": email})
     if not user:
+        granted = await signup_free_credits(body.device_id, request)
         user = {"id": str(uuid.uuid4()), "phone": None, "email": email, "google_sub": data.get("id"),
                 "apple_sub": None, "name": data.get("name"), "picture": data.get("picture"),
-                "free_credits_remaining": wal.FREE_CREDITS_ON_SIGNUP, "created_at": now_iso()}
+                "free_credits_remaining": granted, "created_at": now_iso()}
         await db.users.insert_one({**user})
+        if granted:
+            await record_free_credit_grant(user["id"], body.device_id, request)
     elif not user.get("google_sub"):
         await db.users.update_one({"id": user["id"]}, {"$set": {"google_sub": data.get("id")}})
 
@@ -243,7 +309,7 @@ def fetch_apple_jwks() -> list:
 
 
 @api_router.post("/auth/apple")
-async def auth_apple(body: SocialSignIn):
+async def auth_apple(body: SocialSignIn, request: Request):
     if not APPLE_SERVICES_ID:
         raise HTTPException(status_code=501, detail="Apple sign-in is not configured yet (APPLE_SERVICES_ID unset)")
     try:
@@ -256,10 +322,13 @@ async def auth_apple(body: SocialSignIn):
         raise HTTPException(status_code=401, detail="Invalid Apple sign-in token")
     user = await db.users.find_one({"apple_sub": claims.get("sub")})
     if not user:
+        granted = await signup_free_credits(body.device_id, request)
         user = {"id": str(uuid.uuid4()), "phone": None, "email": claims.get("email"),
                 "google_sub": None, "apple_sub": claims.get("sub"),
-                "free_credits_remaining": wal.FREE_CREDITS_ON_SIGNUP, "created_at": now_iso()}
+                "free_credits_remaining": granted, "created_at": now_iso()}
         await db.users.insert_one({**user})
+        if granted:
+            await record_free_credit_grant(user["id"], body.device_id, request)
     await link_device_wallet_to_user(body.device_id, user["id"])
     token = au.create_session_token(user["id"], JWT_SECRET)
     return {"token": token, "user": {"id": user["id"], "email": user.get("email")}}
