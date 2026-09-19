@@ -629,3 +629,73 @@ calls with no cap — a free upstream-quota amplifier. `holdings` is now `Field(
   concurrent analyses against one and two runs' worth of balance funding exactly one and two runs,
   a balance that can never go negative, and the 402 still naming the right currency.
   Full suite: **412 passed, 9 skipped**.
+
+## SECURITY_FIXES.md remediation (2026-06-20, session 14) — DONE
+The user supplied a remediation document written against commit `1d90583` — i.e. against the OLD
+monolithic `server.py`, before the refactor, before private history and before consent. Its stated
+scope ("exactly two files: backend/server.py and backend/tests/test_tradingagents.py") no longer
+maps onto this codebase. Following its OWN instruction — verify each finding against current HEAD
+before touching anything, never batch-assume — each of the five was checked against the real code
+first. Three were already closed; four edits were applied (3a, 3b, 4, 6 — finding 3 is three
+separate races and only 3c was already done).
+
+### Already fixed — verified, not assumed, and deliberately NOT re-touched
+- **Finding 1 (admin self-promotion via `/pay/order`)**: closed in session 9, and closed *better*
+  than the document's fix. Unverified client-supplied contact is stored under separate
+  `billing_email` / `billing_phone` fields and never over the verified `email` / `phone` the admin
+  allowlist matches on (`routes/payments.py:170-200`). The document's version (`email = email or
+  normalized`) would additionally have stopped a user correcting a wrong address for the current
+  payment — a behaviour regression for no extra safety. Covered by `test_security_fixes_iter16.py`.
+- **Finding 2 (unauthenticated read/delete of analyses)**: closed in session 9 (mandatory
+  `get_current_user`) and since hardened to per-account private history. The document flagged a
+  real tension — per-owner scoping vs the privacy commitment not to link analyses to identity —
+  and it is resolved rather than traded away: the stored `owner_hash` is an HMAC of the account id
+  keyed with `JWT_SECRET`, so a record can be matched to its owner by the server without an
+  identity being written onto it. Covered by `test_private_history.py`.
+- **Finding 3c (charge race)**: closed in session 13, currency-aware. Covered by
+  `test_security_fixes_iter20.py`.
+
+### Applied
+- **3a — OTP verify race** (`routes/auth_routes.py`): `verified` is now flipped with an atomic
+  claim, `update_one({"id": ..., "verified": False}, ...)`, and `modified_count == 0` returns "this
+  code was already used". Previously two requests carrying the same valid code both passed the
+  check and each ran a device-wallet merge.
+- **3b — wallet merge race** (`routes/auth_routes.py`): `find_one_and_update` claims and zeroes the
+  device wallet in one operation, and the account wallet is credited with `$inc` rather than a
+  total computed from a separate read. Only the request that actually zeroed a positive balance
+  credits anything, and it credits exactly what it claimed.
+- **4 — NoSQL injection in `/pay/callback`** (`routes/payments.py`): every value taken from a JSON
+  body is dropped unless it is a plain string, so `{"razorpay_order_id": {"$ne": ""}}` can no
+  longer be read by MongoDB as an operator matching an arbitrary payment record. A non-dict body
+  (e.g. a JSON list) is also handled — the document's `fields.items()` version would have thrown.
+- **6 — `JWT_SECRET` fail-closed** (`deps.py`): now refuses to start when the secret is unset,
+  under 32 characters, or the old default. Made **unconditional** rather than gated on
+  `AUTH_REQUIRED_ENABLED`, because tokens are issued and `owner_hash_for` is keyed regardless of
+  that flag. The existing iter16 tests still pass (the message keeps the "JWT_SECRET must be set"
+  phrase they assert on).
+
+### Corrected: the document's "urgent finding" that consent had disappeared
+It reported that `POST /consent`, the `/analyze` consent gate and `DELETE /account` were "not
+present in the current file" because `grep` of `server.py` returned nothing. That grep was correct
+and the conclusion was wrong: `server.py` is 97 lines since the refactor. All of it is present and
+live — `CONSENT_VERSION` in `deps.py:108`, the gate at `routes/analysis.py:96`, `record_consent` at
+`routes/auth_routes.py:283`, `delete_account` at `routes/auth_routes.py:303`, both endpoints
+answering 401 unauthenticated — with 15 passing tests in `test_consent.py`. Nothing was lost and no
+branch needs investigating.
+
+### Not touched, per the document's explicit "nothing else changes"
+`/pay/webhook` passes `link_entity["id"]` from its JSON body into a query — the same class as
+finding 4 — but it sits behind HMAC verification of the raw body, so a value can't be forged
+without the secret. Flagged for its own verify-fix-test cycle rather than batch-patched.
+Remaining open items from the document's own list: OTP request pumping, free-credit farming via
+repeated device ids, webhook/ledger reconciliation, `/pay/status` ownership for anonymous wallets,
+device-id namespace collisions, market-symbol validation, and the Starlette version.
+
+- Tests: `backend/tests/test_security_fixes_iter21.py` (20) — three simultaneous OTP verifies
+  redeeming one code exactly once and merging a $10 device wallet to exactly $10 (not $30), reuse
+  after success rejected, a wrong code still failing normally, zero-balance merge a no-op, a
+  legitimate merge still moving the money, merging into an existing balance adding rather than
+  replacing, four operator-injection payloads leaving a seeded pending payment `created` and its
+  wallet at 0.00, a list body not crashing the callback, legitimate callback behaviour unchanged,
+  and the secret check refusing four weak values (including with enforcement off) while starting
+  on a real one. Full suite: **430 passed, 9 skipped**.

@@ -81,21 +81,29 @@ async def find_or_create_user(identifier_type: str, identifier: str) -> dict:
 async def link_device_wallet_to_user(device_id: Optional[str], user_id: str) -> None:
     """On first login, merge an existing anonymous device wallet balance
     into the user's own wallet rather than losing it. Additive — never
-    removes the device-keyed record, just credits the user-keyed one."""
+    removes the device-keyed record, just credits the user-keyed one.
+
+    Claim-then-credit, both halves atomic: the device wallet is zeroed in the
+    SAME operation that reads its balance, and the user wallet is credited with
+    `$inc` rather than a computed total. Two concurrent logins could otherwise
+    both read the same pre-zero balance and each add it, or both compute a
+    total from the same stale read — either way multiplying real money. Only
+    the request whose claim actually zeroed a positive balance credits
+    anything, and it credits exactly what it claimed."""
     if not device_id:
         return
-    device_wallet = await db.wallets.find_one({"device_id": device_id})
-    if not device_wallet or device_wallet.get("balance", 0) <= 0:
+    claimed = await db.wallets.find_one_and_update(
+        {"device_id": device_id, "balance": {"$gt": 0}},
+        {"$set": {"balance": 0.0, "updated_at": now_iso()}},
+    )
+    if not claimed:
         return
-    user_wallet = await db.wallets.find_one({"device_id": f"user:{user_id}"})
-    current = float((user_wallet or {}).get("balance") or 0.0)
-    merged = round(current + device_wallet["balance"], 4)
     await db.wallets.update_one(
         {"device_id": f"user:{user_id}"},
-        {"$set": {"device_id": f"user:{user_id}", "balance": merged, "updated_at": now_iso()}},
+        {"$set": {"device_id": f"user:{user_id}", "updated_at": now_iso()},
+         "$inc": {"balance": round(float(claimed["balance"]), 4)}},
         upsert=True,
     )
-    await db.wallets.update_one({"device_id": device_id}, {"$set": {"balance": 0.0, "updated_at": now_iso()}})
 
 
 @api_router.post("/auth/otp/request")
@@ -162,7 +170,17 @@ async def auth_otp_verify(body: OtpVerify):
         await db.otp_requests.update_one({"id": record["id"]}, {"$set": {"attempts": record.get("attempts", 0) + 1}})
         raise HTTPException(status_code=400, detail="Incorrect code")
 
-    await db.otp_requests.update_one({"id": record["id"]}, {"$set": {"verified": True}})
+    # Atomic claim: only ONE concurrent request carrying the same valid code
+    # can flip verified False -> True and proceed past here. Without it both
+    # requests pass the check above, both call link_device_wallet_to_user, and
+    # each reads the same not-yet-zeroed device balance — multiplying real
+    # money.
+    claimed = await db.otp_requests.update_one(
+        {"id": record["id"], "verified": False}, {"$set": {"verified": True}}
+    )
+    if claimed.modified_count == 0:
+        raise HTTPException(status_code=400, detail="This code was already used — request a new one")
+
     user = await find_or_create_user(id_type, identifier)
     await link_device_wallet_to_user(body.device_id, user["id"])
     asyncio.create_task(send_welcome_if_new(user))

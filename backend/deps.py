@@ -24,11 +24,17 @@ from core import db
 AUTH_REQUIRED_ENABLED = os.environ.get("AUTH_REQUIRED_ENABLED", "false").lower() == "true"
 AUTH_DEBUG_RETURN_OTP = os.environ.get("AUTH_DEBUG_RETURN_OTP", "false").lower() == "true"  # DEV ONLY
 JWT_SECRET = os.environ.get("JWT_SECRET", "")
-if AUTH_REQUIRED_ENABLED and (not JWT_SECRET or JWT_SECRET == "dev-only-change-me"):
-    # Fail closed. A deploy that loses its env file would otherwise sign every
-    # session with a value that is public in this repository, letting anyone
-    # forge a token for any account — including an admin one.
-    raise RuntimeError("JWT_SECRET must be set when auth is enabled — refusing to start with a default secret")
+if not JWT_SECRET or len(JWT_SECRET) < 32 or JWT_SECRET == "dev-only-change-me":
+    # Fail closed, and do it unconditionally rather than only when auth is
+    # enforced: tokens are issued (and owner_hash_for keyed) regardless of
+    # that flag, so a missing or guessable secret means anyone can forge a
+    # session for any account — including an admin one. A deploy that loses
+    # its env file must refuse to start rather than quietly run forgeable.
+    raise RuntimeError(
+        "JWT_SECRET must be set to a real, random value of at least 32 characters. "
+        "A missing, short or default secret lets anyone forge a valid session token — "
+        "refusing to start."
+    )
 # Comma-separated phone/email allowlist — NOT hardcoded in source. Ships
 # with one default so the requested super-user works immediately; change
 # or extend via the real env var in your deployment, not by editing this line.

@@ -310,6 +310,12 @@ async def pay_callback(request: Request):
                 fields = await request.json()
             except Exception:
                 fields = {}
+    # A JSON body can put a dict or list where a string is expected — e.g.
+    # {"razorpay_order_id": {"$ne": ""}} — which MongoDB would read as a query
+    # OPERATOR rather than a literal, matching an arbitrary payment record.
+    # Every value taken from the body must be a plain string before it goes
+    # anywhere near a lookup. (Query params are always strings already.)
+    fields = {k: v for k, v in fields.items() if isinstance(v, str)} if isinstance(fields, dict) else {}
     q = request.query_params
     link_id = fields.get("razorpay_payment_link_id") or q.get("razorpay_payment_link_id")
     if link_id:
