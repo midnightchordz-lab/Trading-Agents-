@@ -5,6 +5,7 @@ Razorpay payment links (Android/Web) and Apple In-App Purchase via RevenueCat
 grow once per real payment, and only after the store itself confirms it.
 """
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -356,6 +357,66 @@ async def bind_order_id(record: dict, payment_id: str) -> dict:
     return record
 
 
+def sanitize_customer_name(raw: Optional[str]) -> str:
+    """Razorpay requires the customer name to be letters and spaces, 3-50
+    characters. A phone-OTP signup has no name at all and safely falls back to
+    the generic one; a Google/Apple name is whatever the provider returned, so
+    an emoji or a two-letter nickname would be sent verbatim.
+
+    Honest note: the server logs have NEVER shown Razorpay rejecting this
+    field, so this is insurance rather than the fix for the reported 502 — the
+    real causes are in the log and are handled below."""
+    cleaned = re.sub(r"\s+", " ", re.sub(r"[^A-Za-z ]", "", raw or "")).strip()
+    return cleaned[:50] if len(cleaned) >= 3 else "TradingAgents user"
+
+
+def contact_rejection(phone: Optional[str]) -> Optional[str]:
+    """Why Razorpay would refuse this number, or None if it looks real.
+
+    THIS is what the logs actually show: "Recurring digits in customer contact
+    are disallowed", four times, on the checkout path. It only ever hits new
+    accounts, because only a user with no phone on their account gets asked for
+    one — and a made-up 9999999999 is what people type into a field they did
+    not expect. Razorpay then rejects the whole payment-link request, which
+    surfaced as a 502 that said nothing about the number they just entered.
+    Checking here turns that into an inline field error before any API call.
+
+    Deliberately narrow: only patterns no real mobile number has. Anything
+    Razorpay dislikes for a subtler reason still gets its message mapped back
+    to the same field (see create_topup_order), so a miss here is not a 502."""
+    if not phone:
+        return None
+    digits = re.sub(r"\D", "", phone)
+    national = digits[-10:] if len(digits) > 10 else digits
+    if len(national) < 7:
+        return "That number looks too short — enter your mobile number with country code."
+    if len(set(national)) <= 2:
+        # 9999999999, 1111111111, 1212121212 — Razorpay's "recurring digits".
+        return "Payments won't accept a made-up number. Enter your real mobile number."
+    ascending = "01234567890123456789"
+    if national in ascending or national in ascending[::-1]:
+        return "Payments won't accept a made-up number. Enter your real mobile number."
+    return None
+
+
+# Razorpay error text that is about what the CUSTOMER typed, not about us. Each
+# maps to the field the app should re-ask for, so the user sees the problem next
+# to the input instead of a 502 they can do nothing about.
+CUSTOMER_FIELD_ERRORS = (
+    ("contact", ("contact", "phone", "recurring digits")),
+    ("email", ("email",)),
+    ("name", ("name",)),
+)
+
+
+def customer_field_for(description: str) -> Optional[str]:
+    text = (description or "").lower()
+    for field, needles in CUSTOMER_FIELD_ERRORS:
+        if any(needle in text for needle in needles):
+            return field
+    return None
+
+
 async def resolve_payment_customer(user: Optional[dict], body: "WalletTopup") -> tuple[dict, list]:
     """Razorpay rejects a payment link unless it carries a customer email AND
     contact number. Users sign in with only one of the two, so this fills in
@@ -387,7 +448,7 @@ async def resolve_payment_customer(user: Optional[dict], body: "WalletTopup") ->
             updates["billing_phone"] = phone
         if updates:
             await db.users.update_one({"id": user["id"]}, {"$set": updates})
-    customer = {"name": (user or {}).get("name") or "TradingAgents user", "email": email, "contact": phone}
+    customer = {"name": sanitize_customer_name((user or {}).get("name")), "email": email, "contact": phone}
     return customer, missing
 
 
@@ -459,6 +520,36 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
         # Machine-readable so the app can ask for exactly what's missing.
         raise HTTPException(status_code=400, detail=f"contact_required:{','.join(missing)}")
 
+    rejection = contact_rejection(customer.get("contact"))
+    if rejection:
+        # Before any API call: the user is told about their own input, next to
+        # the input, instead of being handed Razorpay's rejection as a 502.
+        raise HTTPException(status_code=400, detail=f"contact_invalid:phone:{rejection}")
+
+    # Reuse the link this user already has open for the same pack instead of
+    # asking Razorpay for another one. Tapping ₹99 twice — or backing out of
+    # the browser and tapping again, which is what people actually do — used to
+    # create a second link every time. That is how the most common failure in
+    # the log happened: "Too many requests", 38 of 48 recorded 502s, Razorpay
+    # rate-limiting link creation. Reuse also makes the second tap instant,
+    # because it skips the network call entirely.
+    open_link = await db.payments.find_one(
+        {"wallet_key": key, "status": "created", "amount": body.amount,
+         "currency": currency, "expires_at": {"$gt": now_iso()}},
+        sort=[("created_at", -1)],
+    )
+    if open_link and open_link.get("short_url"):
+        logger.info(f"reusing open payment link {open_link['razorpay_payment_link_id']} for {key}")
+        return {
+            "order_id": open_link["razorpay_payment_link_id"],
+            "amount": open_link["amount"],
+            "currency": open_link["currency"],
+            "symbol": wal.currency_symbol_for(open_link["currency"]),
+            "checkout_url": open_link["short_url"],
+            "key_id": rzp.KEY_ID,
+            "reused": True,
+        }
+
     reference_id = f"wallet_{uuid.uuid4().hex[:20]}"
     try:
         link = await rzp.create_payment_link(
@@ -472,8 +563,17 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
         )
     except rzp.RazorpayError as e:
         logger.error(f"razorpay payment link creation failed [{e.code}]: {e.description}")
-        # Razorpay's own wording is the only useful thing here — a generic
-        # "try again" sent the user round the same loop three times.
+        if rzp.is_rate_limited(e):
+            # Nothing is wrong with the request, so don't imply there is.
+            raise HTTPException(
+                status_code=503,
+                detail="busy:Payments are busy for a moment — tap again in a few seconds.",
+            )
+        field = customer_field_for(e.description)
+        if field:
+            # Razorpay refused something the customer typed. Ask for that field
+            # again with Razorpay's reason, rather than failing the whole flow.
+            raise HTTPException(status_code=400, detail=f"contact_invalid:{field}:{e.description}")
         raise HTTPException(status_code=502, detail=f"Razorpay: {e.description}")
     except Exception as e:
         logger.error(f"razorpay payment link creation failed: {e}")
@@ -492,6 +592,9 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
         "receipt": reference_id,
         "short_url": link["short_url"],
         "created_at": now_iso(),
+        # Stored so reuse can only ever hand back a link Razorpay still
+        # accepts; it mirrors the expire_by sent when the link was created.
+        "expires_at": rzp.link_expiry_iso(link),
         "updated_at": now_iso(),
     })
     return {

@@ -15,11 +15,13 @@ website(s)"), which is out of our control at runtime.
 
 No credentials, amounts or balances are ever trusted from the client.
 """
+import asyncio
 import hashlib
 import hmac
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -56,20 +58,42 @@ class RazorpayError(RuntimeError):
         super().__init__(f"razorpay {status_code} {code}: {description}")
 
 
-async def razorpay_request(method: str, path: str, **kwargs) -> dict:
-    async with httpx.AsyncClient(base_url=RAZORPAY_API, auth=(KEY_ID, KEY_SECRET), timeout=20) as c:
-        r = await c.request(method, path, **kwargs)
-        if r.status_code >= 400:
-            try:
-                err = r.json().get("error", {}) or {}
-            except Exception:
-                err = {}
-            raise RazorpayError(
-                r.status_code,
-                err.get("description") or r.text[:300],
-                err.get("code") or "",
-            )
-        return r.json()
+def is_rate_limited(error: "RazorpayError") -> bool:
+    """Razorpay throttling, which it reports as a 400 saying "Too many
+    requests" rather than a 429. The most common failure in our logs by far,
+    and the one thing here that is NOT the customer's fault."""
+    return error.status_code == 429 or "too many requests" in (error.description or "").lower()
+
+
+async def razorpay_request(method: str, path: str, retries: int = 1, **kwargs) -> dict:
+    """One retry on throttling only. Razorpay's rate limit is short-lived, so a
+    single 700ms wait turns most of those failures into a normal success
+    instead of an error the user has to react to. Nothing else is retried: a
+    rejected field would fail identically, and a payment must never be created
+    twice because we guessed the first attempt didn't land."""
+    attempt = 0
+    while True:
+        async with httpx.AsyncClient(base_url=RAZORPAY_API, auth=(KEY_ID, KEY_SECRET), timeout=20) as c:
+            r = await c.request(method, path, **kwargs)
+        if r.status_code < 400:
+            return r.json()
+        try:
+            err = (r.json() or {}).get("error", {}) or {}
+        except Exception:
+            err = {}
+        error = RazorpayError(
+            r.status_code,
+            # `r.text` as the fallback: two failures in our logs printed an
+            # EMPTY description, which told us nothing about what went wrong.
+            err.get("description") or f"{r.status_code} {r.reason_phrase}: {r.text[:200]}".strip(),
+            err.get("code") or "",
+        )
+        if attempt < retries and is_rate_limited(error):
+            attempt += 1
+            logger.warning(f"razorpay throttled on {method} {path}; retrying in 0.7s")
+            await asyncio.sleep(0.7)
+            continue
+        raise error
 
 
 async def fetch_payment(payment_id: str) -> dict:
@@ -77,6 +101,14 @@ async def fetch_payment(payment_id: str) -> dict:
 
 
 LINK_TTL_SECONDS = 60 * 60
+
+
+def link_expiry_iso(link: dict) -> str:
+    """When the link Razorpay just created stops being payable, as an ISO
+    string. Read back from Razorpay's own response rather than recomputed, so a
+    reused link can never be one Razorpay has already expired."""
+    expire_by = link.get("expire_by") or (int(time.time()) + LINK_TTL_SECONDS)
+    return datetime.fromtimestamp(int(expire_by), tz=timezone.utc).isoformat()
 
 
 async def create_payment_link(*, amount: float, currency: str, reference_id: str, notes: dict, callback_url: str, description: str, customer: dict) -> dict:

@@ -128,6 +128,20 @@ export function WalletCard() {
         setNeedContact({ fields: msg.split(":")[1].split(","), amount });
         return;
       }
+      if (msg.startsWith("contact_invalid:")) {
+        // The number or email they typed is what payments refused, so the
+        // sheet stays open with the reason on the field — not an alert that
+        // dismisses the one thing they need to change.
+        const [, field, ...rest] = msg.split(":");
+        setNeedContact({ fields: [field === "contact" ? "phone" : field], amount });
+        setContactError(rest.join(":").trim() || "That detail was refused — check it and try again.");
+        return;
+      }
+      if (msg.startsWith("busy:")) {
+        // Payments throttled us. Nothing is wrong with what they did.
+        Alert.alert("One moment", msg.slice("busy:".length).trim());
+        return;
+      }
       Alert.alert("Couldn't start checkout", msg);
     }
   };
@@ -143,8 +157,17 @@ export function WalletCard() {
       contact.email = emailInput.trim();
     }
     if (needContact.fields.includes("phone")) {
-      if (phoneInput.replace(/\D/g, "").length < 8) {
+      const digits = phoneInput.replace(/\D/g, "");
+      if (digits.length < 8) {
         setContactError("Enter your phone number with country code, e.g. +1…");
+        return;
+      }
+      // Mirrors the server's rule so a made-up number is caught before the
+      // round trip. Payments refuse numbers like 9999999999, and that refusal
+      // used to come back as an error with no mention of the number.
+      const national = digits.slice(-10);
+      if (new Set(national).size <= 2) {
+        setContactError("Payments won't accept a made-up number. Enter your real mobile number.");
         return;
       }
       contact.phone = phoneInput.trim();
