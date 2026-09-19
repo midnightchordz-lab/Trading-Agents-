@@ -129,6 +129,25 @@ def client_ip(request: Optional[Request]) -> str:
     return request.client.host if request.client else ""
 
 
+def identity_type_for(user: dict) -> str:
+    """"phone" or "email" — which identity this account verified at sign-in.
+
+    Stored on every account created from now on. For older ones it is inferred:
+    a Google/Apple account is always an email, and otherwise a stored phone is
+    the only field that can have come from a verified sign-in (an email could
+    have been typed for a payment receipt — see the startup migration)."""
+    stored = user.get("identity_type")
+    if stored in ("phone", "email"):
+        return stored
+    if user.get("google_sub") or user.get("apple_sub"):
+        return "email"
+    return "phone" if user.get("phone") else "email"
+
+
+def identity_for(user: dict) -> Optional[str]:
+    return user.get("phone") if identity_type_for(user) == "phone" else user.get("email")
+
+
 async def find_or_create_user(identifier_type: str, identifier: str,
                               device_id: Optional[str] = None,
                               request: Optional[Request] = None,
@@ -149,6 +168,10 @@ async def find_or_create_user(identifier_type: str, identifier: str,
     granted = await signup_free_credits(device_id, request)
     user = {"id": str(uuid.uuid4()), "phone": None, "email": None, "google_sub": None,
             "apple_sub": None, "free_credits_remaining": granted,
+            # Which field the account actually verified at sign-in. Recorded so
+            # the app can always show the identity the person signed in WITH,
+            # never an address that arrived some other way (a payment receipt).
+            "identity_type": key,
             "created_at": now_iso()}
     user[key] = identifier
     await db.users.insert_one({**user})
@@ -290,7 +313,8 @@ async def auth_otp_verify(body: OtpVerify, request: Request):
     await link_device_wallet_to_user(body.device_id, user["id"])
     asyncio.create_task(send_welcome_if_new(user))
     token = au.create_session_token(user["id"], JWT_SECRET)
-    return {"token": token, "user": {"id": user["id"], "phone": user.get("phone"), "email": user.get("email")}}
+    return {"token": token, "user": {"id": user["id"], "phone": user.get("phone"), "email": user.get("email"),
+                                     "identity": identity_for(user), "identity_type": identity_type_for(user)}}
 
 
 class GoogleSession(BaseModel):
@@ -331,7 +355,8 @@ async def auth_session(body: GoogleSession, request: Request):
     await link_device_wallet_to_user(body.device_id, user["id"])
     asyncio.create_task(send_welcome_if_new(user))
     token = au.create_session_token(user["id"], JWT_SECRET)
-    return {"token": token, "user": {"id": user["id"], "phone": user.get("phone"), "email": user.get("email")}}
+    return {"token": token, "user": {"id": user["id"], "phone": user.get("phone"), "email": user.get("email"),
+                                     "identity": identity_for(user), "identity_type": identity_type_for(user)}}
 
 
 _apple_jwks_cache: dict = {"keys": None, "fetched_at": 0.0}
@@ -373,7 +398,8 @@ async def auth_apple(body: SocialSignIn, request: Request):
             await record_free_credit_grant(user["id"], body.device_id, request)
     await link_device_wallet_to_user(body.device_id, user["id"])
     token = au.create_session_token(user["id"], JWT_SECRET)
-    return {"token": token, "user": {"id": user["id"], "email": user.get("email")}}
+    return {"token": token, "user": {"id": user["id"], "email": user.get("email"),
+                                     "identity": identity_for(user), "identity_type": identity_type_for(user)}}
 
 
 @api_router.get("/auth/me")
@@ -381,6 +407,12 @@ async def auth_me(user: dict = Depends(get_current_user)):
     consent = user.get("consent") or {}
     return {
         "id": user["id"], "phone": user.get("phone"), "email": user.get("email"),
+        # The identity this account signed in WITH, so the app never has to
+        # guess between a phone and an email that may have arrived from
+        # somewhere else. `identity_type` is stored from signup onward; older
+        # accounts are inferred from what they actually have.
+        "identity_type": identity_type_for(user),
+        "identity": identity_for(user),
         "consent_given": bool(consent.get("agreed")) and consent.get("version") == CONSENT_VERSION,
         "consent_version_required": CONSENT_VERSION,
     }

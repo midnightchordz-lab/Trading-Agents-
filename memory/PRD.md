@@ -895,3 +895,24 @@ reachable at `/portfolio`. **Open question for the user: unhide it?**
 - Verified by the testing agent (iter20): 554 passed / 9 skipped, Live P/L numbers and the
   mixed-currency note, no `currency-choice` in the wallet card, Arabic switch + restart note, and
   both chart iframes still painting with `allow-same-origin` gone.
+
+## "Signed in as someone else's gmail" — identity display bug (2026-06-21, session 15) — FIXED
+The user signed in with a phone number and the ACCOUNT card showed
+`lloydmasih1976@gmail.com`. Not an auth bug — the right account was logged in. Two causes, both
+closed:
+- **Bad data**: before the session-9 SEC-001 fix, `/pay/order` wrote the email a user typed for
+  their Razorpay receipt straight onto `users.email`. Their phone-signup record therefore held an
+  address they never verified. A startup migration (`server.migrate_unverified_billing_email`)
+  moves that email to `billing_email` for accounts that have a phone, an email, and NO
+  Google/Apple identity — exactly the accounts whose email cannot have come from a verified
+  sign-in. Google and email-OTP accounts are untouched (asserted in tests, since that half is what
+  could silently lock someone out of their own account). Idempotent, keeps an existing
+  `billing_email`, ran on the preview DB and moved 3 rows.
+- **The app was guessing**: `AccountCard` rendered `user.email || user.phone`. The backend now
+  decides: `identity_type_for()` / `identity_for()` in `routes/auth_routes.py`, returned as
+  `identity` + `identity_type` from `/auth/me` and from all three login responses. New accounts
+  store `identity_type` at creation; older ones are inferred (Google/Apple ⇒ email, otherwise a
+  stored phone is the only field that can be a verified sign-in).
+- Tests: `tests/test_identity_display.py` (8). Verified end-to-end by the testing agent
+  (iteration_21): a real phone sign-in shows the phone, an email sign-in shows the email, and the
+  reported account id now reports `+918291026526`.

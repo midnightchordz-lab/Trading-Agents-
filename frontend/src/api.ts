@@ -172,6 +172,11 @@ export type SessionUser = {
   id: string;
   phone?: string | null;
   email?: string | null;
+  /** The identity this account signed in WITH (phone number or email), decided
+   *  by the backend. Shown as-is: an email on the account may have come from a
+   *  payment receipt rather than a sign-in, so the app must not choose. */
+  identity?: string | null;
+  identity_type?: "phone" | "email";
   /** False until the account has affirmatively agreed to the CURRENT privacy
    *  notice. The app shows the consent screen once while this is false; the
    *  backend independently 403s /analyze with `consent_required` until then. */

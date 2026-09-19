@@ -90,6 +90,43 @@ async def migrate_legacy_wallet_field():
 
 
 @app.on_event("startup")
+async def migrate_unverified_billing_email():
+    """One-time: unverified billing emails sitting in the VERIFIED email field.
+
+    Before the SEC-001 fix, `/pay/order` wrote the email a user typed for their
+    Razorpay receipt straight onto `users.email` — the field the sign-in
+    identity and the admin allowlist both read. A phone-signup account could
+    therefore end up displaying an address it never verified (the bug reported
+    here: "signed in as <someone's gmail>" after signing in with a phone
+    number). New payments store it under `billing_email`; this moves the
+    already-written ones there.
+
+    Only accounts that signed in with a PHONE and have no Google/Apple identity
+    are touched — those are exactly the ones whose email cannot have come from
+    a verified sign-in. Email-OTP and Google accounts are left alone.
+    """
+    try:
+        moved = 0
+        async for doc in db.users.find({
+            "phone": {"$ne": None},
+            "email": {"$ne": None},
+            "google_sub": None,
+            "apple_sub": None,
+        }):
+            await db.users.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {"billing_email": doc.get("billing_email") or doc["email"],
+                          "identity_type": "phone"},
+                 "$unset": {"email": ""}},
+            )
+            moved += 1
+        if moved:
+            logger.info(f"moved {moved} unverified emails from users.email to billing_email")
+    except Exception as e:
+        logger.warning(f"billing email migration failed: {e}")
+
+
+@app.on_event("startup")
 async def ensure_payment_indexes():
     """Unique indexes are what keep a top-up from being credited twice."""
     try:

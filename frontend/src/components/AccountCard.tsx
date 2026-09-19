@@ -15,7 +15,8 @@ export function AccountCard() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   if (!user) return null;
 
-  const identity = user.email || user.phone || "Signed in";
+  // Backend-decided: whichever identity this account actually signed in with.
+  const identity = user.identity || user.phone || user.email || "Signed in";
 
   // Inline two-tap confirm instead of Alert.alert, which is a no-op on web.
   const onPress = () => {
