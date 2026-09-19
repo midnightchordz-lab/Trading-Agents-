@@ -1042,3 +1042,36 @@ a testing agent. Redacted, along with a live key ID and the RevenueCat public SD
   vacuously).
 
 - Full suite: **603 passed, 9 skipped**.
+
+## Key-security audit (2026-06-21, session 15) — DONE
+User declined further Razorpay dashboard changes and asked only that the keys be secure. Audited
+every path a credential can actually escape by, rather than re-reading the code:
+- **The downloadable app bundle** (the one that matters most — anything in it is published): pulled
+  the real 19 MB web bundle from the preview URL and searched it for all 10 credential values in
+  `backend/.env`. **None present.** Only the app name and the public backend URL, both non-secret.
+- **API responses**: probed 10 endpoints (`/api/`, wallet, quote, news, pay/status, analyze,
+  `/openapi.json`, `/docs`) for the same 10 values. The only hit is the **RevenueCat iOS SDK key**
+  on `/api/pay/iap/config`, which is public by design — it ships inside every App Store binary and
+  can only start a purchase, never read or move money. Left served from the backend deliberately so
+  it can be rotated without a new App Store build.
+- **FastAPI's own docs are not reachable**: `/api/docs`, `/api/redoc`, `/api/openapi.json` are all
+  404, and non-`/api` paths go to the frontend, so the API surface isn't published either.
+- **Logs**: no secret present. Twilio's SDK was logging its request URL at INFO, which embeds the
+  account SID (an identifier, not the secret — the auth token is never logged); its logger is now
+  WARNING. No OTP code has ever been logged. The only phone number in the logs is the admin's, and
+  only because admin account ids are literally `admin-<identifier>`.
+- **Flags**: `AUTH_DEBUG_RETURN_OTP=false`, `AUTH_REQUIRED_ENABLED=true`,
+  `WALLET_ENFORCEMENT_ENABLED=true`. `backend/.env` is untracked and now `chmod 600`.
+- `tests/test_no_committed_secrets.py` grew to 11 and **immediately earned its keep**: it failed on
+  `test_reports/iteration_22.json`, where the testing agent had pasted the Razorpay key ids back in
+  while verifying the previous redaction. Redacted. It now also asserts no backend credential is
+  referenced from `frontend/`, that every `EXPO_PUBLIC_*` value is just a URL, and that the debug
+  switches are off.
+- Full suite: **606 passed, 9 skipped**.
+
+### Still owner-side (unchanged)
+Rotate the OLD Razorpay TEST key — it remains in git history. The live secret was never committed.
+The Razorpay webhook URL still points at the PREVIEW host: after publishing, refunds and
+chargebacks for real customers would be processed against the preview database. Top-ups still
+settle on production through `/pay/status` polling, so this affects clawbacks only. User chose to
+leave the dashboard as it is.

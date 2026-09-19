@@ -99,6 +99,60 @@ def test_env_file_itself_is_not_tracked():
     assert out.stdout.strip() == "", f"env files must stay untracked: {out.stdout}"
 
 
+def test_no_credential_reaches_the_mobile_app(corpus):
+    """Anything the app can read, a user can read.
+
+    The Expo bundle is public by definition, so a credential referenced from
+    `frontend/` is a published credential — `EXPO_PUBLIC_*` values especially,
+    since Metro inlines them into the JavaScript. The one key the app IS given
+    (RevenueCat's iOS SDK key, fetched from /api/pay/iap/config) is public by
+    design: it ships inside every App Store binary and can only start a
+    purchase, never read or move money.
+    """
+    if not ENV_PATH.exists():
+        pytest.skip("backend/.env not present")
+    secrets = {
+        k: v for k, v in dotenv_values(ENV_PATH).items()
+        if v and len(v) >= 12 and k not in NOT_SECRET
+    }
+    leaks = []
+    for path, text in corpus:
+        rel = str(path.relative_to(REPO))
+        if not rel.startswith("frontend/"):
+            continue
+        for name, value in secrets.items():
+            if value in text:
+                leaks.append(f"{name} in {rel}")
+    assert not leaks, f"backend credentials referenced from the app: {leaks}"
+
+
+def test_frontend_env_publishes_nothing_secret():
+    """Every EXPO_PUBLIC_* value is compiled into the downloadable bundle."""
+    fe = REPO / "frontend" / ".env"
+    if not fe.exists():
+        pytest.skip("frontend/.env not present")
+    published = {k: v for k, v in dotenv_values(fe).items() if k.startswith("EXPO_PUBLIC_")}
+    for name, value in published.items():
+        assert value, f"{name} is empty"
+        # A URL is fine. A key is not.
+        assert value.startswith("http"), f"{name} looks like more than a URL: {name}={value[:6]}…"
+    for pattern in SECRET_PATTERNS.values():
+        for name, value in published.items():
+            assert not pattern.search(value or ""), f"{name} contains a credential"
+
+
+def test_debug_switches_are_off():
+    """`AUTH_DEBUG_RETURN_OTP` returns the one-time code in the API response —
+    it exists for local UI testing and turns sign-in into a formality if it is
+    ever left on."""
+    if not ENV_PATH.exists():
+        pytest.skip("backend/.env not present")
+    env = dotenv_values(ENV_PATH)
+    assert (env.get("AUTH_DEBUG_RETURN_OTP") or "false").lower() == "false"
+    assert (env.get("AUTH_REQUIRED_ENABLED") or "").lower() == "true"
+    assert (env.get("WALLET_ENFORCEMENT_ENABLED") or "").lower() == "true"
+
+
 def test_the_scan_actually_reads_files(corpus):
     """Guards the guard: a broken `git ls-files` or an over-eager skip list
     would make every assertion above pass by scanning nothing."""

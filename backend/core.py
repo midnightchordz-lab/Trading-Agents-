@@ -31,6 +31,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("tradingagents")
 
+# Twilio's SDK logs every request URL at INFO, and that URL embeds our account
+# SID. The SID is an identifier rather than a secret (the auth token is the
+# secret, and is never logged), but it does not belong in a log file that gets
+# read, pasted and attached to reports. WARNING still surfaces real failures.
+logging.getLogger("twilio.http_client").setLevel(logging.WARNING)
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
