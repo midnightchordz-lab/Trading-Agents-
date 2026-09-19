@@ -37,6 +37,11 @@ COMMODITY_NAMES = {
 }
 _market_cache: dict = {}
 _news_cache: dict = {}
+# Exactly the pattern /analyze already validates against. Every symbol that
+# reaches a Yahoo URL must match it: the host is fixed so this isn't SSRF, but
+# an unvalidated path segment is still an unbounded string going into someone
+# else's URL.
+TICKER_RE = re.compile(r'^[A-Z0-9.\-\^=]{1,20}$')
 
 
 _yf_session: Optional[requests.Session] = None

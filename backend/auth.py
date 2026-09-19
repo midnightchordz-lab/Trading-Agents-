@@ -44,14 +44,42 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _PHONE_RE = re.compile(r"^\+?[1-9]\d{7,14}$")  # loose E.164-ish check
 
 
+_DISPOSABLE_EMAIL_DOMAINS = {
+    # Starter list of well-known throwaway providers, used to raise the cost
+    # of free-credit farming via one-time addresses. NOT exhaustive and NOT
+    # maintained — a real deployment should swap this for a live
+    # disposable-domain service rather than trust a static set in source.
+    "mailinator.com", "10minutemail.com", "guerrillamail.com", "tempmail.com",
+    "temp-mail.org", "yopmail.com", "throwawaymail.com", "trashmail.com",
+    "getnada.com", "sharklasers.com", "dispostable.com",
+}
+
+
 def normalize_identifier(raw: str) -> tuple[Optional[IdentifierType], Optional[str]]:
     """Detects whether raw looks like an email or a phone number and
-    normalizes it. Returns (None, None) if it looks like neither."""
+    normalizes it. Returns (None, None) if it looks like neither.
+
+    Gmail canonicalization closes the cheapest free-credit farming path:
+    `a.b+tag@gmail.com` and `ab@gmail.com` are the SAME real inbox, but were
+    treated as different accounts, each claiming a fresh signup bonus.
+    Collapsing them means one inbox is one account. Only applied to
+    Gmail/Googlemail, because dot-insensitivity is a Gmail-specific
+    behaviour — doing it globally would merge genuinely distinct addresses
+    at other providers."""
     value = (raw or "").strip()
     if not value:
         return None, None
     if _EMAIL_RE.match(value):
-        return "email", value.lower()
+        email = value.lower()
+        local, _, domain = email.partition("@")
+        if domain in _DISPOSABLE_EMAIL_DOMAINS:
+            return None, None
+        if domain in ("gmail.com", "googlemail.com"):
+            local = local.split("+", 1)[0].replace(".", "")
+            if not local:
+                return None, None
+            email = f"{local}@gmail.com"
+        return "email", email
     digits_and_plus = re.sub(r"[\s\-()]", "", value)
     if _PHONE_RE.match(digits_and_plus):
         return "phone", digits_and_plus

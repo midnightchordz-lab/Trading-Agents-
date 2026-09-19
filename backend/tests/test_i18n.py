@@ -59,7 +59,13 @@ def test_directive_protects_json_keys_and_enums():
 
 
 def test_supported_languages_set():
-    assert set(SUPPORTED_LANGUAGES.keys()) == {"en", "hi", "es", "zh"}
+    assert set(SUPPORTED_LANGUAGES.keys()) == {"en", "hi", "es", "zh", "ar"}
+
+
+def test_arabic_directive_names_the_language_and_protects_keys():
+    directive = language_directive("ar")
+    assert "Arabic" in directive
+    assert "Keep every JSON KEY in English" in directive
 
 
 def test_system_prompt_constants_never_mutated():

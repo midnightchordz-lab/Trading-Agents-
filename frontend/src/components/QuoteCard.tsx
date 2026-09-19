@@ -179,6 +179,7 @@ const styles = StyleSheet.create({
     width: 3,
     height: 10,
     backgroundColor: colors.onSurface,
+    // Physical, matching the physical `left: %` the marker is positioned with.
     marginLeft: -1.5,
   },
   rangeRow: {
@@ -189,7 +190,7 @@ const styles = StyleSheet.create({
     borderColor: colors.borderStrong,
   },
   rangeChip: { flex: 1, paddingVertical: spacing.sm, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
-  rangeDivider: { borderRightWidth: 1.5, borderRightColor: colors.borderStrong },
+  rangeDivider: { borderEndWidth: 1.5, borderEndColor: colors.borderStrong },
   rangeActive: { backgroundColor: colors.brand },
   rangeText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1 },
   statsRow: {
@@ -199,8 +200,8 @@ const styles = StyleSheet.create({
   },
   stat: { flex: 1, padding: spacing.sm, paddingVertical: spacing.md },
   statMid: {
-    borderLeftWidth: BORDER,
-    borderRightWidth: BORDER,
+    borderStartWidth: BORDER,
+    borderEndWidth: BORDER,
     borderColor: colors.borderStrong,
   },
   statLabel: { fontFamily: fonts.mono, fontSize: 9, color: colors.onSurfaceTertiary, letterSpacing: 0.5 },

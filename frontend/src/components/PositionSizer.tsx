@@ -177,7 +177,7 @@ const styles = StyleSheet.create({
   headerText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1, color: colors.onSurfaceInverse },
   headerSub: { fontFamily: fonts.mono, fontSize: 9, color: colors.onSurfaceInverse, opacity: 0.7 },
   inputs: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: colors.border },
-  field: { flex: 1, padding: spacing.sm, borderRightWidth: 1, borderRightColor: colors.border },
+  field: { flex: 1, padding: spacing.sm, borderEndWidth: 1, borderEndColor: colors.border },
   fieldLabel: { fontFamily: fonts.monoBold, fontSize: 9, color: colors.onSurfaceTertiary, marginBottom: 2 },
   input: { fontFamily: fonts.mono, fontSize: 14, color: colors.onSurface, borderBottomWidth: BORDER, borderBottomColor: colors.borderStrong, paddingVertical: 2 },
   qtyRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: spacing.md, paddingVertical: spacing.sm },

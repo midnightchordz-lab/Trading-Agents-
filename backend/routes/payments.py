@@ -46,9 +46,32 @@ class WalletTopup(BaseModel):
     # create_topup_order for the locking logic. Ignored on every request
     # after that; an account's currency never changes once set.
     currency: Optional[str] = None
+    # Device region (ISO 3166-1 alpha-2), used only to pick the currency for a
+    # wallet that hasn't locked one yet.
+    region: Optional[str] = None
+
+
+def suggest_currency(user: Optional[dict], region: Optional[str]) -> str:
+    """Which currency a wallet with no locked currency should use: INR for
+    Indian users, USD for everyone else. This is a payment-method decision, not
+    a pricing preference — UPI/GPay can only settle INR, so a USD payment link
+    physically cannot offer them. The signal is the verified sign-in phone when
+    there is one (a +91 number is unambiguous), otherwise the device region.
+    Never consulted once a currency is locked."""
+    for field in ("phone", "billing_phone"):
+        if ((user or {}).get(field) or "").startswith("+91"):
+            return "INR"
+    if (region or "").strip().upper() == "IN":
+        return "INR"
+    return "USD"
+
 
 @api_router.get("/wallet/balance")
-async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] = Depends(require_user)):
+async def wallet_balance(
+    device_id: Optional[str] = None,
+    region: Optional[str] = None,
+    user: Optional[dict] = Depends(require_user),
+):
     key = wallet_key_for(user, device_id)
     if not key:
         raise HTTPException(status_code=400, detail="device_id is required")
@@ -59,7 +82,9 @@ async def wallet_balance(device_id: Optional[str] = None, user: Optional[dict] =
     daily_left = await launch_free_daily_remaining(key) if launch_free else None
     wallet_doc = await db.wallets.find_one({"device_id": key})
     stored_currency = (wallet_doc or {}).get("currency")
-    currency = stored_currency or "USD"
+    # Before the first top-up the app is shown the currency it will actually
+    # get, so the packs on screen are the packs that will be charged.
+    currency = stored_currency or suggest_currency(user, region)
     return {
         "device_id": key,
         "balance": round(balance, 2),
@@ -119,12 +144,21 @@ async def credit_wallet_once(payment_id: str, order: dict) -> bool:
         })
     except DuplicateKeyError:
         return False
-    await db.wallets.update_one(
-        {"device_id": order["wallet_key"]},
-        {"$inc": {"balance": order["amount"]},
-         "$set": {"device_id": order["wallet_key"], "updated_at": now_iso()}},
-        upsert=True,
-    )
+    try:
+        await db.wallets.update_one(
+            {"device_id": order["wallet_key"]},
+            {"$inc": {"balance": order["amount"]},
+             "$set": {"device_id": order["wallet_key"], "updated_at": now_iso()}},
+            upsert=True,
+        )
+    except Exception:
+        # Compensating rollback. The ledger row is the claim that makes a
+        # double credit impossible — but if the balance was never actually
+        # incremented, that same row would block EVERY future retry through
+        # the unique index, permanently losing a real payment. Undo the claim
+        # so the system is left cleanly retryable.
+        await db.wallet_ledger.delete_one({"payment_id": payment_id})
+        raise
     await db.payments.update_one(
         {"razorpay_order_id": order["razorpay_order_id"]},
         {"$set": {"status": "captured", "payment_id": payment_id, "updated_at": now_iso()}},
@@ -226,7 +260,7 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
         currency = "USD"
         await db.wallets.update_one({"device_id": key}, {"$set": {"currency": "USD"}})
     else:
-        currency = body.currency if body.currency in wal.SUPPORTED_CURRENCIES else "USD"
+        currency = body.currency if body.currency in wal.SUPPORTED_CURRENCIES else suggest_currency(user, body.region)
         await db.wallets.update_one(
             {"device_id": key},
             # $setOnInsert keeps a freshly created wallet well-formed: every
@@ -399,6 +433,18 @@ async def link_callback(fields: dict, q, link_id: str) -> HTMLResponse:
     return HTMLResponse(rzp.result_html("That payment didn't go through — nothing was charged.", ok=False))
 
 
+async def mark_webhook_event_processed(event_id: str) -> None:
+    """Records a webhook event as handled, only once processing has actually
+    completed. If two deliveries of the same event somehow race to here the
+    unique index still allows at most one insert — but that index is a
+    backstop, not the duplicate guard; the up-front find_one in pay_webhook
+    is."""
+    try:
+        await db.webhook_events.insert_one({"event_id": event_id, "received_at": now_iso()})
+    except DuplicateKeyError:
+        pass
+
+
 @api_router.post("/pay/webhook")
 async def pay_webhook(request: Request):
     """Razorpay's server-to-server confirmation. Verified against the raw body
@@ -407,10 +453,13 @@ async def pay_webhook(request: Request):
     if not rzp.verify_webhook_signature(raw, request.headers.get("X-Razorpay-Signature", "")):
         raise HTTPException(status_code=400, detail="Invalid webhook signature")
 
+    # A duplicate CHECK, not a claim. Recording the event up front meant a
+    # crash mid-processing left it marked "seen" forever, so Razorpay's retry
+    # was answered "duplicate" and the payment was never processed at all. The
+    # event is recorded only at the end of each path, once handling has
+    # actually completed without raising.
     event_id = request.headers.get("X-Razorpay-Event-Id", str(uuid.uuid4()))
-    try:
-        await db.webhook_events.insert_one({"event_id": event_id, "received_at": now_iso()})
-    except DuplicateKeyError:
+    if await db.webhook_events.find_one({"event_id": event_id}):
         return {"ok": True, "duplicate": True}
 
     event = json.loads(raw or b"{}")
@@ -435,6 +484,7 @@ async def pay_webhook(request: Request):
     if link_id:
         record = await db.payments.find_one({"razorpay_payment_link_id": link_id})
         if not record:
+            await mark_webhook_event_processed(event_id)
             return {"ok": True}
         if name == "payment_link.paid" and payment_id:
             expected = int(round(record["amount"] * 100))
@@ -446,13 +496,16 @@ async def pay_webhook(request: Request):
                 {"reference_id": record["reference_id"], "status": {"$ne": "captured"}},
                 {"$set": {"status": "failed", "updated_at": now_iso()}},
             )
+        await mark_webhook_event_processed(event_id)
         return {"ok": True}
 
     if not order_id:
+        await mark_webhook_event_processed(event_id)
         return {"ok": True}
 
     order = await db.payments.find_one({"razorpay_order_id": order_id})
     if not order:
+        await mark_webhook_event_processed(event_id)
         return {"ok": True}
 
     if name == "payment.captured" and payment_id:
@@ -463,11 +516,12 @@ async def pay_webhook(request: Request):
             {"razorpay_order_id": order_id},
             {"$set": {"status": "failed", "failure": entity.get("error_description"), "updated_at": now_iso()}},
         )
+    await mark_webhook_event_processed(event_id)
     return {"ok": True}
 
 
 @api_router.get("/pay/status/{order_id}")
-async def pay_status(order_id: str, user: Optional[dict] = Depends(require_user)):
+async def pay_status(order_id: str, device_id: Optional[str] = None, user: Optional[dict] = Depends(require_user)):
     """Polled by the app after checkout closes. If the browser redirect never
     made it back (WebView dismissed, network dropped), this asks Razorpay
     directly and credits then — so a paid top-up is never lost. Accepts either
@@ -477,8 +531,12 @@ async def pay_status(order_id: str, user: Optional[dict] = Depends(require_user)
     )
     if not order:
         raise HTTPException(status_code=404, detail="Unknown order")
-    key = wallet_key_for(user, None)
-    if key and order["wallet_key"] != key:
+    # Ownership is required of EVERY caller. This used to pass None for the
+    # device id, so an anonymous caller's key was always None and the check
+    # below was skipped for having nothing to compare — anyone with an order
+    # id could read its status and the wallet balance behind it.
+    key = wallet_key_for(user, device_id)
+    if not key or order["wallet_key"] != key:
         raise HTTPException(status_code=403, detail="Not your order")
 
     if order["status"] != "captured" and rzp.payments_configured():

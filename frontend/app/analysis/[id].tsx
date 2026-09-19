@@ -688,7 +688,7 @@ function TvSection({
 
 function DebateArg({ tag, color, text }: { tag: string; color: string; text: string }) {
   return (
-    <View style={[styles.debateArg, { borderLeftWidth: 6, borderLeftColor: color }]}>
+    <View style={[styles.debateArg, { borderStartWidth: 6, borderStartColor: color }]}>
       <View style={styles.debateArgHead}>
         <View style={[styles.debateDot, { backgroundColor: color }]} />
         <Text style={styles.debateArgTag}>[ {tag} ]</Text>
@@ -723,7 +723,7 @@ const styles = StyleSheet.create({
 
   segment: { flexDirection: "row", borderBottomWidth: BORDER, borderBottomColor: colors.borderStrong },
   segBtn: { flex: 1, height: 44, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
-  segDivider: { borderRightWidth: BORDER, borderRightColor: colors.borderStrong },
+  segDivider: { borderEndWidth: BORDER, borderEndColor: colors.borderStrong },
   segActive: { backgroundColor: colors.brand },
   segText: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1 },
 
@@ -751,7 +751,7 @@ const styles = StyleSheet.create({
 
   statsGrid: { flexDirection: "row", borderWidth: BORDER, borderTopWidth: 0, borderColor: colors.borderStrong },
   statCell: { flex: 1, padding: spacing.md },
-  statCellMid: { borderLeftWidth: BORDER, borderRightWidth: BORDER, borderColor: colors.borderStrong },
+  statCellMid: { borderStartWidth: BORDER, borderEndWidth: BORDER, borderColor: colors.borderStrong },
   statLabel: { fontFamily: fonts.mono, fontSize: 9, color: colors.onSurfaceTertiary, letterSpacing: 0.5 },
   statValue: { fontFamily: fonts.monoBold, fontSize: 14, color: colors.onSurface, marginTop: 4 },
 
@@ -764,7 +764,7 @@ const styles = StyleSheet.create({
   },
   rangeBtn: { flex: 1, height: 38, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
   rangeBarStacked: { borderTopWidth: 0 },
-  rangeDivider: { borderLeftWidth: 1.5, borderLeftColor: colors.border },
+  rangeDivider: { borderStartWidth: 1.5, borderStartColor: colors.border },
   rangeActive: { backgroundColor: colors.brand },
   rangeText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1 },
 

@@ -59,11 +59,12 @@ const styles = StyleSheet.create({
   scoreRow: { flexDirection: "row", alignItems: "flex-end", marginTop: spacing.sm, gap: spacing.xs },
   score: { fontFamily: fonts.display, fontSize: 40, letterSpacing: -1 },
   scoreOutOf: { fontFamily: fonts.mono, fontSize: 13, color: colors.onSurfaceTertiary, marginBottom: 8 },
-  blurb: { flex: 1, fontFamily: fonts.mono, fontSize: 10.5, lineHeight: 15, color: colors.onSurfaceTertiary, marginLeft: spacing.md, marginBottom: 4 },
+  blurb: { flex: 1, fontFamily: fonts.mono, fontSize: 10.5, lineHeight: 15, color: colors.onSurfaceTertiary, marginStart: spacing.md, marginBottom: 4 },
 
   track: { flexDirection: "row", height: 14, marginTop: spacing.md, borderWidth: 1.5, borderColor: colors.borderStrong },
   zone: { flex: 1 },
-  zoneDivider: { borderRightWidth: 1, borderRightColor: colors.surface },
+  zoneDivider: { borderEndWidth: 1, borderEndColor: colors.surface },
+  // marginLeft (not marginStart) because the marker is placed with `left: %`.
   marker: { position: "absolute", top: -6, marginLeft: -7 },
   markerDot: { width: 14, height: 26, backgroundColor: colors.onSurface, borderWidth: 2, borderColor: colors.surface },
 

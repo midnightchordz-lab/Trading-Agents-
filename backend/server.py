@@ -5,7 +5,9 @@ endpoints in routes/, the agent pipeline in pipeline.py and the market feeds in
 market_data.py. This file only assembles them and owns the startup work that
 has to happen exactly once per process.
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
 import razorpay_pay as rzp
@@ -16,6 +18,26 @@ app = FastAPI()
 
 for module in (market, analysis, auth_routes, payments, portfolio):
     app.include_router(module.api_router)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, exc: RequestValidationError):
+    """422 with the field and the reason, and nothing else.
+
+    FastAPI's default handler echoes the offending input back, which turned a
+    rejected NaN / Infinity into a 500: those values are valid JSON to send but
+    cannot be serialized into a JSON response. Reporting only loc/msg/type
+    fixes that and stops arbitrary request content bouncing back to the caller.
+    """
+    return JSONResponse(
+        status_code=422,
+        content={"detail": [
+            {"loc": [str(part) for part in err.get("loc", ())],
+             "msg": str(err.get("msg", "")),
+             "type": str(err.get("type", ""))}
+            for err in exc.errors()
+        ]},
+    )
 
 
 @app.get("/health")
@@ -34,8 +56,11 @@ app.add_middleware(
     # combination browsers reject anyway.
     allow_credentials=False,
     allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Only the verbs and headers this API actually uses. The app sends nothing
+    # but a bearer token and JSON, so a browser has no reason to be allowed to
+    # preflight anything else.
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 

@@ -85,7 +85,7 @@ export default function HistoryScreen() {
       <Pressable
         testID={`history-row-${item.symbol}`}
         onPress={() => router.push(`/analysis/${item.id}`)}
-        style={[styles.row, { borderLeftWidth: 5, borderLeftColor: item.verdict ? verdictColors(item.verdict.decision).bg : accentAt(index) }]}
+        style={[styles.row, { borderStartWidth: 5, borderStartColor: item.verdict ? verdictColors(item.verdict.decision).bg : accentAt(index) }]}
       >
         <View style={styles.rowMain}>
           <Text style={styles.rowSymbol}>{item.symbol}</Text>

@@ -748,3 +748,150 @@ rather than access. (The temporary probe endpoint used to confirm this was remov
   address cap at exactly the cap, an innocent address unaffected by someone else's abuse,
   three-day-old grants not counting, four operator payloads settling nothing, an unsigned webhook
   always rejected, and the coercion asserted in source. Full suite: **446 passed, 9 skipped**.
+
+## SECURITY_FIXES_PART2 section 1 — findings 5, 7, 9, 10, 11, 12, 13 (2026-06-20, session 16) — DONE
+The document's diff was again written against the old monolithic `server.py` and had **never been
+applied here** — verified by grepping for each fix before touching anything. Only finding 12's
+holdings cap already existed (added during the session-13 audit). Applied one at a time, each
+adapted to the current file layout and tested before moving on.
+
+- **F5 — OTP pumping** (`routes/auth_routes.py`): added `OTP_MAX_PER_IP_PER_HOUR = 20` alongside the
+  existing 5/hour per-identifier limit, reusing `au.is_rate_limited`; the request's IP is now stored
+  on the `otp_requests` row so the limit has something to count. Per-identifier limiting never fires
+  against an attacker cycling fresh addresses. Honest scope: per-IP, not global — a distributed
+  attacker needs a shared counter, which is a separate decision.
+- **F7 — free-credit farming via address variants** (`auth.py`): `normalize_identifier` now
+  canonicalizes Gmail/Googlemail (strips dots and `+tag`) and refuses a starter list of disposable
+  domains. Only Gmail, because dot-insensitivity is Gmail-specific. A dots-only local part is
+  refused rather than collapsing to `@gmail.com`.
+  **Regression this could have caused, found and closed**: anyone already stored as
+  `first.last@gmail.com` would no longer be found by the canonical lookup and would be handed a
+  brand-new empty account — silently losing a paid wallet balance. `find_or_create_user` now falls
+  back to the pre-canonical address and returns the existing record untouched. Checked the live DB:
+  0 of 3 Gmail accounts here would have changed identity, but the deployed database is a different
+  one, so the fallback matters. Test asserts the same account id AND the same balance.
+- **F9 — a payment could be permanently lost** (`routes/payments.py`): the webhook now does a
+  duplicate *check* up front and records the event only at the end of each completed path (5 call
+  sites; the malformed-body early return deliberately does NOT mark, since nothing was handled).
+  Recording it first meant a crash mid-processing answered Razorpay's retry "duplicate" forever.
+  `credit_wallet_once` now rolls back its ledger claim if the balance increment raises — otherwise
+  the unique index blocks every future retry while the money was never added.
+- **F10 — `/pay/status` ownership**: takes an optional `device_id` and the check is unconditional
+  (`if not key or ...`) instead of skipped whenever the key was falsy. **Verified against the real
+  deployment: not exploitable today** — the endpoint already sits behind a mandatory session, so an
+  anonymous caller is refused at the auth gate. The fix matters because the hole would reopen the
+  moment `AUTH_REQUIRED_ENABLED` were turned off. Tests assert 401 anonymous, 403 for another
+  account's order, 200 for the owner, and that a supplied `device_id` can't override a session.
+- **F11 — anonymous `device_id` naming an account wallet** (`deps.py`): `wallet_key_for` rejects a
+  client-supplied id starting with `user:`, fixed in the one shared function so every endpoint is
+  covered. (`/wallet/balance` already required auth, so this too was defence for the
+  auth-disabled configuration.)
+- **F12 — unbounded work/cache**: holdings cap already present; the news cache now evicts its 100
+  oldest entries at 500, instead of growing by one per distinct symbol forever on a login-free
+  endpoint that makes a real LLM call on a miss. Not done, flagged not decided: requiring auth on
+  `/news/{symbol}` would break anonymous ticker browsing — a product call.
+- **F13 — symbol validation**: `TICKER_RE` now lives in `market_data.py` (the layer that builds the
+  Yahoo URLs) and is applied on `/quote`, `/chart`, `/ohlc`, `/news` and the portfolio holdings.
+  **Matched on the UPPER-CASED form** — the app does request lowercase symbols, and rejecting those
+  would have been a regression, not a fix (caught while testing).
+- **One existing test updated for intended behaviour, not to hide a break**:
+  `test_ohlc_bad_symbol` expected 404 for `THIS_DOES_NOT_EXIST_XYZ`; that string isn't a ticker
+  shape, so it is now a 400 before any lookup. Renamed to `test_ohlc_malformed_symbol`, and a new
+  `test_ohlc_unknown_but_wellformed_symbol` keeps the original intent (a plausible but non-existent
+  ticker still 404s).
+
+**Finding 14 deliberately untouched**, per the document: the FastAPI + Starlette upgrade needs its
+own tested pass. `requirements.txt` was not edited.
+
+- Tests: `backend/tests/test_security_part2.py` (67). Full suite: **514 passed, 9 skipped**.
+
+### Still open after all three documents
+F14 (FastAPI/Starlette upgrade), F8 (chart scripts sharing the web origin — frontend), and the
+low-severity list: CORS scope, `public_base()` forwarded-header trust, empty-KEY_SECRET HMAC edge
+case, internal error text reaching clients, non-atomic OTP attempt counting, `Linking.openURL`
+scheme checks, inline `<script>` escaping in the chart components, unused requirements, and
+NaN/Infinity floats 500-ing portfolio input.
+
+## UPI fix + FastAPI upgrade + chart isolation + Live P/L + RTL (2026-06-21, session 15) — DONE
+
+### 1. "GPay and UPI are not visible on Razorpay" — the real cause was the WebView
+The user's wallet was already INR-locked and the page already showed ₹ amounts, so the currency
+wasn't the problem. Razorpay's own account was checked against `GET /v1/methods`: `upi: true`,
+`upi_intent: true` — UPI is enabled. What was wrong is WHERE the page opened. UPI / Google Pay pay
+by handing off to the UPI app through an Android app intent, which a bare `<WebView>` cannot
+launch, so Razorpay's checkout hides those methods inside one. `WalletCard` now opens the hosted
+link with `WebBrowser.openBrowserAsync` (Chrome Custom Tab / SFSafariViewController, which CAN hand
+off), falling back to `openExternalUrl`. The in-app SECURE CHECKOUT modal and the
+`react-native-webview` import are gone; the existing `/pay/status` polling still settles the
+payment when the browser is dismissed. **Only verifiable on a real device** — Expo Go's web
+preview can't show a UPI hand-off.
+
+### 2. Currency is now decided, not asked (user: "INR for Indian users and $ USD for anyone else")
+- `routes/payments.suggest_currency(user, region)` — INR when the account's VERIFIED `phone` (or
+  the `billing_phone` given for a receipt) starts with `+91`, else when the device region is IN,
+  else USD. Consulted ONLY for a wallet with no locked currency; a locked wallet still ignores the
+  region entirely, so a real $12.50 balance can never be reinterpreted as ₹12.50 (test asserts the
+  balance too, not just the code).
+- `/wallet/balance` takes `region` and reports the currency the wallet WILL get, so the packs on
+  screen are the packs that get charged. `/pay/order` resolves the same way when the app sends no
+  currency.
+- `api.ts` sends the device region from `expo-localization` on both calls; the one-time
+  "$ USD / ₹ INR" prompt (`currency-choice`) is deleted — the app holds no currency knowledge.
+- Tests: `tests/test_currency_by_region.py` (16).
+
+### 3. F14 — FastAPI 0.110.1 → 0.141.1, Starlette 0.37.2 → 1.6.0, uvicorn 0.25 → 0.38
+Installed, `pip freeze`d, full suite re-run: zero behaviour changes. Pydantic untouched.
+
+### 4. F8 — chart code no longer shares the app's origin
+Both chart iframes used `sandbox="allow-scripts allow-same-origin"`, and `allow-scripts` +
+`allow-same-origin` together is not a sandbox at all: a `srcDoc` document inherits the parent
+origin, so the TradingView bundle and the unpkg Lightweight Charts script could read the session
+token out of `localStorage` on web. `allow-same-origin` removed from both (TradingView keeps
+`allow-popups`); verified both still paint. `src/utils/scriptJson.ts` escapes `<`, `>` and U+2028/9
+in the JSON inlined into the `<script>` blocks, so a value containing `</script` can't break out.
+
+### 5. Hardening
+- `deps.public_base()` only trusts a `Host` / `X-Forwarded-Host` that matches `PUBLIC_BASE_URL`,
+  localhost, or a suffix in `PUBLIC_HOST_SUFFIXES` (default `emergentagent.com,tradingagents.in`);
+  anything else falls back to the configured base. Without it, `X-Forwarded-Host: evil.example`
+  made Razorpay send a paying customer to an attacker's page after checkout. The allowlist is
+  suffix-anchored, so `emergentagent.com.evil.example` is refused.
+- Atomic OTP attempt counting: `find_one_and_update` with `$inc`, so N parallel wrong guesses cost
+  N attempts (read-then-write let a burst all record the same number and spend the cap repeatedly).
+- `RequestValidationError` handler returns only loc/msg/type. NaN / Infinity in a portfolio holding
+  used to 500 — not from the maths but because the default handler echoes the input and those
+  values can't be serialized into a JSON response. `quantity` / `avg_price` / `cash` are now
+  `allow_inf_nan=False` (422), and no request content bounces back to the caller any more.
+- Optimizer failures return a fixed sentence; the library's exception text (internal matrices, file
+  paths) goes to the log only.
+- CORS narrowed to the verbs and headers this API actually uses (`allow_origins` stays `*` —
+  sessions are bearer tokens and `allow_credentials` is False).
+- `src/utils/openExternalUrl.ts` refuses anything that isn't http(s), used for the two URLs that
+  come from the network (Yahoo headlines, the Razorpay link).
+- Tests: `tests/test_hardening_iter21.py` (18).
+
+### 6. Live P/L on the Portfolio screen
+Per-holding live price, market value and gain/loss vs average price (coloured, with %), plus an
+INVESTED / MARKET VALUE / TOTAL P/L block and pull-to-refresh (quotes also refresh on focus).
+**The total only appears when every priced holding shares one currency** — an NSE holding and a US
+one added together would be a fabricated number, so that case shows `pl-mixed-note` instead. A
+symbol whose quote call fails keeps its last price rather than blanking the panel.
+The Portfolio tab itself is still hidden (`href: null` in `(tabs)/_layout.tsx`); the screen is
+reachable at `/portfolio`. **Open question for the user: unhide it?**
+
+### 7. RTL support, with Arabic so it's real rather than theoretical
+- `src/i18n/locales/ar.json` (all 68 keys; BUY/SELL/HOLD stay English by design) and `ar` added to
+  `SUPPORTED_LANGUAGES` here and in `pipeline.SUPPORTED_LANGUAGES`, so agents answer in Arabic
+  while JSON keys and enums stay English.
+- `RTL_LANGUAGES` + `applyLayoutDirection()` drive `I18nManager.allowRTL/forceRTL`. React Native
+  fixes the direction when the view tree is built, so `setLanguage` now returns whether a relaunch
+  is needed and `LanguagePicker` says so (`language-restart-note`) instead of leaving the user with
+  Arabic text in an unflipped layout. There is no `expo-updates` in this project to reload for them.
+- Physical style props swapped for logical ones (`marginStart/End`, `paddingStart/End`,
+  `borderStartWidth/Color`…) across the 13 files that used them, so the layout actually mirrors.
+  Two exceptions are deliberate and commented: the 52-week and Fear&Greed markers keep `marginLeft`
+  because they are positioned with a physical `left: %`.
+
+- Verified by the testing agent (iter20): 554 passed / 9 skipped, Live P/L numbers and the
+  mixed-currency note, no `currency-choice` in the wallet card, Arabic switch + restart note, and
+  both chart iframes still painting with `allow-same-origin` gone.

@@ -15,6 +15,7 @@ import httpx
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from pymongo import ReturnDocument
 
 import auth as au
 import mailer
@@ -22,6 +23,11 @@ import sms
 import wallet as wal
 from core import db, logger, now_iso
 from deps import APPLE_SERVICES_ID, AUTH_DEBUG_RETURN_OTP, CONSENT_VERSION, JWT_SECRET, get_current_user
+
+# Per-IP ceiling on OTP requests, deliberately much looser than the 5/hour
+# per-identifier limit: it exists to stop one source pumping SMS across many
+# numbers, not to police a single person retrying their own code.
+OTP_MAX_PER_IP_PER_HOUR = 20
 
 api_router = APIRouter(prefix="/api")
 
@@ -125,9 +131,19 @@ def client_ip(request: Optional[Request]) -> str:
 
 async def find_or_create_user(identifier_type: str, identifier: str,
                               device_id: Optional[str] = None,
-                              request: Optional[Request] = None) -> dict:
+                              request: Optional[Request] = None,
+                              raw_identifier: Optional[str] = None) -> dict:
     key = "phone" if identifier_type == "phone" else "email"
     existing = await db.users.find_one({key: identifier})
+    if not existing and key == "email" and raw_identifier:
+        # Gmail canonicalization changed what this lookup asks for. Anyone who
+        # signed up as "first.last@gmail.com" BEFORE that change is stored
+        # under the dotted address, and without this fallback they'd be handed
+        # a brand-new empty account — silently losing a wallet balance they
+        # paid for. Match their existing record and leave it exactly as it is.
+        pre_canonical = raw_identifier.strip().lower()
+        if pre_canonical != identifier:
+            existing = await db.users.find_one({key: pre_canonical})
     if existing:
         return existing
     granted = await signup_free_credits(device_id, request)
@@ -170,7 +186,7 @@ async def link_device_wallet_to_user(device_id: Optional[str], user_id: str) -> 
 
 
 @api_router.post("/auth/otp/request")
-async def auth_otp_request(body: OtpRequest):
+async def auth_otp_request(body: OtpRequest, request: Request):
     id_type, identifier = au.normalize_identifier(body.identifier)
     if not id_type:
         raise HTTPException(status_code=400, detail="Enter a valid phone number or email address")
@@ -179,6 +195,23 @@ async def auth_otp_request(body: OtpRequest):
     recent_ts = [r["created_at"] for r in recent]
     if au.is_rate_limited(recent_ts):
         raise HTTPException(status_code=429, detail="Too many attempts — try again later")
+
+    # Per-identifier limiting alone doesn't stop pumping: an attacker cycling
+    # through unlimited phone numbers stays under 5/hour on every single one
+    # while still running up real SMS spend and spamming strangers under this
+    # app's name. A looser per-IP ceiling closes that without troubling one
+    # real person signing in.
+    #
+    # Honest scope: this is per-IP, not global — a distributed attacker across
+    # many addresses isn't stopped by this alone, which would need a shared
+    # counter and careful sizing to avoid blocking real traffic in a spike.
+    ip = client_ip(request)
+    if ip:
+        recent_ip = await db.otp_requests.find({"ip": ip}, None).sort("created_at", -1).to_list(50)
+        if au.is_rate_limited([r["created_at"] for r in recent_ip],
+                              window_seconds=3600, max_requests=OTP_MAX_PER_IP_PER_HOUR):
+            raise HTTPException(status_code=429,
+                                detail="Too many attempts from this network — try again later")
 
     if id_type == "phone" and not sms.sms_configured():
         raise HTTPException(
@@ -191,6 +224,7 @@ async def auth_otp_request(body: OtpRequest):
         "id": str(uuid.uuid4()),
         "identifier": identifier,
         "identifier_type": id_type,
+        "ip": ip,
         "otp_hash": au.hash_otp(otp),
         "attempts": 0,
         "verified": False,
@@ -230,7 +264,15 @@ async def auth_otp_verify(body: OtpVerify, request: Request):
     if record.get("attempts", 0) >= au.OTP_MAX_ATTEMPTS:
         raise HTTPException(status_code=429, detail="Too many incorrect attempts — request a new code")
     if not au.verify_otp_code(body.otp, record["otp_hash"]):
-        await db.otp_requests.update_one({"id": record["id"]}, {"$set": {"attempts": record.get("attempts", 0) + 1}})
+        # $inc, not a computed total: N wrong guesses arriving together must
+        # cost N attempts. Reading the count and writing count+1 let a burst of
+        # parallel guesses all record the same value, so the cap of 5 could be
+        # spent many times over.
+        after = await db.otp_requests.find_one_and_update(
+            {"id": record["id"]}, {"$inc": {"attempts": 1}}, return_document=ReturnDocument.AFTER
+        )
+        if (after or {}).get("attempts", 0) >= au.OTP_MAX_ATTEMPTS:
+            raise HTTPException(status_code=429, detail="Too many incorrect attempts — request a new code")
         raise HTTPException(status_code=400, detail="Incorrect code")
 
     # Atomic claim: only ONE concurrent request carrying the same valid code
@@ -244,7 +286,7 @@ async def auth_otp_verify(body: OtpVerify, request: Request):
     if claimed.modified_count == 0:
         raise HTTPException(status_code=400, detail="This code was already used — request a new one")
 
-    user = await find_or_create_user(id_type, identifier, body.device_id, request)
+    user = await find_or_create_user(id_type, identifier, body.device_id, request, body.identifier)
     await link_device_wallet_to_user(body.device_id, user["id"])
     asyncio.create_task(send_welcome_if_new(user))
     token = au.create_session_token(user["id"], JWT_SECRET)

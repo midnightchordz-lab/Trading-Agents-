@@ -84,6 +84,6 @@ const styles = StyleSheet.create({
     backgroundColor: TERMINAL.panel,
   },
   tabActive: { backgroundColor: TERMINAL.lime },
-  tabDivider: { borderRightWidth: 0.5, borderRightColor: TERMINAL.line },
+  tabDivider: { borderEndWidth: 0.5, borderEndColor: TERMINAL.line },
   label: { fontFamily: fonts.mono, fontSize: 9, letterSpacing: 1 },
 });

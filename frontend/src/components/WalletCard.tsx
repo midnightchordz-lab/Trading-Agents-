@@ -11,7 +11,8 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
 } from "react-native";
-import { WebView } from "react-native-webview";
+import * as WebBrowser from "expo-web-browser";
+import { openExternalUrl } from "@/src/utils/openExternalUrl";
 import { useFocusEffect } from "expo-router";
 import { colors, fonts, spacing, BORDER, TERMINAL } from "@/src/theme";
 import { api, IapPack, WalletBalance } from "@/src/api";
@@ -32,7 +33,6 @@ export function WalletCard() {
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [wallet, setWallet] = useState<WalletBalance | null>(null);
   const [busy, setBusy] = useState(false);
-  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
   // Razorpay requires both an email and a phone number on every payment link,
   // but an account only has the one it signed in with — so the missing one is
   // asked for here, once.
@@ -40,10 +40,6 @@ export function WalletCard() {
   const [emailInput, setEmailInput] = useState("");
   const [phoneInput, setPhoneInput] = useState("");
   const [contactError, setContactError] = useState<string | null>(null);
-  // Which currency the user just picked, before any payment has locked it to
-  // the account. Only ever set while `currency_locked` is false; the backend
-  // is the source of truth from the first successful top-up onward.
-  const [chosenCurrency, setChosenCurrency] = useState<string | null>(null);
   const pendingOrder = useRef<string | null>(null);
 
   const refresh = useCallback(async (id: string) => {
@@ -102,7 +98,7 @@ export function WalletCard() {
     if (!deviceId) return;
     setBusy(true);
     try {
-      const order = await api.createTopupOrder(deviceId, amount, contact, chosenCurrency || undefined);
+      const order = await api.createTopupOrder(deviceId, amount, contact);
       setNeedContact(null);
       pendingOrder.current = order.order_id;
       if (Platform.OS === "web") {
@@ -111,8 +107,19 @@ export function WalletCard() {
         // The popup is a separate window, so poll from here.
         settle(order.order_id);
       } else {
-        setCheckoutUrl(order.checkout_url);
+        // The system browser, NOT an in-app WebView: UPI / Google Pay pay by
+        // handing off to the UPI app via an app intent, which a WebView can't
+        // launch — so Razorpay hides those methods entirely inside one. A
+        // Custom Tab / Safari can hand off, so the UPI options appear.
         setBusy(false);
+        try {
+          await WebBrowser.openBrowserAsync(order.checkout_url, { showTitle: true });
+        } catch {
+          await openExternalUrl(order.checkout_url);
+        }
+        // Resolves when the browser is dismissed; the payment may still be
+        // settling at Razorpay, which is what the polling is for.
+        settle(order.order_id);
       }
     } catch (e: any) {
       setBusy(false);
@@ -146,27 +153,11 @@ export function WalletCard() {
     topUp(needContact.amount, contact);
   };
 
-  const closeCheckout = () => {
-    setCheckoutUrl(null);
-    const orderId = pendingOrder.current;
-    if (orderId) settle(orderId);
-  };
-
-  const currencyLocked = wallet?.currency_locked !== false;
-  const options = wallet?.currency_options || [];
-  // Before a currency is locked the card shows whichever one the user just
-  // picked, rendered entirely from what the backend sent — the app never
-  // hardcodes an amount, a price or a symbol for either currency.
-  const pending = !currencyLocked && chosenCurrency ? options.find((o) => o.code === chosenCurrency) : undefined;
-  const symbol = pending?.symbol || wallet?.symbol || "$";
-  const price = (pending?.prices || wallet?.prices)?.full_analysis;
-  const packs = pending?.packs || wallet?.packs || [];
+  const symbol = wallet?.symbol || "$";
+  const price = wallet?.prices?.full_analysis;
+  const packs = wallet?.packs || [];
   const freeCredits = wallet?.free_credits_remaining ?? 0;
   const launchFree = wallet?.launch_free_active === true;
-  // Asked exactly once per account, and only where a currency is actually
-  // chosen: Apple bills in the buyer's own storefront currency, so the iOS
-  // path has nothing to ask.
-  const needsCurrencyChoice = !launchFree && !IS_IOS && wallet != null && !currencyLocked && !chosenCurrency;
 
   // iOS must sell through Apple; StoreKit is prepared only once an account is
   // known, because RevenueCat's App User ID is what decides whose wallet a
@@ -271,25 +262,6 @@ export function WalletCard() {
             </Text>
           </View>
         )
-      ) : needsCurrencyChoice ? (
-        // One-time choice, then never asked again. INR is what makes UPI
-        // appear at Razorpay's checkout — UPI can only settle INR, so the
-        // currency IS the payment-method choice.
-        <View testID="currency-choice">
-          <Text style={styles.priceNote}>Choose the currency for your wallet — this is set once.</Text>
-          <View style={styles.topUpRow}>
-            {options.map((opt) => (
-              <Pressable
-                key={opt.code}
-                testID={`currency-${opt.code}`}
-                onPress={() => setChosenCurrency(opt.code)}
-                style={styles.topUpBtn}
-              >
-                <Text style={styles.topUpText}>{`${opt.symbol} ${opt.code}`}</Text>
-              </Pressable>
-            ))}
-          </View>
-        </View>
       ) : (
         <View style={styles.topUpRow}>
           {packs.map((amt) => (
@@ -381,18 +353,6 @@ export function WalletCard() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
-
-      <Modal visible={!!checkoutUrl} animationType="slide" onRequestClose={closeCheckout}>
-        <View style={styles.modalRoot}>
-          <View style={styles.modalBar}>
-            <Text style={styles.modalTitle}>SECURE CHECKOUT</Text>
-            <Pressable onPress={closeCheckout} hitSlop={12}>
-              <Text style={styles.modalClose}>CLOSE</Text>
-            </Pressable>
-          </View>
-          {checkoutUrl ? <WebView source={{ uri: checkoutUrl }} style={{ flex: 1 }} /> : null}
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -424,7 +384,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
-  modalRoot: { flex: 1, backgroundColor: TERMINAL.bg },
   contactBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.55)" },
   contactCard: {
     backgroundColor: colors.surface,
@@ -470,15 +429,4 @@ const styles = StyleSheet.create({
     textAlign: "center",
     paddingVertical: spacing.md,
   },
-  modalBar: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xl,
-    paddingBottom: spacing.md,
-    backgroundColor: TERMINAL.panel,
-  },
-  modalTitle: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1, color: TERMINAL.textBright },
-  modalClose: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1, color: TERMINAL.lime },
 });

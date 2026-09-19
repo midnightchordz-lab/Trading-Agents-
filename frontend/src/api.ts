@@ -1,6 +1,20 @@
 // API client for the TradingAgents backend.
+import * as Localization from "expo-localization";
+
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
 const API = `${BASE}/api`;
+
+// Device region, sent with wallet calls so the backend can pick the right
+// currency for a wallet that hasn't locked one yet (INR for India, because
+// UPI/GPay only exist on INR payment links). The backend decides; this is
+// only a hint, and an unknown region is simply omitted.
+const REGION = (() => {
+  try {
+    return Localization.getLocales()[0]?.regionCode || "";
+  } catch {
+    return "";
+  }
+})();
 
 export type SearchResult = {
   symbol: string;
@@ -285,7 +299,10 @@ export const api = {
   markets: (category: string) => j<{ results: Quote[] }>(`/markets/${category}`),
   analyze: (symbol: string, name?: string, language?: string, deviceId?: string) =>
     j<Analysis>(`/analyze`, { method: "POST", body: JSON.stringify({ symbol, name, language, device_id: deviceId }) }),
-  getWalletBalance: (deviceId: string) => j<WalletBalance>(`/wallet/balance?device_id=${encodeURIComponent(deviceId)}`),
+  getWalletBalance: (deviceId: string) =>
+    j<WalletBalance>(
+      `/wallet/balance?device_id=${encodeURIComponent(deviceId)}${REGION ? `&region=${encodeURIComponent(REGION)}` : ""}`
+    ),
   createTopupOrder: (
     deviceId: string,
     amount: number,
@@ -296,7 +313,13 @@ export const api = {
   ) =>
     j<TopupOrder>(`/pay/order`, {
       method: "POST",
-      body: JSON.stringify({ device_id: deviceId, amount, ...(contact || {}), ...(currency ? { currency } : {}) }),
+      body: JSON.stringify({
+        device_id: deviceId,
+        amount,
+        ...(contact || {}),
+        ...(currency ? { currency } : {}),
+        ...(REGION ? { region: REGION } : {}),
+      }),
     }),
   getPaymentStatus: (orderId: string) => j<PaymentStatus>(`/pay/status/${orderId}`),
   getIapConfig: (currency?: string) =>

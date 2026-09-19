@@ -9,12 +9,13 @@ import hmac
 import os
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import Header, HTTPException, Request
 
 import auth as au
 import wallet as wal
-from core import db
+from core import db, logger
 
 
 
@@ -81,9 +82,19 @@ async def require_user(authorization: Optional[str] = Header(None)) -> Optional[
 
 def wallet_key_for(user: Optional[dict], device_id: Optional[str]) -> Optional[str]:
     """Signed-in users get an account-keyed wallet so the balance follows them
-    across devices; anonymous callers fall back to their device id."""
+    across devices; anonymous callers fall back to their device id.
+
+    A client-supplied device_id starting with "user:" is rejected outright:
+    that prefix names a real signed-in account's wallet, so without this an
+    anonymous caller who learned or guessed a user id could target their
+    wallet through the anonymous path. Fixed in this one shared function so
+    every endpoint that resolves a wallet key is covered, rather than
+    patching each call site — every caller already treats None as "no valid
+    key"."""
     if user:
         return f"user:{user['id']}"
+    if device_id and device_id.startswith("user:"):
+        return None
     return device_id
 
 
@@ -113,6 +124,25 @@ LAUNCH_FREE_UNTIL = os.environ.get("LAUNCH_FREE_UNTIL", "")
 # Used to build the Razorpay checkout/callback URLs, which must be absolute
 # and publicly reachable over HTTPS.
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+# Hosts we're willing to build a public URL for. `Host` and `X-Forwarded-Host`
+# both come from the client, so without this an attacker could have Razorpay
+# send a paying customer to their own site after checkout by sending
+# `X-Forwarded-Host: evil.example`. Suffix-based so a new deploy hostname on
+# the same platform domain keeps working without a config change.
+PUBLIC_HOST_SUFFIXES = tuple(
+    h.strip().lower()
+    for h in os.environ.get("PUBLIC_HOST_SUFFIXES", "emergentagent.com,tradingagents.in").split(",")
+    if h.strip()
+)
+
+
+def _public_host_allowed(host: str) -> bool:
+    bare = host.split(":")[0].lower()
+    if PUBLIC_BASE_URL and bare == urlparse(PUBLIC_BASE_URL).hostname:
+        return True
+    if bare in ("localhost", "127.0.0.1"):
+        return True
+    return any(bare == suffix or bare.endswith(f".{suffix}") for suffix in PUBLIC_HOST_SUFFIXES)
 
 
 def public_base(request: Request) -> str:
@@ -121,10 +151,15 @@ def public_base(request: Request) -> str:
     preview and production each point back at themselves — a stale
     PUBLIC_BASE_URL baked into a deployed image would otherwise send paying
     customers to the wrong host, where their order id doesn't exist. The env
-    var stays as a fallback for local/CLI use."""
+    var is the fallback, and the only thing used if the requested host isn't
+    one of ours."""
     proto = request.headers.get("x-forwarded-proto", request.url.scheme)
     host = request.headers.get("x-forwarded-host") or request.headers.get("host")
-    return f"{proto}://{host}".rstrip("/") if host else PUBLIC_BASE_URL
+    if not host or not _public_host_allowed(host):
+        if host:
+            logger.warning(f"ignoring untrusted public host header: {host}")
+        return PUBLIC_BASE_URL
+    return f"{proto}://{host}".rstrip("/")
 
 async def get_free_credits_remaining(user: Optional[dict]) -> int:
     """Accounts created before free credits existed are backfilled on first

@@ -33,6 +33,17 @@ def test_ohlc_unknown_range_falls_back_to_1m():
     assert r.json()["range"] == "1M"
 
 
-def test_ohlc_bad_symbol():
+def test_ohlc_malformed_symbol():
+    # Symbols are now validated against the same ticker pattern /analyze uses
+    # BEFORE the value is interpolated into a Yahoo URL, so a string that
+    # isn't a ticker shape at all (underscores, 23 chars) is rejected as a bad
+    # request rather than looked up and reported missing.
     r = requests.get(f"{API}/ohlc/THIS_DOES_NOT_EXIST_XYZ", timeout=30)
+    assert r.status_code == 400
+
+
+def test_ohlc_unknown_but_wellformed_symbol():
+    # The original intent of the test above: a plausible ticker that simply
+    # doesn't exist must still come back 404, not 400.
+    r = requests.get(f"{API}/ohlc/ZZZZQQ", timeout=30)
     assert r.status_code == 404

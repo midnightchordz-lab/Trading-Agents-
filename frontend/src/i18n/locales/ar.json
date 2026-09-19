@@ -1,0 +1,68 @@
+{
+  "common": {
+    "execute_analysis": "تنفيذ التحليل",
+    "watch": "متابعة",
+    "watching": "قيد المتابعة",
+    "compare": "مقارنة",
+    "cancel": "إلغاء",
+    "save": "حفظ",
+    "remove": "إزالة",
+    "add": "إضافة",
+    "loading": "جارٍ التحميل",
+    "retry": "إعادة المحاولة",
+    "not_financial_advice": "ليست نصيحة مالية",
+    "language": "اللغة"
+  },
+  "tabs": {
+    "analyze": "تحليل",
+    "history": "السجل",
+    "alerts": "التنبيهات",
+    "agents": "الوكلاء",
+    "portfolio": "المحفظة"
+  },
+  "analyze": {
+    "title": "TradingAgents",
+    "subtitle": "مكتب أسهم متعدد الوكلاء",
+    "search_placeholder": "ابحث عن رمز — AAPL، BTC-USD…",
+    "selected_target": "الهدف المحدد",
+    "or_pick_another": "أو اختر رمزًا آخر",
+    "browse_markets": "استعراض الأسواق",
+    "watchlist_tap_to_rerun": "قائمة المتابعة · اضغط لإعادة التحليل",
+    "no_results": "لا توجد نتائج"
+  },
+  "quote": {
+    "fifty_two_week_low": "أدنى 52 أسبوعًا",
+    "fifty_two_week_high": "أعلى 52 أسبوعًا",
+    "exchange": "البورصة"
+  },
+  "verdict": {
+    "confidence": "الثقة",
+    "target": "الهدف",
+    "stop_loss": "وقف الخسارة",
+    "time_horizon": "الأفق الزمني",
+    "key_risks": "المخاطر الرئيسية",
+    "summary": "الملخص",
+    "buy": "BUY",
+    "sell": "SELL",
+    "hold": "HOLD"
+  },
+  "grounding": {
+    "verified": "تم التحقق من المستويات",
+    "check": "المستويات · تحقّق",
+    "rejected": "المستويات مرفوضة",
+    "unverified": "المستويات غير مُتحقَّقة"
+  },
+  "settings": {
+    "title": "الإعدادات",
+    "language": "اللغة",
+    "language_hint": "يُطبَّق على التطبيق وعلى التحليلات الجديدة"
+  },
+  "share": {
+    "ai_desk": "// مكتب الذكاء الاصطناعي",
+    "desk_says": "قرار المكتب",
+    "confidence": "الثقة",
+    "thesis": "الأطروحة",
+    "agents_analysis": "تحليل 10 وكلاء",
+    "disclaimer": "ليست نصيحة مالية"
+  }
+}

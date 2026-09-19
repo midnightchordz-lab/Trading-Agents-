@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 import portfolio_optimizer as pfopt
 from core import db, logger
-from market_data import _yf_get, fetch_quote_sync
+from market_data import TICKER_RE, _yf_get, fetch_quote_sync
 
 api_router = APIRouter(prefix="/api")
 
@@ -42,8 +42,11 @@ async def latest_verdict_for(symbol: str) -> Optional[dict]:
 
 class PortfolioHolding(BaseModel):
     symbol: str
-    quantity: float
-    avg_price: float
+    # allow_inf_nan=False: JSON permits NaN / Infinity, numpy propagates them
+    # through the whole covariance matrix, and the request came back as a 500.
+    # Rejecting them at the boundary makes it a 422 with a field name.
+    quantity: float = Field(allow_inf_nan=False)
+    avg_price: float = Field(allow_inf_nan=False)
 
 
 class PortfolioOptimizeRequest(BaseModel):
@@ -54,7 +57,7 @@ class PortfolioOptimizeRequest(BaseModel):
     holdings: list[PortfolioHolding] = Field(max_length=50)
     objective: str = "hrp"  # "hrp" | "max_sharpe" | "min_volatility"
     use_agent_views: bool = False
-    cash: float = 0.0  # additional uninvested cash to include in total value
+    cash: float = Field(default=0.0, allow_inf_nan=False)  # uninvested cash included in total value
 
 
 @api_router.post("/portfolio/optimize")
@@ -62,6 +65,8 @@ async def portfolio_optimize(body: PortfolioOptimizeRequest):
     if not body.holdings:
         raise HTTPException(status_code=400, detail="No holdings supplied")
     symbols = [h.symbol.strip().upper() for h in body.holdings]
+    if not all(TICKER_RE.match(s) for s in symbols):
+        raise HTTPException(status_code=400, detail="Invalid ticker symbol in holdings")
     if len(set(symbols)) != len(symbols):
         raise HTTPException(status_code=400, detail="Duplicate symbols in holdings")
 
@@ -111,9 +116,14 @@ async def portfolio_optimize(body: PortfolioOptimizeRequest):
             verdicts=verdicts if body.use_agent_views else None,
             current_prices={s: current_prices.get(s) for s in usable_symbols if current_prices.get(s)},
         )
-    except Exception as e:
+    except Exception:
+        # The library's own exception text names internal matrices and file
+        # paths; it belongs in the log, not in a client response.
         logger.exception("portfolio optimization failed")
-        raise HTTPException(status_code=422, detail=f"Optimization failed: {e}")
+        raise HTTPException(
+            status_code=422,
+            detail="Couldn't optimize this portfolio — try different holdings or another objective.",
+        )
 
     actions = pfopt.classify_actions(current_weights, result["weights"])
     alloc, leftover = ({}, total_value)

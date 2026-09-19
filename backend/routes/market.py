@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from core import logger
 from market_data import (
     RANGE_MAP,
+    TICKER_RE,
     _news_cache,
     fetch_chart_sync,
     fetch_news_sync,
@@ -46,6 +47,11 @@ async def search(q: str):
 
 @api_router.get("/quote/{symbol}")
 async def quote(symbol: str):
+    # Matched on the upper-cased form: case isn't a security property, and the
+    # app does request lowercase symbols in places. Rejecting those would be a
+    # regression for real users, not a fix.
+    if not TICKER_RE.match((symbol or "").upper()):
+        raise HTTPException(status_code=400, detail="Invalid ticker symbol")
     try:
         data = await asyncio.to_thread(fetch_quote_sync, symbol)
         return data
@@ -56,6 +62,11 @@ async def quote(symbol: str):
 
 @api_router.get("/chart/{symbol}")
 async def chart(symbol: str, range: str = "1M"):
+    # Matched on the upper-cased form: case isn't a security property, and the
+    # app does request lowercase symbols in places. Rejecting those would be a
+    # regression for real users, not a fix.
+    if not TICKER_RE.match((symbol or "").upper()):
+        raise HTTPException(status_code=400, detail="Invalid ticker symbol")
     rng = range.upper()
     if rng not in RANGE_MAP:
         rng = "1M"
@@ -69,6 +80,11 @@ async def chart(symbol: str, range: str = "1M"):
 
 @api_router.get("/ohlc/{symbol}")
 async def ohlc(symbol: str, range: str = "1M"):
+    # Matched on the upper-cased form: case isn't a security property, and the
+    # app does request lowercase symbols in places. Rejecting those would be a
+    # regression for real users, not a fix.
+    if not TICKER_RE.match((symbol or "").upper()):
+        raise HTTPException(status_code=400, detail="Invalid ticker symbol")
     rng = range.upper()
     if rng not in RANGE_MAP:
         rng = "1M"
@@ -81,6 +97,11 @@ async def ohlc(symbol: str, range: str = "1M"):
 
 @api_router.get("/news/{symbol}")
 async def news(symbol: str):
+    # Matched on the upper-cased form: case isn't a security property, and the
+    # app does request lowercase symbols in places. Rejecting those would be a
+    # regression for real users, not a fix.
+    if not TICKER_RE.match((symbol or "").upper()):
+        raise HTTPException(status_code=400, detail="Invalid ticker symbol")
     key = (symbol or "").upper().strip()
     entry = _news_cache.get(key)
     if entry and time.time() - entry["ts"] < 600:
@@ -88,6 +109,12 @@ async def news(symbol: str):
     try:
         items = await asyncio.to_thread(fetch_news_sync, symbol)
         items = await tag_news_sentiment(key, items)
+        # Unbounded growth means one entry per distinct symbol ever asked
+        # for, forever, on an endpoint that needs no login and makes a real
+        # LLM call on a miss. Evict the oldest once it gets large.
+        if len(_news_cache) >= 500:
+            for stale in sorted(_news_cache, key=lambda k: _news_cache[k]["ts"])[:100]:
+                _news_cache.pop(stale, None)
         _news_cache[key] = {"ts": time.time(), "data": items}
         return {"results": items}
     except Exception as e:

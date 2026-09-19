@@ -80,7 +80,7 @@ export default function AlertsScreen() {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             router.push(`/(tabs)`);
           }}
-          style={[styles.row, { borderLeftWidth: 5, borderLeftColor: barColor }]}
+          style={[styles.row, { borderStartWidth: 5, borderStartColor: barColor }]}
         >
           <View style={styles.rowMain}>
             <View style={styles.rowTop}>
@@ -131,7 +131,7 @@ export default function AlertsScreen() {
     const barColor = isStop ? colors.error : colors.success;
     const outcome = isStop ? "STOP HIT" : item.label === "TARGET" ? "TARGET HIT" : "LEVEL HIT";
     return (
-      <View testID={`alert-history-${item.symbol}`} style={[styles.row, { borderLeftWidth: 5, borderLeftColor: barColor }]}>
+      <View testID={`alert-history-${item.symbol}`} style={[styles.row, { borderStartWidth: 5, borderStartColor: barColor }]}>
         <View style={styles.rowMain}>
           <View style={styles.rowTop}>
             <Text style={styles.rowSymbol}>{item.symbol}</Text>
@@ -243,7 +243,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
   segment: { flexDirection: "row", borderBottomWidth: BORDER, borderBottomColor: colors.borderStrong },
   segBtn: { flex: 1, height: 44, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
-  segDivider: { borderRightWidth: BORDER, borderRightColor: colors.borderStrong },
+  segDivider: { borderEndWidth: BORDER, borderEndColor: colors.borderStrong },
   segActive: { backgroundColor: colors.brand },
   segText: { fontFamily: fonts.monoBold, fontSize: 11.5, letterSpacing: 1 },
   whenText: { fontFamily: fonts.mono, fontSize: 10.5, color: colors.onSurfaceTertiary, marginTop: 4 },

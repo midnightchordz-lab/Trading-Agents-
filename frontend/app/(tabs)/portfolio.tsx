@@ -1,11 +1,22 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { View, Text, TextInput, Pressable, ScrollView, ActivityIndicator, StyleSheet, Alert } from "react-native";
+import {
+  View,
+  Text,
+  TextInput,
+  Pressable,
+  ScrollView,
+  ActivityIndicator,
+  StyleSheet,
+  Alert,
+  RefreshControl,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFocusEffect } from "expo-router";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
 import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 import { useWatchlist } from "@/src/watchlist";
-import { api, SearchResult } from "@/src/api";
+import { api, Quote, SearchResult } from "@/src/api";
 
 // Portfolio tab: manual holdings + watchlist quick-add, then optimize against
 // PyPortfolioOpt via POST /api/portfolio/optimize. Holdings persist locally;
@@ -28,6 +39,19 @@ function fmtPct(n: number) {
   return `${(n * 100).toFixed(1)}%`;
 }
 
+function fmtMoney(symbol: string, n: number) {
+  return `${n < 0 ? "-" : ""}${symbol}${Math.abs(n).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+const CURRENCY_SYMBOLS: Record<string, string> = { USD: "$", INR: "\u20b9", GBP: "\u00a3", EUR: "\u20ac" };
+
+function currencySymbol(code?: string) {
+  return CURRENCY_SYMBOLS[(code || "").toUpperCase()] || (code ? `${code} ` : "");
+}
+
 export default function PortfolioScreen() {
   const insets = useSafeAreaInsets();
   const { items: watchlist } = useWatchlist();
@@ -42,6 +66,10 @@ export default function PortfolioScreen() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [analyzingMissing, setAnalyzingMissing] = useState<string | null>(null); // symbol currently being analyzed
+  // Live prices for the P/L panel. Kept separate from `result` so a failed or
+  // never-run optimization still shows the user what their positions are worth.
+  const [quotes, setQuotes] = useState<Record<string, Quote>>({});
+  const [quotesLoading, setQuotesLoading] = useState(false);
 
   // Symbol search-as-you-type (mirrors the Analyze tab's search), so the user
   // doesn't need to already know the exact ticker.
@@ -191,10 +219,104 @@ export default function PortfolioScreen() {
     return [...result.actions].sort((a: any, b: any) => order[a.action] - order[b.action]);
   }, [result]);
 
+  // --- Live P/L ---------------------------------------------------------
+  const symbols = useMemo(() => holdings.map((h) => h.symbol).join(","), [holdings]);
+
+  const refreshQuotes = useCallback(async () => {
+    const list = symbols ? symbols.split(",") : [];
+    if (list.length === 0) {
+      setQuotes({});
+      return;
+    }
+    setQuotesLoading(true);
+    const results = await Promise.all(
+      list.map((s) =>
+        api
+          .quote(s)
+          .then((q) => [s, q] as const)
+          .catch(() => [s, null] as const)
+      )
+    );
+    // A symbol whose quote failed keeps whatever it had rather than flashing
+    // to "—": a single upstream hiccup shouldn't blank the whole panel.
+    setQuotes((prev) => {
+      const next = { ...prev };
+      for (const [s, q] of results) if (q) next[s] = q;
+      return next;
+    });
+    setQuotesLoading(false);
+  }, [symbols]);
+
+  useEffect(() => {
+    refreshQuotes();
+  }, [refreshQuotes]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshQuotes();
+    }, [refreshQuotes])
+  );
+
+  const pl = useMemo(() => {
+    const rows = holdings.map((h) => {
+      const qty = Number(h.quantity) || 0;
+      const avg = Number(h.avgPrice) || 0;
+      const q = quotes[h.symbol];
+      const price = q?.price ?? null;
+      const cost = qty * avg;
+      const value = price != null ? qty * price : null;
+      const gain = value != null ? value - cost : null;
+      return {
+        symbol: h.symbol,
+        qty,
+        avg,
+        price,
+        cost,
+        value,
+        gain,
+        gainPct: gain != null && cost > 0 ? gain / cost : null,
+        dayPct: q?.changePercent ?? null,
+        currency: q?.currency,
+        symbolPrefix: currencySymbol(q?.currency),
+      };
+    });
+    const priced = rows.filter((r) => r.value != null);
+    // Holdings can sit in different currencies (an NSE stock and a US one), and
+    // adding those numbers together would be a lie. The total is only shown
+    // when every priced holding shares one currency.
+    const currencies = new Set(priced.map((r) => (r.currency || "").toUpperCase()));
+    const single = currencies.size === 1 ? [...currencies][0] : null;
+    const cashNum = Number(cash) || 0;
+    const cost = priced.reduce((s, r) => s + r.cost, 0);
+    const value = priced.reduce((s, r) => s + (r.value || 0), 0);
+    return {
+      rows,
+      totals:
+        single && priced.length > 0
+          ? {
+              prefix: currencySymbol(single),
+              cost,
+              value,
+              cash: cashNum,
+              gain: value - cost,
+              gainPct: cost > 0 ? (value - cost) / cost : null,
+              mixed: false,
+            }
+          : priced.length > 0
+            ? { mixed: true as const }
+            : null,
+    };
+  }, [holdings, quotes, cash]);
+
   return (
     <View style={styles.screen}>
       <ScreenHeader title="PORTFOLIO" subtitle="Keep, trim or sell — optimized" />
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}>
+      <ScrollView
+        contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}
+        refreshControl={
+          <RefreshControl refreshing={quotesLoading} onRefresh={refreshQuotes} tintColor={colors.onSurface} />
+        }
+      >
         {/* Add holding */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>ADD HOLDING</Text>
@@ -261,19 +383,80 @@ export default function PortfolioScreen() {
 
         {/* Current holdings */}
         {holdings.length > 0 ? (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>HOLDINGS ({holdings.length})</Text>
-            {holdings.map((h) => (
-              <View key={h.symbol} style={styles.holdingRow}>
-                <Text style={styles.holdingSymbol}>{h.symbol}</Text>
-                <Text style={styles.holdingDetail}>
-                  {h.quantity} @ {h.avgPrice}
+          <View testID="live-pl-card" style={styles.card}>
+            <View style={styles.plHeaderRow}>
+              <Text style={styles.cardTitle}>HOLDINGS ({holdings.length})</Text>
+              {quotesLoading ? <ActivityIndicator size="small" color={colors.onSurfaceTertiary} /> : null}
+            </View>
+            {pl.rows.map((r) => {
+              const up = (r.gain ?? 0) >= 0;
+              return (
+                <View key={r.symbol} style={styles.holdingRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.holdingSymbol}>{r.symbol}</Text>
+                    <Text style={styles.holdingDetail}>
+                      {r.qty} @ {r.avg}
+                      {r.price != null ? ` · NOW ${r.symbolPrefix}${r.price}` : " · PRICE UNAVAILABLE"}
+                    </Text>
+                  </View>
+                  <View style={styles.plNumbers}>
+                    {r.value != null ? (
+                      <>
+                        <Text testID={`pl-value-${r.symbol}`} style={styles.plValue}>
+                          {fmtMoney(r.symbolPrefix, r.value)}
+                        </Text>
+                        <Text
+                          testID={`pl-gain-${r.symbol}`}
+                          style={[styles.plGain, { color: up ? verdictColors.BUY : verdictColors.SELL }]}
+                        >
+                          {up ? "+" : ""}
+                          {fmtMoney(r.symbolPrefix, r.gain || 0)}
+                          {r.gainPct != null ? ` (${up ? "+" : ""}${fmtPct(r.gainPct)})` : ""}
+                        </Text>
+                      </>
+                    ) : (
+                      <Text style={styles.plGain}>—</Text>
+                    )}
+                  </View>
+                  <Pressable onPress={() => removeHolding(r.symbol)} hitSlop={8}>
+                    <Text style={styles.removeText}>REMOVE</Text>
+                  </Pressable>
+                </View>
+              );
+            })}
+            {pl.totals ? (
+              pl.totals.mixed ? (
+                <Text testID="pl-mixed-note" style={styles.hint}>
+                  Holdings are priced in more than one currency, so a single total would be meaningless.
                 </Text>
-                <Pressable onPress={() => removeHolding(h.symbol)}>
-                  <Text style={styles.removeText}>REMOVE</Text>
-                </Pressable>
-              </View>
-            ))}
+              ) : (
+                <View testID="pl-total" style={styles.plTotalBox}>
+                  <View style={styles.plTotalRow}>
+                    <Text style={styles.plTotalLabel}>INVESTED</Text>
+                    <Text style={styles.plTotalValue}>{fmtMoney(pl.totals.prefix!, pl.totals.cost!)}</Text>
+                  </View>
+                  <View style={styles.plTotalRow}>
+                    <Text style={styles.plTotalLabel}>MARKET VALUE</Text>
+                    <Text style={styles.plTotalValue}>{fmtMoney(pl.totals.prefix!, pl.totals.value!)}</Text>
+                  </View>
+                  <View style={styles.plTotalRow}>
+                    <Text style={styles.plTotalLabel}>TOTAL P/L</Text>
+                    <Text
+                      style={[
+                        styles.plTotalValue,
+                        { color: (pl.totals.gain || 0) >= 0 ? verdictColors.BUY : verdictColors.SELL },
+                      ]}
+                    >
+                      {(pl.totals.gain || 0) >= 0 ? "+" : ""}
+                      {fmtMoney(pl.totals.prefix!, pl.totals.gain!)}
+                      {pl.totals.gainPct != null
+                        ? ` (${(pl.totals.gain || 0) >= 0 ? "+" : ""}${fmtPct(pl.totals.gainPct)})`
+                        : ""}
+                    </Text>
+                  </View>
+                </View>
+              )
+            ) : null}
             <View style={styles.cashRow}>
               <Text style={styles.holdingDetail}>UNINVESTED CASH</Text>
               <TextInput
@@ -426,6 +609,20 @@ const styles = StyleSheet.create({
   },
   holdingSymbol: { flex: 1, fontFamily: fonts.monoBold, fontSize: 13, color: colors.onSurface },
   holdingDetail: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurfaceTertiary },
+  plHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingEnd: spacing.md },
+  plNumbers: { alignItems: "flex-end", marginEnd: spacing.md },
+  plValue: { fontFamily: fonts.monoBold, fontSize: 12, color: colors.onSurface },
+  plGain: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary },
+  plTotalBox: {
+    borderTopWidth: BORDER,
+    borderTopColor: colors.borderStrong,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: spacing.xs,
+  },
+  plTotalRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  plTotalLabel: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1, color: colors.onSurfaceTertiary },
+  plTotalValue: { fontFamily: fonts.monoBold, fontSize: 13, color: colors.onSurface },
   removeText: { fontFamily: fonts.monoBold, fontSize: 9, color: colors.error },
   cashRow: {
     flexDirection: "row",
@@ -465,7 +662,7 @@ const styles = StyleSheet.create({
   actionSymbol: { flex: 1, fontFamily: fonts.monoBold, fontSize: 13, color: colors.onSurface },
   actionWeights: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurfaceTertiary },
   statsRow: { flexDirection: "row", borderTopWidth: 1, borderTopColor: colors.border },
-  stat: { flex: 1, padding: spacing.sm, borderRightWidth: 1, borderRightColor: colors.border },
+  stat: { flex: 1, padding: spacing.sm, borderEndWidth: 1, borderEndColor: colors.border },
   statLabel: { fontFamily: fonts.monoBold, fontSize: 9, color: colors.onSurfaceTertiary },
   statValue: { fontFamily: fonts.mono, fontSize: 14, color: colors.onSurface, marginTop: 2 },
   note: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary, padding: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border },

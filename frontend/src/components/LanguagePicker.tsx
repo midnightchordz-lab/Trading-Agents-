@@ -8,12 +8,15 @@ export function LanguagePicker() {
   const { t } = useTranslation();
   const [current, setCurrent] = useState<LanguageCode>(getCurrentLanguage());
   const [saving, setSaving] = useState<LanguageCode | null>(null);
+  // RTL/LTR can only change at launch, so the user is told rather than left
+  // with translated text in a layout that didn't flip.
+  const [restartNeeded, setRestartNeeded] = useState(false);
 
   const pick = async (code: LanguageCode) => {
     if (code === current) return;
     setSaving(code);
     try {
-      await setLanguage(code);
+      setRestartNeeded(await setLanguage(code));
       setCurrent(code);
     } finally {
       setSaving(null);
@@ -42,6 +45,11 @@ export function LanguagePicker() {
           );
         })}
       </View>
+      {restartNeeded ? (
+        <Text testID="language-restart-note" style={styles.hint}>
+          Close and reopen the app to finish switching the layout direction.
+        </Text>
+      ) : null}
     </View>
   );
 }

@@ -3,6 +3,7 @@ import { View, Text, Pressable, StyleSheet, Platform, ActivityIndicator } from "
 import { WebView } from "react-native-webview";
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
 import { api, OhlcData, Verdict } from "@/src/api";
+import { scriptJson } from "@/src/utils/scriptJson";
 
 // Fallback chart for symbols the free TradingView widget is not licensed to
 // display (NSE / BSE). Uses TradingView's open-source Lightweight Charts
@@ -28,7 +29,7 @@ function buildHtml(
   livePrice: number | null | undefined,
   levelsLabel?: string | null,
 ): string {
-  const payload = JSON.stringify({
+  const payload = scriptJson({
     bars: data.bars,
     intraday: data.range === "1D" || data.range === "1W",
     levelsLabel: levelsLabel || "",
@@ -198,7 +199,11 @@ export function LightweightChart({ symbol, height = 380, levels, livePrice, leve
             React.createElement("iframe", {
               srcDoc: html,
               style: { border: 0, width: "100%", height: "100%", display: "block" },
-              sandbox: "allow-scripts allow-same-origin",
+              // NO allow-same-origin: srcDoc would otherwise inherit the app's
+              // own origin, handing third-party chart code (and the CDN script
+              // it loads) read access to the session token in localStorage.
+              // allow-scripts alone runs the chart in an opaque origin.
+              sandbox: "allow-scripts",
               title: `Chart ${symbol}`,
             })
           ) : (
@@ -239,7 +244,7 @@ const styles = StyleSheet.create({
   headerText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1, color: colors.onSurfaceInverse },
   headerSymbol: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurfaceInverse, maxWidth: "60%" },
   ranges: { height: 36, flexDirection: "row", borderBottomWidth: BORDER, borderBottomColor: colors.borderStrong },
-  rangeBtn: { flex: 1, alignItems: "center", justifyContent: "center", borderRightWidth: 1, borderRightColor: colors.border },
+  rangeBtn: { flex: 1, alignItems: "center", justifyContent: "center", borderEndWidth: 1, borderEndColor: colors.border },
   rangeBtnActive: { backgroundColor: colors.brand },
   rangeText: { fontFamily: fonts.monoBold, fontSize: 11, color: colors.onSurface },
   rangeTextActive: { color: colors.onSurfaceInverse },

@@ -578,7 +578,7 @@ async def run_analysis(analysis_id: str, symbol: str, language: str = "en"):
 # ----------------------------------------------------------------------------
 # Schemas
 # ----------------------------------------------------------------------------
-SUPPORTED_LANGUAGES = {"en": "English", "hi": "Hindi", "es": "Spanish", "zh": "Mandarin Chinese"}
+SUPPORTED_LANGUAGES = {"en": "English", "hi": "Hindi", "es": "Spanish", "zh": "Mandarin Chinese", "ar": "Arabic"}
 
 
 def language_directive(lang: str) -> str:
