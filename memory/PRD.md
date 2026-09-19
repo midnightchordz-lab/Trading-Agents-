@@ -1075,3 +1075,21 @@ The Razorpay webhook URL still points at the PREVIEW host: after publishing, ref
 chargebacks for real customers would be processed against the preview database. Top-ups still
 settle on production through `/pay/status` polling, so this affects clawbacks only. User chose to
 leave the dashboard as it is.
+
+## Razorpay live-key rotation (2026-06-21, session 15) — DONE
+User rotated their Razorpay keys and supplied the new pair; wired into `backend/.env` (only those
+two lines edited). Verified rather than assumed:
+- Authenticates against `/v1/payments`; `/v1/methods` confirms `upi: true`, `upi_intent: true`, so
+  the UPI fix still applies to the new key.
+- **Same merchant account** (`owner_id TbmS3S5JAvaeYU` on the webhook listing), so the webhook and
+  `RAZORPAY_WEBHOOK_SECRET` are untouched and the three refund events stay enabled. Pre-rotation
+  payment links and a 16 Sept captured payment are still readable with the new key, so no customer
+  mid-payment is stranded — checked explicitly because a key that belonged to a DIFFERENT account
+  would have silently orphaned every open link.
+- End-to-end: a real ₹99 INR link created through `/api/pay/order` and then cancelled.
+- Unpaid links carry a ~1h `expire_by` and self-close; 427 historical test links were already
+  closed/unreachable, so nothing needed tidying.
+- Full suite still **606 passed / 9 skipped** (two LLM-load flakes under xdist passed alone).
+- **Told the user**: production still holds the OLD key until they redeploy, so a deployed build
+  would fail Razorpay calls until then; and the new secret was pasted into chat, so if they want it
+  out of any transcript they should rotate once more and set it from the deployment panel.
