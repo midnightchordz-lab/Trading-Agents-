@@ -1093,3 +1093,64 @@ two lines edited). Verified rather than assumed:
 - **Told the user**: production still holds the OLD key until they redeploy, so a deployed build
   would fail Razorpay calls until then; and the new secret was pasted into chat, so if they want it
   out of any transcript they should rotate once more and set it from the deployment panel.
+
+## Razorpay 502 on checkout (RAZORPAY_502_NEW_USERS.md) — FIXED from the log, not the guess
+The uploaded report named the Razorpay customer `name` field as the likely cause and — to its
+credit — insisted the real log line be read before closing it out. It was right to insist. **The
+log already had the answer on every failure, and it was not the name:**
+
+```
+38x  BAD_REQUEST_ERROR: Too many requests                                  <- Razorpay throttling
+ 4x  BAD_REQUEST_ERROR: Recurring digits in customer contact are disallowed <- the phone typed
+ 6x  400 with an EMPTY description                                          <- unreadable
+ 0x  anything about the name
+```
+
+### 1. Throttling — 38 of 48 recorded 502s
+A brand-new payment link was created on every tap, so tapping ₹99 twice, or backing out of the
+browser and tapping again (what people actually do), asked Razorpay for another link each time
+until it throttled the account. `create_topup_order` now **reuses the open link** for the same
+wallet + amount + currency when one exists and hasn't expired, which also makes the second tap
+instant because it skips the network call entirely. Reuse is deliberately narrow: never across
+amounts (would charge the wrong money), never across accounts, never a `captured` link, and never
+past `expires_at` — a new field read back from Razorpay's own `expire_by` rather than recomputed,
+so a reused link can't be one Razorpay has already closed. `razorpay_request` also retries
+throttling **once** after 700ms; nothing else is ever retried, because a rejected field would fail
+identically and a payment must not be created twice on a guess.
+
+### 2. The phone — why it looked like "new users specifically"
+Only a user with no phone on their account gets asked for one, and a made-up `9999999999` is what
+people type into a field they didn't expect. Razorpay rejects the entire payment-link request over
+it, which surfaced as a 502 that said nothing about the number they'd just entered.
+`contact_rejection()` now catches that shape (≤2 distinct digits, sequential runs, too short)
+before any API call and returns `400 contact_invalid:phone:<plain English>`; the app keeps the
+sheet open with the reason **on the field**. Deliberately narrow — falsely rejecting a real
+customer's number would be a worse bug than the one being fixed, so real Indian/US/UK/SG numbers
+are asserted to pass. `WalletCard.submitContact` mirrors the rule client-side so the common case
+never needs the round trip at all.
+
+### 3. Errors that could not be read or acted on
+- Razorpay error text naming a customer field (`contact`, `email`, `name`) → `400
+  contact_invalid:<field>:<Razorpay's own words>`, so even a rejection our own check misses becomes
+  a fixable field error instead of a 502.
+- Throttling → `503 busy:Payments are busy for a moment — tap again in a few seconds.` Nothing is
+  wrong with the request, so the message no longer implies there is.
+- Everything else stays a 502 with Razorpay's description — we don't blame the customer for our
+  own problems (an auth failure is asserted to stay a 502).
+- An empty error body can no longer log nothing: the fallback includes the status code and the raw
+  body, which is the whole reason this cause had to be guessed the first time.
+
+### The name, honestly
+`sanitize_customer_name()` was still added (letters/spaces, 3-50, generic fallback) because Google
+sign-ins DO store a provider name verbatim, so the report's concern is plausible — but it is
+insurance, and the comment in the code says so rather than implying it was the fix.
+
+- Tests: `tests/test_checkout_502.py` (43). Full suite **649 passed, 9 skipped**.
+- Verified by the testing agent (iteration_23): 43/43 plus 13 independent checks, and the real UI
+  flow — fresh email sign-in, tap a pack, type 9999999999, sheet stays open with the inline error,
+  replace with a real number, checkout opens. Their code audit confirms no remaining path turns
+  user input into a 502.
+- **A trap worth remembering**: patching `rzp.create_payment_link` in the test process does nothing
+  to the running server. My first version of the three error-mapping tests did that and created
+  REAL live payment links while asserting a 502. They now call the route function in-process
+  (`call_route`), and the stray links were cancelled.
