@@ -64,6 +64,12 @@ WEBHOOK_AUTH = os.environ.get("REVENUECAT_WEBHOOK_AUTH", "")
 # Consumables arrive as NON_RENEWING_PURCHASE. Subscription events must never
 # credit the wallet (they'd credit again on every renewal).
 CREDITED_EVENT_TYPE = "NON_RENEWING_PURCHASE"
+# A refund on an Apple purchase reaches us as CANCELLATION — RevenueCat has no
+# separate REFUND type (REFUND is accepted here anyway, so a future rename
+# can't silently stop clawing money back). `UNSUBSCRIBE` is a user turning off
+# auto-renew: no money moves, so it must never take credit away.
+REFUND_EVENT_TYPES = ("CANCELLATION", "REFUND")
+NON_REFUND_CANCEL_REASONS = ("UNSUBSCRIBE",)
 APPLE_STORES = ("APP_STORE", "MAC_APP_STORE")
 
 # Apple's sandbox lets a tester complete a purchase for free. Those events are
@@ -124,6 +130,8 @@ def classify_event(event: dict) -> tuple:
 
     Returns (action, detail) where action is:
       - "credit": detail carries wallet_key, amount, transaction_id, product_id
+      - "clawback": Apple refunded one of OUR packs; the credit must come back
+        off the balance (detail carries the same fields)
       - "ignore": not ours to act on (a renewal, an Android purchase, a
         transfer...). Must still be answered 200, or RevenueCat retries it
         forever.
@@ -134,16 +142,24 @@ def classify_event(event: dict) -> tuple:
     """
     if not isinstance(event, dict):
         return "invalid", {"reason": "malformed event"}
-    if event.get("type") != CREDITED_EVENT_TYPE:
-        return "ignore", {"reason": f"event type {event.get('type')}"}
+    event_type = event.get("type")
+    is_refund = event_type in REFUND_EVENT_TYPES
+    if event_type != CREDITED_EVENT_TYPE and not is_refund:
+        return "ignore", {"reason": f"event type {event_type}"}
     if event.get("store") not in APPLE_STORES:
         return "ignore", {"reason": f"store {event.get('store')}"}
+    if is_refund and (event.get("cancel_reason") or "").upper() in NON_REFUND_CANCEL_REASONS:
+        # Auto-renew turned off. No money came back, so nothing is taken back.
+        return "ignore", {"reason": f"cancel reason {event.get('cancel_reason')}"}
 
     product_id = event.get("product_id")
     amount = PRODUCT_CREDIT.get(product_id)
     app_user_id = str(event.get("app_user_id") or "")
     transaction_id = str(event.get("transaction_id") or "")
     if amount is None:
+        if is_refund:
+            # A cancelled subscription or some other product we never credited.
+            return "ignore", {"reason": f"refund for unknown product {product_id}"}
         return "invalid", {"reason": f"unknown product {product_id}"}
     if not app_user_id.startswith("user:") or len(app_user_id) <= len("user:"):
         # The app configures RevenueCat with `user:<account id>` only after
@@ -152,7 +168,7 @@ def classify_event(event: dict) -> tuple:
     if not transaction_id:
         return "invalid", {"reason": "missing transaction id"}
 
-    return "credit", {
+    return ("clawback" if is_refund else "credit"), {
         "wallet_key": app_user_id,
         "amount": amount,
         "product_id": product_id,

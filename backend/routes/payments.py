@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 import auth as au
@@ -32,6 +33,15 @@ from deps import (
 )
 
 api_router = APIRouter(prefix="/api")
+
+# Razorpay events that mean money went back to the customer. `refund.created`
+# and `refund.processed` describe the same refund; both are handled and the
+# second is a no-op, because either one can arrive first and a refund that
+# never reaches "processed" was still money we no longer have.
+REFUND_EVENTS = ("refund.created", "refund.processed")
+# A chargeback: the bank pulls the money back, with no refund entity involved.
+# Treated as a full clawback at the "lost" stage, when the outcome is final.
+DISPUTE_EVENTS = ("payment.dispute.lost",)
 
 
 class WalletTopup(BaseModel):
@@ -133,22 +143,47 @@ async def credit_wallet_once(payment_id: str, order: dict) -> bool:
     """The only place a balance is ever credited from a payment. The unique
     index on payment_id is what makes a double credit impossible, whichever
     of the callback / webhook arrives first (or twice)."""
+    wallet_key = order["wallet_key"]
+    # The currency the customer was actually charged in. Previously the ledger
+    # recorded a hardcoded USD for every row, so an INR top-up was written down
+    # as dollars — wrong in the books, and useless for the refund path that now
+    # reads these rows back.
+    paid_currency = order.get("currency") or wal.CURRENCY
+    wallet_doc = await db.wallets.find_one({"device_id": wallet_key})
+    locked_currency = (wallet_doc or {}).get("currency")
+    if locked_currency and locked_currency != paid_currency:
+        # A balance is a bare number in one currency, so adding a ₹ amount to a
+        # $ balance (or the reverse) hands over roughly 80x or 1/80th of what
+        # was paid. The currency lock is claimed atomically at order time so
+        # this should be unreachable; if it ever happens, refuse and flag it for
+        # a human rather than guessing a conversion rate.
+        logger.error(
+            f"currency mismatch: payment {payment_id} is {paid_currency} but wallet "
+            f"{wallet_key} is locked to {locked_currency} — not credited"
+        )
+        await db.payments.update_one(
+            {"razorpay_order_id": order["razorpay_order_id"]},
+            {"$set": {"status": "currency_mismatch", "payment_id": payment_id,
+                      "needs_review": True, "updated_at": now_iso()}},
+        )
+        return False
     try:
         await db.wallet_ledger.insert_one({
             "payment_id": payment_id,
             "order_id": order["razorpay_order_id"],
-            "wallet_key": order["wallet_key"],
+            "wallet_key": wallet_key,
             "amount": order["amount"],
-            "currency": wal.CURRENCY,
+            "currency": paid_currency,
+            "source": "razorpay",
             "created_at": now_iso(),
         })
     except DuplicateKeyError:
         return False
     try:
         await db.wallets.update_one(
-            {"device_id": order["wallet_key"]},
+            {"device_id": wallet_key},
             {"$inc": {"balance": order["amount"]},
-             "$set": {"device_id": order["wallet_key"], "updated_at": now_iso()}},
+             "$set": {"device_id": wallet_key, "updated_at": now_iso()}},
             upsert=True,
         )
     except Exception:
@@ -159,12 +194,132 @@ async def credit_wallet_once(payment_id: str, order: dict) -> bool:
         # so the system is left cleanly retryable.
         await db.wallet_ledger.delete_one({"payment_id": payment_id})
         raise
+    # A top-up into a wallet that had never chosen a currency locks it, for the
+    # same reason the IAP path does: money in an unlabelled balance is what the
+    # next reader would have to guess about.
+    await db.wallets.update_one(
+        {"device_id": wallet_key, "currency": {"$in": [None, ""]}},
+        {"$set": {"currency": paid_currency}},
+    )
     await db.payments.update_one(
         {"razorpay_order_id": order["razorpay_order_id"]},
         {"$set": {"status": "captured", "payment_id": payment_id, "updated_at": now_iso()}},
     )
-    logger.info(f"wallet credited {wal.CURRENCY} {order['amount']} for {order['wallet_key']} ({payment_id})")
+    logger.info(f"wallet credited {paid_currency} {order['amount']} for {wallet_key} ({payment_id})")
     return True
+
+
+async def claw_back_once(ledger_id: str, wallet_key: str, amount: float, currency: str,
+                         source: str, reason: str, **extra) -> dict:
+    """Takes credit back off a wallet exactly once, for a refund or chargeback.
+
+    Mirrors the crediting path deliberately: the same `wallet_ledger`
+    collection and the same unique index on `payment_id` make a double
+    clawback impossible, whichever event (refund.created / refund.processed, or
+    a re-delivered RevenueCat CANCELLATION) arrives first or twice. The row is
+    written with a NEGATIVE amount, so the ledger still sums to the balance.
+
+    **A balance can be lower than the refund** — the analyses were already run
+    and the LLM already paid for. We take what is there and record the rest as
+    a shortfall rather than driving the wallet negative, which would leave a
+    user unable to use the app until they topped up someone else's refund.
+    """
+    try:
+        await db.wallet_ledger.insert_one({
+            "payment_id": ledger_id,
+            "wallet_key": wallet_key,
+            "amount": -abs(amount),
+            "currency": currency,
+            "source": source,
+            "kind": "clawback",
+            "reason": reason,
+            "created_at": now_iso(),
+            **extra,
+        })
+    except DuplicateKeyError:
+        return {"clawed_back": False, "duplicate": True}
+
+    debit = abs(amount)
+    try:
+        # One atomic decrement when the balance covers it...
+        after = await db.wallets.find_one_and_update(
+            {"device_id": wallet_key, "balance": {"$gte": debit}},
+            {"$inc": {"balance": -debit}, "$set": {"updated_at": now_iso()}},
+            return_document=ReturnDocument.AFTER,
+        )
+        if after is not None:
+            recovered, shortfall = debit, 0.0
+        else:
+            # ...otherwise take everything that's left, in one operation, and
+            # read what that was from the pre-update document.
+            before = await db.wallets.find_one_and_update(
+                {"device_id": wallet_key},
+                {"$set": {"balance": 0.0, "updated_at": now_iso()}},
+                return_document=ReturnDocument.BEFORE,
+            )
+            recovered = max(0.0, round((before or {}).get("balance", 0.0), 4))
+            shortfall = round(debit - recovered, 4)
+    except Exception:
+        # Same compensating rollback as the credit path: without it the ledger
+        # row claims this refund was handled while the balance was untouched,
+        # and the unique index then blocks every retry from fixing it.
+        await db.wallet_ledger.delete_one({"payment_id": ledger_id})
+        raise
+
+    await db.wallet_ledger.update_one(
+        {"payment_id": ledger_id},
+        {"$set": {"amount": -recovered, "requested": -debit, "shortfall": shortfall}},
+    )
+    logger.info(
+        f"wallet clawback {currency} {recovered} from {wallet_key} ({ledger_id}, {reason})"
+        + (f" — {shortfall} could not be recovered, balance was already spent" if shortfall else "")
+    )
+    return {"clawed_back": True, "recovered": recovered, "shortfall": shortfall}
+
+
+async def handle_refund_event(refund_entity: dict, event_name: str) -> dict:
+    """Razorpay refund / chargeback -> clawback.
+
+    Keyed on the REFUND id, not the payment id: a payment can be refunded in
+    parts, and each part is its own clawback. `refund.created` and
+    `refund.processed` both describe the same refund, so the second one is a
+    no-op via the unique index."""
+    refund_id = refund_entity.get("id") if isinstance(refund_entity.get("id"), str) else None
+    payment_id = refund_entity.get("payment_id") if isinstance(refund_entity.get("payment_id"), str) else None
+    if not refund_id or not payment_id:
+        return {"ok": True, "ignored": "refund event without ids"}
+
+    record = await db.payments.find_one({"payment_id": payment_id})
+    if not record:
+        # Never credited here (or not ours), so there is nothing to take back.
+        logger.info(f"refund {refund_id} for unknown payment {payment_id} — nothing to claw back")
+        return {"ok": True, "ignored": "unknown payment"}
+
+    amount_paise = refund_entity.get("amount")
+    if not isinstance(amount_paise, (int, float)):
+        return {"ok": True, "ignored": "refund event without an amount"}
+    amount = round(float(amount_paise) / 100.0, 2)
+
+    refund_currency = (refund_entity.get("currency") or record.get("currency") or "USD").upper()
+    if refund_currency != (record.get("currency") or "USD").upper():
+        # Refusing rather than converting, for the same reason crediting does.
+        logger.error(f"refund {refund_id} is {refund_currency} but payment was {record.get('currency')}")
+        return {"ok": True, "ignored": "refund currency mismatch"}
+
+    result = await claw_back_once(
+        f"refund:{refund_id}", record["wallet_key"], amount, refund_currency,
+        source="razorpay", reason=event_name, refund_of=payment_id,
+    )
+    if result.get("clawed_back"):
+        # Partial refunds leave the payment partly valid, so the status says
+        # which it was rather than flattening both to "refunded".
+        fully = abs(amount - float(record.get("amount", 0))) < 0.01
+        await db.payments.update_one(
+            {"payment_id": payment_id},
+            {"$set": {"status": "refunded" if fully else "partially_refunded",
+                      "refunded_amount": amount, "updated_at": now_iso()}},
+        )
+    return {"ok": True, **result}
 
 
 async def settle_payment(order: dict, payment_id: str) -> str:
@@ -256,19 +411,42 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
     existing_wallet = await db.wallets.find_one({"device_id": key})
     if existing_wallet and existing_wallet.get("currency"):
         currency = existing_wallet["currency"]
-    elif existing_wallet and existing_wallet.get("balance", 0) > 0:
-        currency = "USD"
-        await db.wallets.update_one({"device_id": key}, {"$set": {"currency": "USD"}})
     else:
-        currency = body.currency if body.currency in wal.SUPPORTED_CURRENCIES else suggest_currency(user, body.region)
+        # A pre-existing balance was necessarily earned in USD (the only
+        # currency there was), so it labels itself rather than being offered a
+        # choice that would silently revalue it.
+        desired = (
+            "USD" if (existing_wallet and existing_wallet.get("balance", 0) > 0)
+            else (body.currency if body.currency in wal.SUPPORTED_CURRENCIES
+                  else suggest_currency(user, body.region))
+        )
+        # ATOMIC claim, not read-then-write. Two first top-ups arriving
+        # together used to both see an unlocked wallet and both write — one in
+        # INR, one in USD — and the last writer won. The link already handed to
+        # the other customer then settled into a wallet locked to the OTHER
+        # currency, so a ₹99 payment could add 99 to a USD balance (≈$99 of
+        # analyses for ₹99) or $5 could add 5 to an INR balance. Only the
+        # request that actually sets the field proceeds with its own choice;
+        # every other one adopts what is already locked, so the link is always
+        # created in the currency the wallet really has.
         await db.wallets.update_one(
             {"device_id": key},
-            # $setOnInsert keeps a freshly created wallet well-formed: every
-            # reader treats `balance` as present, so locking a currency must
-            # not be able to leave a doc that has only a currency on it.
-            {"$set": {"currency": currency}, "$setOnInsert": {"balance": 0.0}},
+            {"$setOnInsert": {"device_id": key, "balance": 0.0}},
             upsert=True,
         )
+        claimed = await db.wallets.find_one_and_update(
+            {"device_id": key, "currency": {"$in": [None, ""]}},
+            {"$set": {"currency": desired}},
+            return_document=ReturnDocument.AFTER,
+        )
+        if claimed:
+            currency = claimed["currency"]
+        else:
+            # Someone else locked it microseconds ago. Theirs stands.
+            locked = await db.wallets.find_one({"device_id": key})
+            currency = (locked or {}).get("currency") or desired
+            if currency != desired:
+                logger.info(f"currency already locked to {currency} for {key}; adopting it over {desired}")
 
     if not wal.is_valid_topup(body.amount, currency):
         raise HTTPException(
@@ -481,6 +659,33 @@ async def pay_webhook(request: Request):
     # the top-up flow — the underlying order id may not be on our record yet.
     link_entity = (payload.get("payment_link", {}) or {}).get("entity", {})
     link_id = link_entity.get("id") if isinstance(link_entity.get("id"), str) else None
+
+    # Refunds and chargebacks are keyed on the refund/payment entity, never on
+    # the payment link, so they are handled before the link branch returns.
+    if name in REFUND_EVENTS:
+        refund_entity = (payload.get("refund", {}) or {}).get("entity", {})
+        if not isinstance(refund_entity, dict):
+            refund_entity = {}
+        result = await handle_refund_event(refund_entity, name)
+        await mark_webhook_event_processed(event_id)
+        return result
+    if name in DISPUTE_EVENTS and payment_id:
+        # A chargeback is money taken back by the bank, with no refund entity.
+        record = await db.payments.find_one({"payment_id": payment_id})
+        if record:
+            result = await claw_back_once(
+                f"chargeback:{payment_id}", record["wallet_key"], float(record.get("amount", 0)),
+                (record.get("currency") or "USD").upper(), source="razorpay",
+                reason=name, refund_of=payment_id,
+            )
+            if result.get("clawed_back"):
+                await db.payments.update_one(
+                    {"payment_id": payment_id},
+                    {"$set": {"status": "chargeback", "updated_at": now_iso()}},
+                )
+        await mark_webhook_event_processed(event_id)
+        return {"ok": True}
+
     if link_id:
         record = await db.payments.find_one({"razorpay_payment_link_id": link_id})
         if not record:
@@ -678,6 +883,30 @@ async def iap_webhook(request: Request, authorization: Optional[str] = Header(No
     if action == "invalid":
         logger.warning(f"iap webhook rejected: {detail['reason']} (event {event_id})")
         raise HTTPException(status_code=400, detail=detail["reason"])
+
+    if action == "clawback":
+        # Apple refunded the purchase. How much to take back is read from OUR
+        # OWN ledger row rather than recomputed from the product table: the
+        # pack price may have changed since, and the only honest amount to
+        # reverse is the one that was actually added.
+        credited = await db.wallet_ledger.find_one({"payment_id": f"apple:{detail['transaction_id']}"})
+        if not credited:
+            # Never credited here (sandbox cap, unknown account, or a purchase
+            # from before this integration) — nothing to reverse.
+            return {"ok": True, "ignored": "no credit on record for this transaction"}
+        result = await claw_back_once(
+            f"refund:apple:{detail['transaction_id']}", credited["wallet_key"],
+            float(credited.get("amount", 0)), credited.get("currency") or "USD",
+            source="apple_iap", reason=str(event.get("type")),
+            refund_of=f"apple:{detail['transaction_id']}",
+        )
+        await db.webhook_events.update_one(
+            {"event_id": f"rc:{event_id}"},
+            {"$set": {"event_id": f"rc:{event_id}", "source": "revenuecat",
+                      "transaction_id": detail["transaction_id"], "received_at": now_iso()}},
+            upsert=True,
+        )
+        return {"ok": True, **result}
 
     # A balance is a bare number in the account's OWN locked currency, so how
     # much to add depends on that currency and not on what Apple charged or

@@ -189,7 +189,7 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
   injection path inside `LightweightChart`, which this spec's diff scope excluded.
 
 ## Razorpay live-key swap + checkout hardening (2026-06-19, session 9) — DONE
-- New LIVE keys in `backend/.env` (`rzp_live_TcXwvcOkbzuvGv`), verified against the Razorpay API and by
+- New LIVE keys in `backend/.env` (key id redacted — lives only in `backend/.env`), verified against the Razorpay API and by
   creating a real $5 order. Webhook secret still empty (callback + `/api/pay/status` polling cover it).
 - **Root cause of the user's failed payments**: Razorpay rejected them with *"Payment blocked as website
   does not match registered website(s)"* — the checkout host must be added under Razorpay Dashboard →
@@ -464,7 +464,7 @@ isolation. Cause is external rate limiting (Yahoo + the LLM + Razorpay) when 380
 analyses in parallel, not app behaviour. Re-run the failing file alone before investigating.
 
 ### RevenueCat key received (2026-06-20)
-`REVENUECAT_IOS_KEY=appl_PdgYyIGhXzhIdLrwVzBbWOCwaPO` is now in `backend/.env`, so
+`REVENUECAT_IOS_KEY` (the public SDK key) is now in `backend/.env`, so
 `/api/pay/iap/config` returns `enabled: true` and `/api/wallet/balance` returns
 `iap_enabled: true` — the iOS wallet card renders the StoreKit packs instead of the
 "not switched on" line. Two regression assertions that pinned `False` now follow
@@ -975,3 +975,70 @@ is unversioned and changes under us, so it cannot be pinned; the sandbox is its 
 F15 (currency race — the report's own top priority), F16 (launch-free counter race), F17 (sandbox
 IAP cap), F18 (refund clawback), F19 (committed Razorpay test secret — rotate regardless), the
 `/news` authentication product decision, and the remaining low-severity list.
+
+## F15 currency race + refund clawback + committed-secret cleanup (2026-06-21, session 15) — DONE
+
+### F15 — the currency race (the report's own top priority)
+`/pay/order` read the wallet, decided a currency, then wrote it — three steps. Two first top-ups
+arriving together both saw an unlocked wallet and both wrote, last writer winning, while the OTHER
+customer's payment link had already been created in the losing currency. That link then settled
+into a wallet locked to the other currency, and `credit_wallet_once` added the bare number with no
+currency check at all: **₹99 could add 99 to a USD balance** (≈$99 of analyses for ₹99), or $5
+could add 5 to an INR balance (≈1/80th of what was paid).
+- **Atomic claim**: the wallet doc is ensured with `$setOnInsert`, then the currency is claimed with
+  `find_one_and_update({"device_id": key, "currency": {"$in": [None, ""]}}, ...)`. Only the request
+  that actually sets the field uses its own choice; every other one re-reads and ADOPTS what is
+  locked, so the link is always created in the currency the wallet really has (and the pack
+  validation then runs against that same currency — asked for $5 on an INR-locked wallet, the user
+  gets the ₹ packs in the error, not a mispriced link).
+- **Damage control at credit time**: `credit_wallet_once` now compares the payment's currency with
+  the wallet's locked currency and, on a mismatch, credits NOTHING and marks the payment
+  `status: "currency_mismatch"`, `needs_review: true`. Refusing beats guessing a conversion rate.
+- **Ledger bug found while fixing it**: every ledger row was written with a hardcoded
+  `wal.CURRENCY` ("USD"), so INR top-ups were recorded as dollars — wrong in the books, and the
+  refund path reads these rows back. Now records what was actually paid, plus `source: "razorpay"`.
+- A first top-up into a wallet with no currency also locks it, matching what the IAP path does.
+- Tests: `tests/test_currency_race_and_refunds.py` — 20 wanting INR and 20 wanting USD in parallel
+  produce exactly ONE currency and one wallet doc; a second order adopts the lock instead of its own
+  region; the mismatch guard credits nothing and flags; the ledger records INR.
+
+### F18 — refund and chargeback clawback
+A refunded payment left the credit on the balance, so **a refund was a free top-up**.
+`claw_back_once()` mirrors the credit path exactly: same `wallet_ledger`, same unique index on
+`payment_id` (so `refund.created` and `refund.processed` for one refund claw back once, whichever
+arrives first), a NEGATIVE row so the ledger still sums to the balance, and the same compensating
+rollback if the wallet write fails.
+- **A balance can be lower than the refund** — the analyses were already run and the LLM already
+  paid for. We take what is there, set the balance to 0 and record `requested` / `shortfall` on the
+  row. A negative balance would lock a user out of the app over someone else's refund.
+- Keyed on the REFUND id, not the payment id: partial refunds are each their own clawback, and the
+  payment is marked `refunded` or `partially_refunded` accordingly.
+- Chargebacks (`payment.dispute.lost`) claw back the full payment — the bank took the money and
+  there is no refund entity.
+- Apple/RevenueCat: refunds arrive as `CANCELLATION` (confirmed against RevenueCat's docs — there
+  is no `REFUND` type, though one is accepted so a future rename can't silently stop the clawback).
+  `cancel_reason: UNSUBSCRIBE` is auto-renew being turned off — no money moved, so nothing is taken
+  back. The amount comes from **our own ledger row**, not the price table, since the pack price may
+  have changed and the only honest amount to reverse is the one that was added.
+- A refund for a payment we never credited (unknown payment, sandbox cap, another product) is a
+  logged no-op, answered 200 so the provider stops retrying.
+- **Owner action required**: `refund.created`, `refund.processed` and `payment.dispute.lost` must be
+  ticked on the Razorpay dashboard webhook (same secret as `RAZORPAY_WEBHOOK_SECRET`), or none of
+  these events ever arrive.
+
+### F19 — the committed Razorpay secret
+Found it: `test_reports/iteration_15.json` (tracked) contained a test key id AND secret pasted in by
+a testing agent. Redacted, along with a live key ID and the RevenueCat public SDK key in
+`memory/PRD.md` / `memory/test_credentials.md`.
+- **Checked every one of the 75 commits** for the values currently in `backend/.env`: the live
+  Razorpay key id/secret, `JWT_SECRET`, Twilio auth token, Emergent LLM key and the RevenueCat
+  webhook auth were **never committed**. Only the older TEST credentials were.
+- **Still required from the owner**: rotate that test key in the Razorpay dashboard. Redacting the
+  working tree does not remove it from git history, and rewriting history here would be worse than
+  the exposure.
+- `tests/test_no_committed_secrets.py` (8) is the guard: it scans every tracked file for
+  secret-shaped strings AND for the real current `.env` values, asserts the env files are untracked,
+  and asserts the scan itself actually read something (so a broken `git ls-files` can't make it pass
+  vacuously).
+
+- Full suite: **603 passed, 9 skipped**.

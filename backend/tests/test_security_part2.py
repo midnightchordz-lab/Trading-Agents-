@@ -296,8 +296,10 @@ class TestFinding9RetryabilityAfterACrash:
         # "duplicate", so the payment was never processed at all.
         assert 'find_one({"event_id": event_id})' in hook
         assert "webhook_events.insert_one" not in hook
-        # Marked on every completed path.
-        assert hook.count("mark_webhook_event_processed(event_id)") == 5
+        # Marked on every completed path — including the two added with the
+        # refund clawback (a refund/chargeback event is handled exactly once
+        # for the same reason a capture is).
+        assert hook.count("mark_webhook_event_processed(event_id)") == 7
 
     def test_a_duplicate_event_is_still_answered_duplicate(self):
         event_id = f"TEST_p2-evt-{uuid.uuid4()}"
