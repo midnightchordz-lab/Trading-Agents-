@@ -56,6 +56,16 @@ def key_tail() -> str:
     return KEY_ID[-4:] if KEY_ID else ""
 
 
+def key_id_malformed() -> bool:
+    """A Razorpay key id ALWAYS starts `rzp_live_` or `rzp_test_`. Anything
+    else means the wrong value was put in this variable — which really
+    happened: the key SECRET was pasted into RAZORPAY_KEY_ID in a deployment
+    secrets panel, and the only symptom was "Authentication failed" on every
+    top-up, indistinguishable from an expired key. Cheap to detect, so it is
+    detected instead of diagnosed again."""
+    return bool(KEY_ID) and not KEY_ID.startswith(("rzp_live_", "rzp_test_"))
+
+
 def is_live_mode() -> bool:
     return KEY_ID.startswith("rzp_live_")
 

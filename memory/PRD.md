@@ -1264,3 +1264,25 @@ for a minute each.
   SLOWER (276s) *and* failed 5 tests, exactly the external rate-limiting the suite note warns
   about. `addopts` stays `-n 2 --dist loadscope`.
 - Result: **660 passed, 9 skipped in 2m33s** (was 657 in 4m22s).
+
+## The actual cause of the deployed 502: the key SECRET was in RAZORPAY_KEY_ID (2026-06-22, session 16)
+After the user updated the deployment secrets, `/api/pay/health` on the deployed host read
+`razorpay_key_tail: "2LyM"` (the RIGHT key id) but still `razorpay_credentials_ok: false`. At the
+same time `backend/.env` in the workspace had been rewritten (mtime 8 minutes old) with
+**`RAZORPAY_KEY_ID` set to the 24-char key SECRET** — the same value as `RAZORPAY_KEY_SECRET`. So
+the secret had been pasted into the key-id field, in both places. Restored
+`RAZORPAY_KEY_ID=rzp_live_Tds0LAGnVO2LyM`; the preview backend authenticates again
+(`razorpay_credentials_ok: true`).
+- That mistake is indistinguishable from an expired key from the outside: Razorpay answers
+  "Authentication failed" either way, which is why it was chased as a stale-deploy problem.
+  So it is now detected rather than diagnosed: `rzp.key_id_malformed()` (a key id always starts
+  `rzp_live_` / `rzp_test_`), logged loudly at startup, and reported as
+  `razorpay_key_id_malformed` by `/api/pay/health`.
+- **The root `.gitignore` `.env` exclusion regenerated AGAIN** during this session and was caught
+  by the new `test_env_files_are_not_git_ignored` rather than by a customer — exactly what it was
+  written for. Removed again.
+- A test of mine briefly contained the real key secret as a fixture value;
+  `test_no_committed_secrets.py` failed the build over it, as designed. Replaced with a fake.
+- Full suite: **662 passed, 9 skipped in 2m27s**.
+- Still owner-side on the DEPLOYED environment: `RAZORPAY_KEY_SECRET` (the 24-char value, NOT the
+  key id) and `RAZORPAY_WEBHOOK_SECRET` (48 chars) must be set in Deployment -> Secrets.

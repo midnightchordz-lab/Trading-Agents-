@@ -153,6 +153,12 @@ async def ensure_payment_indexes():
     except Exception as e:
         logger.warning(f"payment index setup failed: {e}")
     if rzp.payments_configured():
+        if rzp.key_id_malformed():
+            logger.error(
+                "RAZORPAY_KEY_ID does not look like a key id (expected rzp_live_… / rzp_test_…) "
+                "— the key SECRET was probably pasted into it; top-ups will fail with "
+                "'Authentication failed'"
+            )
         logger.info(f"razorpay ready ({'LIVE' if rzp.is_live_mode() else 'test'} mode)")
         # Prove the keys actually authenticate. A deployed image carrying stale
         # keys otherwise looks fine until a customer taps top-up and gets a 502.

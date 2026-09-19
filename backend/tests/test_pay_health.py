@@ -90,6 +90,33 @@ def test_key_tail_identifies_the_environment_without_exposing_the_key():
         assert rzp.KEY_ID not in requests.get(f"{BASE}/pay/health", timeout=20).text
 
 
+def test_flags_a_key_id_that_isnt_a_key_id():
+    """The value pasted into RAZORPAY_KEY_ID was once the key SECRET, and the
+    only symptom was Razorpay "Authentication failed" — identical to an expired
+    key, so the wrong thing was investigated. A key id always starts
+    `rzp_live_` / `rzp_test_`, so the mistake is now reported directly."""
+    body = health()
+    assert body["razorpay_key_id_malformed"] is rzp.key_id_malformed()
+    # This environment's own key must be well formed.
+    assert body["razorpay_key_id_malformed"] is False
+    assert rzp.key_id_malformed() is False
+
+
+def test_key_id_format_check_catches_a_pasted_secret():
+    real = rzp.KEY_ID
+    try:
+        rzp.KEY_ID = "aB3dEfGhIjKlMnOpQrStUvWx"  # shaped like a secret, not an id
+        assert rzp.key_id_malformed() is True
+        rzp.KEY_ID = "rzp_live_Abc123"
+        assert rzp.key_id_malformed() is False
+        rzp.KEY_ID = "rzp_test_Abc123"
+        assert rzp.key_id_malformed() is False
+        rzp.KEY_ID = ""  # not configured at all is a different question
+        assert rzp.key_id_malformed() is False
+    finally:
+        rzp.KEY_ID = real
+
+
 def test_env_files_are_not_git_ignored():
     """Three separate production payment outages traced back to the ROOT
     .gitignore excluding `.env` / `.env.*` / `*.env`: the deploy build context

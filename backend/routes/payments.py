@@ -97,6 +97,11 @@ async def pay_health():
         # Public key id's last 4 chars — tells "this environment has the new
         # keys" from "this one is stale" without exposing anything secret.
         "razorpay_key_tail": rzp.key_tail(),
+        # True when RAZORPAY_KEY_ID doesn't even look like a key id (the key
+        # secret pasted into the wrong variable). Distinguishes "wrong value
+        # in the wrong field" from "expired keys" — both otherwise present as
+        # Razorpay "Authentication failed".
+        "razorpay_key_id_malformed": rzp.key_id_malformed(),
         "apple_iap": iap.configured(),
         "currencies": list(wal.SUPPORTED_CURRENCIES),
         "wallet_enforcement": WALLET_ENFORCEMENT_ENABLED,
