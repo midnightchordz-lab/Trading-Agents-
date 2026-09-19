@@ -68,7 +68,15 @@ function buildHtml(
   .lbl{position:absolute;left:6px;font-size:10px;color:#3F3F55;z-index:2;pointer-events:none}
   .wrap{position:relative}
 </style>
-<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+<!-- integrity computed against the real file with `openssl dgst -sha384` and
+     confirmed stable across refetches. The chart engine is third-party code
+     loaded from a CDN, and the iframe sandbox is what stops it reaching our
+     origin; this is what stops a swapped CDN file running at all. If the
+     version above is ever bumped, the hash MUST be regenerated or the chart
+     will refuse to load. -->
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"
+        integrity="sha384-stKllnUqA9AD0gsKCuUtf5XlqAW7PwIgDagoNsTWkjkBmJ/GZ/uHTgEBxdLV2VSK"
+        crossorigin="anonymous"></script>
 </head><body>
 <div class="wrap"><div class="lbl" id="l0"></div><div id="main"></div></div>
 <div class="wrap"><div class="lbl">RSI 14</div><div id="rsi"></div></div>

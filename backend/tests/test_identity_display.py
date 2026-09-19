@@ -18,6 +18,7 @@ from pymongo import MongoClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import auth as au  # noqa: E402
+from tests.async_loop import run_async  # noqa: E402
 from routes.auth_routes import identity_for, identity_type_for  # noqa: E402
 from server import migrate_unverified_billing_email  # noqa: E402
 
@@ -138,7 +139,7 @@ def test_migration_moves_stray_emails_only():
         # Idempotent: a restart must not undo or duplicate anything.
         await migrate_unverified_billing_email()
 
-    asyncio.run(run_twice())
+    run_async(run_twice())
 
     moved = db.users.find_one({"id": phone_uid})
     assert moved.get("email") is None

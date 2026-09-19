@@ -6,6 +6,8 @@ through Emergent managed auth. This is the ONLY place a verified `email` /
 fields, so anything else writing them would be a privilege escalation.
 """
 import asyncio
+import hashlib
+import hmac
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -72,7 +74,15 @@ async def send_welcome_if_new(user: dict) -> None:
         await db.users.update_one({"id": user["id"]}, {"$set": {"welcome_sent_at": None}})
 
 
-async def signup_free_credits(device_id: Optional[str], request: Optional[Request]) -> int:
+def free_credit_tombstone_hash_for(identifier: str) -> str:
+    """Same HMAC pattern as owner_hash_for, keyed on the normalized
+    email/phone rather than an account id. Lets the tombstone survive
+    account deletion without storing the identifier itself in plain text."""
+    return hmac.new(JWT_SECRET.encode(), f"free-credit-tombstone:{identifier}".encode(), hashlib.sha256).hexdigest()
+
+
+async def signup_free_credits(device_id: Optional[str], request: Optional[Request],
+                              identifier: Optional[str] = None) -> int:
     """How many free credits a BRAND-NEW account should start with.
 
     Free credits are per account, not per device, so rotating a device id on
@@ -88,6 +98,18 @@ async def signup_free_credits(device_id: Optional[str], request: Optional[Reques
     shared office or carrier-NAT address would lock out genuine users, which is
     a far worse outcome than someone getting ten free analyses."""
     ip = client_ip(request)
+    if identifier:
+        # The direct fix for the actual exploit path: delete the account,
+        # sign back in with the SAME email, and find_or_create_user makes a
+        # brand-new account with a fresh grant, since deletion only removed
+        # the user/wallet records, not the fact that this identifier already
+        # had one. Device/IP throttling below is real but evadable by
+        # rotating either signal; this check is not, since it's keyed on the
+        # one thing farming this way still requires: a working email/phone.
+        tombstone_hash = free_credit_tombstone_hash_for(identifier)
+        if await db.free_credit_tombstones.find_one({"hash": tombstone_hash}):
+            logger.info("free credits withheld: this identifier already had an account")
+            return 0
     if device_id:
         seen = await db.free_credit_grants.count_documents({"device_id": device_id})
         if seen >= wal.FREE_CREDIT_GRANTS_PER_DEVICE:
@@ -165,7 +187,7 @@ async def find_or_create_user(identifier_type: str, identifier: str,
             existing = await db.users.find_one({key: pre_canonical})
     if existing:
         return existing
-    granted = await signup_free_credits(device_id, request)
+    granted = await signup_free_credits(device_id, request, identifier)
     user = {"id": str(uuid.uuid4()), "phone": None, "email": None, "google_sub": None,
             "apple_sub": None, "free_credits_remaining": granted,
             # Which field the account actually verified at sign-in. Recorded so
@@ -342,7 +364,10 @@ async def auth_session(body: GoogleSession, request: Request):
 
     user = await db.users.find_one({"email": email})
     if not user:
-        granted = await signup_free_credits(body.device_id, request)
+        # Same identifier-keyed tombstone as the OTP path: deleting the account
+        # and signing back in with the same Google address must not mint a
+        # second free grant either.
+        granted = await signup_free_credits(body.device_id, request, email)
         user = {"id": str(uuid.uuid4()), "phone": None, "email": email, "google_sub": data.get("id"),
                 "apple_sub": None, "name": data.get("name"), "picture": data.get("picture"),
                 "free_credits_remaining": granted, "created_at": now_iso()}
@@ -389,7 +414,10 @@ async def auth_apple(body: SocialSignIn, request: Request):
         raise HTTPException(status_code=401, detail="Invalid Apple sign-in token")
     user = await db.users.find_one({"apple_sub": claims.get("sub")})
     if not user:
-        granted = await signup_free_credits(body.device_id, request)
+        # Apple can withhold the address (private relay), in which case there
+        # is nothing to key a tombstone on and the device/IP caps are all we
+        # have — signup_free_credits skips the check on a falsy identifier.
+        granted = await signup_free_credits(body.device_id, request, claims.get("email"))
         user = {"id": str(uuid.uuid4()), "phone": None, "email": claims.get("email"),
                 "google_sub": None, "apple_sub": claims.get("sub"),
                 "free_credits_remaining": granted, "created_at": now_iso()}
@@ -455,6 +483,13 @@ async def delete_account(user: dict = Depends(get_current_user)):
     either, since they were never linked to this account's identity in the
     first place (see the Privacy Policy)."""
     user_id = user["id"]
+    identifier = identity_for(user)
+    if identifier:
+        await db.free_credit_tombstones.update_one(
+            {"hash": free_credit_tombstone_hash_for(identifier)},
+            {"$setOnInsert": {"deleted_at": now_iso()}},
+            upsert=True,
+        )
     await db.users.delete_one({"id": user_id})
     await db.wallets.delete_one({"device_id": f"user:{user_id}"})
     return {"deleted": True}

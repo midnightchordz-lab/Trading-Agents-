@@ -916,3 +916,62 @@ closed:
 - Tests: `tests/test_identity_display.py` (8). Verified end-to-end by the testing agent
   (iteration_21): a real phone sign-in shows the phone, an email sign-in shows the email, and the
   reported account id now reports `+918291026526`.
+
+## FINDINGS_4_14_REVERIFIED — the two genuinely open findings (2026-06-21, session 15) — DONE
+The document's own verification was right: of F4–F14, nine were already closed on this tip
+(F4, F5, F6, F8, F10, F11, F12, F13, F14 — the last three closed earlier today). Re-checked each
+against the real files before touching anything. Two were open, both applied as written:
+
+### F7 — account deletion reset the free-credit grant
+`delete_account` removed the user record, so signing back in with the same address ran
+`find_or_create_user`, found nothing, and minted a brand-new account with a fresh
+`FREE_CREDITS_ON_SIGNUP = 10` — worth ten real LLM analyses, repeatable forever. The existing
+device/IP caps don't help: both signals are trivially rotated, while the address is the one thing
+the attack still needs.
+- `free_credit_tombstone_hash_for()` — the same keyed-HMAC pattern as `owner_hash_for`, keyed on
+  the identifier instead of an account id, so the tombstone outlives the account **without storing
+  the address**. `delete_account` upserts one (`$setOnInsert`, so a second deletion can't refresh
+  the timestamp); `signup_free_credits` checks it FIRST and returns 0 regardless of device or
+  network. New `free_credit_tombstones` collection, unique index on `hash`.
+- **Extended beyond the document's diff, deliberately**: the diff only patched the OTP path, and
+  the identical exploit exists via Google (delete, sign in with Google again). The identifier is now
+  passed at all three account-creation sites — same function, same logic, no new behaviour. A test
+  asserts all three call sites pass it, so a future sign-in route can't silently reopen the hole.
+  Apple can withhold the address (private relay); there is then nothing to key on and the device/IP
+  caps are all that apply — `signup_free_credits` skips the check on a falsy identifier rather than
+  treating a missing signal as abuse.
+- **Known limit, not papered over**: the tombstone is keyed on the identifier AS STORED by each
+  path. An email-OTP address is Gmail-canonicalized, a Google address is not, so deleting a Google
+  account and re-signing-up by email OTP with the same address would still grant. Closing that
+  means canonicalizing at the Google path too — a behaviour change, so not done unasked.
+- `delete_account` tombstones `identity_for(user)` (the sign-in identity) rather than
+  `email or phone`: after today's identity fix, `email` can hold a payment-receipt address, which is
+  not what the next sign-in is looked up by. Asserted by a test.
+
+### F9 — `credit_iap_once` was missing `credit_wallet_once`'s rollback
+It inserted the ledger row first but had no compensating delete, so a failed balance increment
+would leave a row claiming the Apple purchase was credited while the money was never added — and
+the unique index on `payment_id` then blocks every retry from ever fixing it. The identical,
+already-proven `try/except: delete_one(...); raise` from `credit_wallet_once` applied verbatim.
+Test injects a failing wallet write (at the DATABASE level — motor rebuilds the collection object
+on every attribute access, so patching `db.wallets.update_one` silently does nothing), asserts no
+ledger row and no wallet survive, then asserts the retry credits exactly 5.00 once.
+
+### Closed the document's "unresolved limitation": the SRI hash
+It couldn't compute one without network access and rightly refused to fabricate one. Computed from
+the real file (`openssl dgst -sha384`, byte-identical across refetches) and pinned on the
+`lightweight-charts@4.2.3` CDN tag with `crossorigin="anonymous"`. Verified in a browser inside the
+same `sandbox="allow-scripts"` iframe the app uses: the real hash renders a chart, a tampered hash
+gives `SRI_BLOCKED` — so it is genuinely enforced, not an ignored attribute. TradingView's `tv.js`
+is unversioned and changes under us, so it cannot be pinned; the sandbox is its only containment.
+
+- Tests: `backend/tests/test_findings_4_14.py` (12). Also fixed a test-infra trap the new async
+  tests exposed: `tests/async_loop.py` now provides ONE process-wide event loop, because motor hands
+  each operation to whichever loop is current and `asyncio.run` closes its loop on exit, so the
+  second `asyncio.run` anywhere in a worker died with "Event loop is closed".
+  Full suite: **575 passed, 9 skipped**.
+
+### Still open from that document (untouched, not in scope)
+F15 (currency race — the report's own top priority), F16 (launch-free counter race), F17 (sandbox
+IAP cap), F18 (refund clawback), F19 (committed Razorpay test secret — rotate regardless), the
+`/news` authentication product decision, and the remaining low-severity list.

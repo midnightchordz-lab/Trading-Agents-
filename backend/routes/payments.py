@@ -626,12 +626,21 @@ async def credit_iap_once(transaction_id: str, wallet_key: str, amount: float, p
         })
     except DuplicateKeyError:
         return False
-    await db.wallets.update_one(
-        {"device_id": wallet_key},
-        {"$inc": {"balance": amount},
-         "$set": {"device_id": wallet_key, "updated_at": now_iso()}},
-        upsert=True,
-    )
+    try:
+        await db.wallets.update_one(
+            {"device_id": wallet_key},
+            {"$inc": {"balance": amount},
+             "$set": {"device_id": wallet_key, "updated_at": now_iso()}},
+            upsert=True,
+        )
+    except Exception:
+        # Same compensating rollback as credit_wallet_once, for the same
+        # reason: without it, a failure here leaves a ledger row claiming
+        # this transaction was credited when the balance was never actually
+        # touched, and the unique index on payment_id then blocks every
+        # future retry from ever fixing it.
+        await db.wallet_ledger.delete_one({"payment_id": ledger_id})
+        raise
     # An Apple purchase into a wallet that had never chosen a currency locks it
     # too, so the account's currency is always explicit once it holds real
     # money — rather than leaving an unlabelled balance that a later Razorpay
