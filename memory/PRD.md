@@ -1474,10 +1474,14 @@ a denylist of the already-leaked test secret so it can't be pasted back into a t
 design and the shape check still stops it being committed).
 
 ### Still open
-- `RAZORPAY_WEBHOOK_SECRET` in `backend/.env` is the OLD value: the owner set a new one in the
-  dashboard but sent the webhook URL instead of the secret. Signature verification on
-  `/api/pay/webhook` will reject events until the real value is pasted in (`/pay/status` polling
-  still credits meanwhile).
+- `RAZORPAY_WEBHOOK_SECRET` was regenerated HERE (48 hex chars) and installed in `backend/.env`,
+  because the owner twice sent the webhook URL rather than the secret — the Secret field on the
+  Razorpay webhook form is a value the merchant chooses, so generating it and handing it over is
+  fewer steps than explaining where to find it. Verified by signing a synthetic
+  `payment_link.paid` body: correct signature -> 200 accepted, wrong signature -> 400 rejected.
+  The OWNER must now paste that same value into Razorpay -> Settings -> Webhooks (and into
+  Deployment -> Secrets); until then Razorpay signs with the old secret and events are rejected,
+  with `/pay/status` polling still crediting.
 - Deployment -> Secrets must be updated with the new `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`,
   `JWT_SECRET`, the new `HASH_SECRET`, and the new webhook secret.
 - `.gitignore` re-added its `.env` exclusion a THIRD time this session; removed again, caught by
