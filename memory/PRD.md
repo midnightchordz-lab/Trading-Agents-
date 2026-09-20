@@ -1490,3 +1490,114 @@ design and the shape check still stops it being committed).
 - `.gitignore` re-added its `.env` exclusion a THIRD time this session; removed again, caught by
   `test_env_files_are_not_git_ignored` rather than by a customer.
 - Full suite: **700 passed, 9 skipped in 2m38s**.
+
+## Medium findings M1-M4 (2026-06-22, session 16, emergent-medium-fixes-prompt.pdf) — DONE
+Suite **before: 698 passed / 2 failed** (both pre-existing, both fixed: the `.gitignore` `.env`
+exclusion had regenerated again, and this morning's global OTP budget test held a global counter
+full for the whole test rather than one request, tripping an unrelated OTP test on the other
+xdist worker). **After: 754 passed, 9 skipped, 0 failed.** 56 tests added.
+
+### M1 — rate-limit indexes could silently not exist
+`server.py` (`guarded_index` helper), `rate_limit.py` (`INDEXES_OK`).
+Every `create_index` now runs in its own guarded call: same indexes, same options, same order, and
+a failure logs an ERROR naming the index and continues. Previously one shared try/except meant any
+earlier failure skipped the limiter's unique index (atomicity) and TTL index (cleanup) while the app
+started looking healthy. `rate_limit.INDEXES_OK` is True/False after startup and **None means "not
+run yet" and behaves exactly like True**, so direct callers and unit tests are unaffected. When it
+is False, only the fail-closed bucket (OTP request) refuses, with the same 429 the limiter already
+raises when its database is unreachable; every other bucket still fails open. A duplicate-key
+failure on the unique build clears the ephemeral counters and retries once.
+- **Answered the spec's open question:** the startup hooks DO run under FastAPI 0.141.1 /
+  Starlette 1.6.0. Verified against the live database after a real boot:
+  `wallet_ledger.payment_id` (unique), `payments.razorpay_order_id` /
+  `razorpay_payment_link_id` / `reference_id` (unique), `webhook_events.event_id` (unique),
+  `free_credit_tombstones.hash` (unique), `rate_limits` key+window_start (unique) and
+  `rate_limits.expires_at` (TTL). No lifespan migration needed.
+- Nothing was added to `/api/pay/health` (asserted by a test).
+- Tests: `test_m1_indexes.py` (10), `test_m1_startup_indexes.py` (7).
+- Rollback: revert the commit. `RATE_LIMIT_ENABLED=false` disables the limiter entirely.
+
+### M2 — the startup migration could strip a VERIFIED email
+`server.py` (`migrate_unverified_billing_email`, `MIGRATION_NAME`),
+`scripts/repair_wrongly_migrated_emails.py` (new).
+The old selection (phone + email + no social id) also matched a legacy EMAIL-OTP account carrying a
+stray phone, whose email is the verified sign-in identity — stripping it orphaned the account. Now
+it also requires no `identity_type`, a **verified `otp_requests` row for the phone**, and **no
+verified row for the email** (checked lowercased AND canonical, since OTP rows store the canonical
+Gmail form). Anything else is skipped and counted. One-time via a `migrations` marker
+(`billing_email_v2`). Logs counts only: `moved=… skipped_ambiguous=…`.
+- Repair script is dry-run by default, needs `--apply`, re-checks each account at write time, skips
+  any address another account now holds, and is never called from startup (asserted by a test).
+  **Dry run against the preview database: 0 repairable, 2 conflicts skipped** (admin/test accounts
+  sharing one address). Production was not reachable from here.
+- Tests: `test_m2_billing_email_migration.py` (12).
+- **Existing test changed, with the owner's explicit approval:**
+  `test_identity_display.py::test_migration_moves_stray_emails_only` seeded accounts with no
+  `otp_requests` rows at all, which the new rule correctly treats as ambiguous. Four lines of SETUP
+  added (a verified OTP row for the phone it seeds, as a real signup leaves behind); **no assertion
+  touched**.
+- Rollback: revert the commit; delete the `migrations` marker to let it run again.
+
+### M3 — free-credit farming via Google/Apple
+`auth.py` (new `canonical_email`, `is_disposable_email` — `normalize_identifier` untouched),
+`routes/auth_routes.py` (`email_lookup_forms`, `tombstone_identifiers`, `signup_free_credits`,
+`auth_session`, `auth_apple`, `delete_account`), `wallet.py`.
+- Account LOOKUP on Google/Apple now matches `email $in [raw, canonical]`, so a legacy user is
+  never handed a second empty account. Stored emails are never rewritten.
+- Tombstones are written on deletion and checked at signup in **every spelling** of the identifier,
+  so deleting and signing back in as `ab@gmail.com` instead of `a.b+x@gmail.com` no longer mints a
+  fresh grant. Phone identifiers are unchanged (one form).
+- A disposable domain on Google/Apple signs in normally with **0** credits.
+- `wallet.FREE_CREDITS_ON_SIGNUP` now reads env `FREE_CREDITS_ON_SIGNUP` (default 10, name kept).
+- **Global budget `FREE_CREDIT_GLOBAL_PER_HOUR`, default 200.** Sizing is measured, as the spec
+  required: one full suite run creates **0** free-credit grants (its accounts are seeded directly or
+  sign up with 0), so 3x is 0 and the floor of 200 applies. Reaching it logs
+  `GLOBAL FREE-CREDIT BUDGET REACHED` and withholds credits only — the account is still created and
+  usable. Check order unchanged: tombstone, device, IP, then global (asserted by a test).
+- CAPTCHA / attestation / verified-phone were NOT implemented (asserted by a test).
+- Tests: `test_m3_free_credit_farming.py` (15).
+- Rollback: revert the commit. `FREE_CREDIT_GLOBAL_PER_HOUR=0` disables the budget;
+  `FREE_CREDITS_ON_SIGNUP` tunes the grant.
+
+### M4 — launch-free daily cap race
+`routes/analysis.py`.
+Read-modify-write replaced with an upsert (`$setOnInsert` only) plus **ONE atomic
+aggregation-pipeline update** that rolls the day over and claims a run together;
+`launch_free_daily_ok = claim.modified_count == 1`, and not claiming falls through to normal billing
+exactly as before. `wal.launch_free_daily_state`, `has_launch_free_daily_quota` and
+`deps.launch_free_daily_remaining` are untouched, as are all response fields. With
+`LAUNCH_FREE_UNTIL` unset the block is not entered at all.
+- **Deviation from the prompt, with evidence.** The specced separate reset step then claim step
+  still over-granted: `test_m4_launch_free_race.py` measured **20 free runs against a cap of 10**,
+  because a late-arriving reset (whose filter still matched the old date) zeroed a counter that
+  earlier requests had already incremented. A single statement cannot interleave with itself, so
+  the two steps became one pipeline update. 50 concurrent claims now grant exactly 10, stable over
+  5 consecutive runs.
+- **Residual, left in place deliberately:** `wallets.device_id` has no unique index (excluded by the
+  spec), so a device with NO wallet yet can occasionally end up with 2 wallet documents from
+  concurrent upserts — measured 1-2 out of 50 — each with its own counter. Pre-existing and
+  unchanged by this fix (the old code upserted identically); closing it needs a unique index plus a
+  merge. Every real request already has a wallet (the app calls `/api/wallet/balance` on launch),
+  and for those the cap is exact. Documented in a test rather than hidden.
+- Tests: `test_m4_launch_free_race.py` (11).
+- Rollback: revert the commit. `LAUNCH_FREE_UNTIL` unset disables the whole code path.
+
+### Smoke (preview, live)
+`/trending`, `/quote`, `/search`, `/chart`, `/news`, email OTP request + verify (real code read from
+the database), `/auth/me`, `/wallet/balance`, `/history`, `/analyze`, `/analysis/{id}`,
+`/pay/order` + `/pay/status` (a real live link created and cancelled), `/portfolio/optimize` — all
+as before. `/pay/order` correctly answers `400 contact_required:phone` for an email-only account
+and 200 once a contact is supplied. Google session exchange could NOT be smoke-tested (it needs a
+real Google authorisation code); its lookup change is covered by unit tests.
+
+### Also disclosed
+- `.gitignore`: the `.env` / `.env.*` / `*.env` exclusion had regenerated AGAIN and was removed —
+  a revert of an automated re-addition, not a new change, and required for
+  `test_env_files_are_not_git_ignored` to pass.
+- `tests/test_otp_ip_spoofing.py` (added earlier today, not pre-existing): the two global-budget
+  tests now delete their seeded rows immediately after the single request they need, instead of in
+  fixture teardown. A global budget is global, so holding it full for a whole test broke an
+  unrelated OTP test running in parallel.
+- NOT touched: `routes/payments.py`, both webhooks, auth verification, existing rate-limit numbers,
+  `deps.client_ip`, the frontend, `requirements.txt`, secrets/.env. V1-V3 and all ten low-severity
+  items were not attempted.

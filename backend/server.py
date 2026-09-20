@@ -10,9 +10,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
+import auth as au
 import rate_limit as ratelimit
 import razorpay_pay as rzp
-from core import client, db, logger
+from core import client, db, logger, now_iso
 from routes import analysis, auth_routes, market, payments, portfolio
 
 app = FastAPI()
@@ -90,6 +91,9 @@ async def migrate_legacy_wallet_field():
         logger.warning(f"legacy wallet migration failed: {e}")
 
 
+MIGRATION_NAME = "billing_email_v2"
+
+
 @app.on_event("startup")
 async def migrate_unverified_billing_email():
     """One-time: unverified billing emails sitting in the VERIFIED email field.
@@ -102,18 +106,44 @@ async def migrate_unverified_billing_email():
     number). New payments store it under `billing_email`; this moves the
     already-written ones there.
 
-    Only accounts that signed in with a PHONE and have no Google/Apple identity
-    are touched — those are exactly the ones whose email cannot have come from
-    a verified sign-in. Email-OTP and Google accounts are left alone.
+    WHY THE SELECTION IS NARROWER THAN IT LOOKS: the original version matched
+    any user with a phone, an email and no Google/Apple id. That also matches a
+    LEGACY EMAIL-OTP account which happens to carry a stray phone (the same
+    pre-fix payment path could write one), and for those the email is the
+    VERIFIED sign-in identity. Stripping it silently locked the person out of
+    their own account — their next email sign-in created a fresh empty one.
+
+    So the email is only moved when the evidence says the phone is the real
+    identity: a verified OTP for the phone, and NO verified OTP for the email
+    (checked in both stored-lowercase and canonical form, since Gmail dots and
+    +tags are collapsed when an OTP is requested). `otp_requests` rows are
+    never deleted, so that evidence is always available. Anything ambiguous is
+    skipped and counted — when in doubt, leave the account alone.
     """
     try:
+        if await db.migrations.find_one({"name": MIGRATION_NAME}):
+            return
         moved = 0
+        skipped_ambiguous = 0
         async for doc in db.users.find({
+            # An account that has been through any sign-in since the fix has
+            # this field set, and its identity is already recorded properly.
+            "identity_type": {"$exists": False},
             "phone": {"$ne": None},
             "email": {"$ne": None},
             "google_sub": None,
             "apple_sub": None,
         }):
+            email = (doc.get("email") or "").strip().lower()
+            _, canonical = au.normalize_identifier(email)
+            candidates = [e for e in {email, canonical} if e]
+            phone_verified = await db.otp_requests.find_one(
+                {"identifier": doc["phone"], "verified": True}, {"_id": 1})
+            email_verified = await db.otp_requests.find_one(
+                {"identifier": {"$in": candidates}, "verified": True}, {"_id": 1}) if candidates else None
+            if not phone_verified or email_verified:
+                skipped_ambiguous += 1
+                continue
             await db.users.update_one(
                 {"_id": doc["_id"]},
                 {"$set": {"billing_email": doc.get("billing_email") or doc["email"],
@@ -121,49 +151,85 @@ async def migrate_unverified_billing_email():
                  "$unset": {"email": ""}},
             )
             moved += 1
-        if moved:
-            logger.info(f"moved {moved} unverified emails from users.email to billing_email")
+        # Counts only — never an email, phone or id.
+        logger.info(f"billing email migration complete: moved={moved} skipped_ambiguous={skipped_ambiguous}")
+        await db.migrations.update_one({"name": MIGRATION_NAME},
+                                       {"$set": {"name": MIGRATION_NAME, "completed_at": now_iso()}},
+                                       upsert=True)
     except Exception as e:
         logger.warning(f"billing email migration failed: {e}")
+
+
+async def guarded_index(label: str, coro_factory) -> bool:
+    """Build ONE index, and let the rest carry on if it fails.
+
+    Every index below used to sit in a single try/except that logged a warning,
+    so one failure skipped every later line — including the limiter's unique
+    index (what makes rate limiting atomic) and its TTL index (what stops the
+    collection growing forever). The app still started, looking healthy.
+    Same indexes, same options, same order; each one is just isolated now, and
+    a failure is an ERROR naming the index rather than one anonymous warning.
+    """
+    try:
+        await coro_factory()
+        return True
+    except Exception as e:
+        logger.error(f"INDEX SETUP FAILED for {label}: {e} — continuing with the remaining indexes")
+        return False
 
 
 @app.on_event("startup")
 async def ensure_payment_indexes():
     """Unique indexes are what keep a top-up from being credited twice."""
+    # Payment-link records carry no order id until the customer starts paying,
+    # so these must be sparse — the old non-sparse unique index would reject
+    # every record after the first one missing the field. Kept first, and kept
+    # as it was.
     try:
-        # Payment-link records carry no order id until the customer starts
-        # paying, so these must be sparse — the old non-sparse unique index
-        # would reject every record after the first one missing the field.
         existing = await db.payments.index_information()
         if "razorpay_order_id_1" in existing and not existing["razorpay_order_id_1"].get("sparse"):
             await db.payments.drop_index("razorpay_order_id_1")
-        await db.payments.create_index("razorpay_order_id", unique=True, sparse=True)
-        await db.payments.create_index("razorpay_payment_link_id", unique=True, sparse=True)
-        await db.payments.create_index("reference_id", unique=True, sparse=True)
-        await db.wallet_ledger.create_index("payment_id", unique=True)
-        await db.webhook_events.create_index("event_id", unique=True)
-        # Private per-account history reads on these two.
-        await db.analyses.create_index("owner_hash")
-        await db.analyses.create_index("viewer_hashes")
-        # Signup abuse guard reads these two on every new account.
-        await db.free_credit_grants.create_index("device_id")
-        await db.free_credit_grants.create_index([("ip", 1), ("created_at", -1)])
-        # Every OTP request now counts the last hour globally (the only defence
-        # against a distributed pump), so that count must not be a collection
-        # scan.
-        await db.otp_requests.create_index([("created_at", -1)])
-        await db.otp_requests.create_index([("identifier_type", 1), ("created_at", -1)])
-        await db.otp_requests.create_index([("ip", 1), ("created_at", -1)])
-        # Rate limiting: the unique (key, window_start) index is what makes the
-        # counter atomic, and the TTL index is what stops the collection
-        # growing with traffic. Created here so a deploy can't start serving
-        # with a limiter that silently isn't atomic.
-        await ratelimit.ensure_indexes()
-        # And this one, checked ahead of them: an identifier that already had
-        # an account doesn't get a second free grant after deletion.
-        await db.free_credit_tombstones.create_index("hash", unique=True)
     except Exception as e:
-        logger.warning(f"payment index setup failed: {e}")
+        logger.error(f"INDEX SETUP FAILED dropping the old razorpay_order_id index: {e}")
+
+    await guarded_index("payments.razorpay_order_id",
+                        lambda: db.payments.create_index("razorpay_order_id", unique=True, sparse=True))
+    await guarded_index("payments.razorpay_payment_link_id",
+                        lambda: db.payments.create_index("razorpay_payment_link_id", unique=True, sparse=True))
+    await guarded_index("payments.reference_id",
+                        lambda: db.payments.create_index("reference_id", unique=True, sparse=True))
+    await guarded_index("wallet_ledger.payment_id",
+                        lambda: db.wallet_ledger.create_index("payment_id", unique=True))
+    await guarded_index("webhook_events.event_id",
+                        lambda: db.webhook_events.create_index("event_id", unique=True))
+    # Private per-account history reads on these two.
+    await guarded_index("analyses.owner_hash", lambda: db.analyses.create_index("owner_hash"))
+    await guarded_index("analyses.viewer_hashes", lambda: db.analyses.create_index("viewer_hashes"))
+    # Signup abuse guard reads these on every new account.
+    await guarded_index("free_credit_grants.device_id",
+                        lambda: db.free_credit_grants.create_index("device_id"))
+    await guarded_index("free_credit_grants.ip+created_at",
+                        lambda: db.free_credit_grants.create_index([("ip", 1), ("created_at", -1)]))
+    await guarded_index("free_credit_grants.created_at",
+                        lambda: db.free_credit_grants.create_index([("created_at", -1)]))
+    # Every OTP request counts the last hour globally (the only defence against
+    # a distributed pump), so that count must not be a collection scan.
+    await guarded_index("otp_requests.created_at",
+                        lambda: db.otp_requests.create_index([("created_at", -1)]))
+    await guarded_index("otp_requests.identifier_type+created_at",
+                        lambda: db.otp_requests.create_index([("identifier_type", 1), ("created_at", -1)]))
+    await guarded_index("otp_requests.ip+created_at",
+                        lambda: db.otp_requests.create_index([("ip", 1), ("created_at", -1)]))
+    # Rate limiting: the unique (key, window_start) index is what makes the
+    # counter atomic, and the TTL index is what stops the collection growing
+    # with traffic.
+    await ratelimit.ensure_indexes()
+    # And this one, checked ahead of them: an identifier that already had an
+    # account doesn't get a second free grant after deletion.
+    await guarded_index("free_credit_tombstones.hash",
+                        lambda: db.free_credit_tombstones.create_index("hash", unique=True))
+
+
     if rzp.payments_configured():
         if rzp.key_id_malformed():
             logger.error(

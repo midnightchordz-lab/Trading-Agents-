@@ -55,6 +55,40 @@ _DISPOSABLE_EMAIL_DOMAINS = {
 }
 
 
+def canonical_email(raw: str) -> Optional[str]:
+    """The canonical form of an email, for MATCHING only.
+
+    Same Gmail rule `normalize_identifier` applies (dots and +tags collapsed,
+    because `a.b+tag@gmail.com` and `ab@gmail.com` are one real inbox), but
+    this returns a value for a disposable domain too — `normalize_identifier`
+    answers (None, None) for those, which is right for sign-in but useless for
+    "have I seen this inbox before".
+
+    Kept separate rather than changing `normalize_identifier`, whose return
+    value the OTP path, the admin allowlist and several tests depend on.
+    """
+    email = (raw or "").strip().lower()
+    if not _EMAIL_RE.match(email):
+        return None
+    local, _, domain = email.partition("@")
+    if domain in ("gmail.com", "googlemail.com"):
+        local = local.split("+", 1)[0].replace(".", "")
+        if not local:
+            return None
+        return f"{local}@gmail.com"
+    return email
+
+
+def is_disposable_email(raw: str) -> bool:
+    """A throwaway inbox, which costs nothing to create and is therefore the
+    cheapest way to farm signup credits. Only ever used to WITHHOLD CREDITS,
+    never to refuse a sign-in: the list is a static starter set and a false
+    positive must not lock a real person out of their account."""
+    email = (raw or "").strip().lower()
+    _, _, domain = email.partition("@")
+    return bool(domain) and domain in _DISPOSABLE_EMAIL_DOMAINS
+
+
 def normalize_identifier(raw: str) -> tuple[Optional[IdentifierType], Optional[str]]:
     """Detects whether raw looks like an email or a phone number and
     normalizes it. Returns (None, None) if it looks like neither.

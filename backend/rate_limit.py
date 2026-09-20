@@ -42,6 +42,16 @@ from deps import HASH_SECRET
 # One place to switch the whole thing off if it ever misbehaves in production.
 RATE_LIMIT_ENABLED = os.environ.get("RATE_LIMIT_ENABLED", "true").lower() == "true"
 
+# Whether the indexes this limiter depends on actually got built.
+#   True  - built.
+#   False - the build FAILED, so the unique (key, window_start) index may not
+#           exist and the counter is no longer atomic: two concurrent requests
+#           can both create the window and both be allowed. The app used to
+#           start anyway and look healthy.
+#   None  - startup has not run (a direct caller, or a unit test). Treated
+#           exactly like True, so nothing that works today changes.
+INDEXES_OK: Optional[bool] = None
+
 # A 429 must be a 429. Not a 502/503/504: the app auto-retries those, so
 # answering a flood with one would double the very load being limited.
 TOO_MANY = "Too many requests — please slow down and try again shortly."
@@ -61,10 +71,28 @@ def bucket_key(bucket: str, raw_key: str) -> str:
 
 async def ensure_indexes() -> None:
     """Called from the app's startup alongside the other index setup."""
-    await db.rate_limits.create_index([("key", 1), ("window_start", 1)], unique=True)
-    # Mongo's TTL monitor deletes on this field, so the collection is bounded
-    # by the longest window rather than by traffic.
-    await db.rate_limits.create_index("expires_at", expireAfterSeconds=0)
+    global INDEXES_OK
+    try:
+        try:
+            await db.rate_limits.create_index([("key", 1), ("window_start", 1)], unique=True)
+        except DuplicateKeyError:
+            # Counters created while the index was missing can contain
+            # duplicate (key, window_start) pairs, which makes the unique build
+            # fail forever. They are ephemeral counters worth nothing, so drop
+            # them and build the index that keeps the limiter atomic.
+            logger.warning("rate_limits contained duplicate windows (built while the unique index was "
+                           "missing) — clearing the counters and retrying the index build")
+            await db.rate_limits.delete_many({})
+            await db.rate_limits.create_index([("key", 1), ("window_start", 1)], unique=True)
+        # Mongo's TTL monitor deletes on this field, so the collection is
+        # bounded by the longest window rather than by traffic.
+        await db.rate_limits.create_index("expires_at", expireAfterSeconds=0)
+    except Exception as e:
+        INDEXES_OK = False
+        logger.error(f"INDEX SETUP FAILED for rate_limits: {e} — the limiter is no longer atomic, so "
+                     "the fail-closed buckets will refuse rather than under-count")
+        return
+    INDEXES_OK = True
     logger.info("rate limit indexes ready (rate_limits.key+window_start unique, expires_at TTL)")
 
 
@@ -114,6 +142,13 @@ async def enforce(bucket: str, raw_key: Optional[str], limit: int, window_second
     """Raise 429 if this caller is over the limit for this bucket."""
     if not RATE_LIMIT_ENABLED or not raw_key:
         return
+    if INDEXES_OK is False and fail_closed:
+        # Without the unique index the count can be wrong in the permissive
+        # direction, and this bucket guards something that spends real money
+        # (an SMS). Refusing is the lesser harm, and it is the same 429 this
+        # already raises when the counter's database is unreachable.
+        logger.warning(f"refusing {bucket}: the limiter's indexes failed to build, so it cannot count reliably")
+        raise HTTPException(status_code=429, detail=TOO_MANY, headers={"Retry-After": "60"})
     try:
         allowed, reset_in = await hit(bucket, raw_key, limit, window_seconds)
     except Exception as e:

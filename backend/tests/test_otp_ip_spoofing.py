@@ -154,18 +154,31 @@ def request_otp(identifier, ip="203.0.113.77"):
 def test_sms_budget_stops_a_distributed_pump_but_leaves_email_working(clean_otp_window):
     tag = clean_otp_window
     seed(ar.OTP_SMS_GLOBAL_MAX_PER_HOUR, "phone", tag)
-    res = request_otp("+919812345678", ip=f"203.0.113.{uuid.uuid4().int % 250}")
+    try:
+        res = request_otp("+919812345678", ip=f"203.0.113.{uuid.uuid4().int % 250}")
+        # The app must stay usable: email sign-in is unaffected by the SMS
+        # budget. Checked while the budget is still full, then the seed is
+        # removed IMMEDIATELY (see below).
+        email_res = request_otp(f"{uuid.uuid4().hex[:10]}@gmail.com")
+    finally:
+        # A global budget is global: while these rows exist, every other test
+        # running in parallel sees an exhausted budget too. Deleting them in a
+        # fixture teardown left that window open for the whole test and broke
+        # an unrelated OTP test on the other xdist worker.
+        db.otp_requests.delete_many({"identifier": {"$regex": f"^{tag}-"}})
     assert res.status_code == 503, res.text
     assert "email" in res.json()["detail"].lower()
-    # The app must stay usable: email sign-in is unaffected by the SMS budget.
-    email_res = request_otp(f"{uuid.uuid4().hex[:10]}@gmail.com")
     assert email_res.status_code != 503, email_res.text
 
 
 def test_the_email_budget_stops_email_pumping_too(clean_otp_window):
     tag = clean_otp_window
     seed(ar.OTP_EMAIL_GLOBAL_MAX_PER_HOUR, "email", tag)
-    res = request_otp(f"{uuid.uuid4().hex[:10]}@gmail.com")
+    try:
+        res = request_otp(f"{uuid.uuid4().hex[:10]}@gmail.com")
+    finally:
+        # Held for one request only — see the note above.
+        db.otp_requests.delete_many({"identifier": {"$regex": f"^{tag}-"}})
     assert res.status_code == 429, res.text
 
 

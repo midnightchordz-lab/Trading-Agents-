@@ -126,13 +126,32 @@ def test_otp_verify_response_carries_the_identity():
 # Both cases run inside ONE asyncio.run: motor binds its client to the loop it
 # first used, so a second asyncio.run would talk to a closed loop and the
 # migration (which swallows its own errors) would appear to do nothing.
+def verified_otp_row(identifier):
+    """The migration now requires EVIDENCE that the phone is the real identity
+    before it takes an email away — a verified otp_requests row, which a real
+    phone signup always leaves behind (those rows are never pruned). Without
+    this the account is "ambiguous" and correctly skipped, because the same
+    shape is also a legacy EMAIL-OTP account carrying a stray phone, and
+    stripping THAT email orphans the person's account.
+
+    Setup only: the assertions below are unchanged."""
+    db.otp_requests.insert_one({
+        "id": str(uuid.uuid4()), "identifier": identifier, "identifier_type": "phone",
+        "otp_hash": "x", "attempts": 0, "verified": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return identifier
+
+
 def test_migration_moves_stray_emails_only():
-    phone_uid, phone_headers = seed(phone=f"+9198{uuid.uuid4().int % 10**8:08d}",
-                                    email="receipt@gmail.com")
+    phone = verified_otp_row(f"+9198{uuid.uuid4().int % 10**8:08d}")
+    phone_uid, phone_headers = seed(phone=phone, email="receipt@gmail.com")
     google_uid, _ = seed(google_sub="test-sub-1089", email="real@gmail.com")
     email_uid, _ = seed(email="otp@example.com")
-    kept_uid, _ = seed(phone=f"+9198{uuid.uuid4().int % 10**8:08d}",
-                       email="second@gmail.com", billing_email="first@gmail.com")
+    kept_phone = verified_otp_row(f"+9198{uuid.uuid4().int % 10**8:08d}")
+    kept_uid, _ = seed(phone=kept_phone, email="second@gmail.com", billing_email="first@gmail.com")
+
+    db.migrations.delete_one({"name": "billing_email_v2"})
 
     async def run_twice():
         await migrate_unverified_billing_email()

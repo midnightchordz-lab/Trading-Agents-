@@ -43,6 +43,16 @@ OTP_MAX_PER_IP_PER_HOUR = 20
 OTP_SMS_GLOBAL_MAX_PER_HOUR = int(os.environ.get("OTP_SMS_GLOBAL_MAX_PER_HOUR", "60"))
 OTP_EMAIL_GLOBAL_MAX_PER_HOUR = int(os.environ.get("OTP_EMAIL_GLOBAL_MAX_PER_HOUR", "1000"))
 
+# Whole-deployment ceiling on NEW free-credit grants per hour. Device id and IP
+# are both rotatable, so nothing per-caller stops a distributed signup farm.
+#
+# The default is measured, not guessed: one full run of the existing test suite
+# creates 0 grants (its accounts are seeded directly, or sign up and get 0),
+# so 3x the suite's usage is 0 and the floor of 200 applies. 200 new accounts
+# WITH credits in a single hour is far beyond anything this app has seen, and
+# reaching it withholds credits only — never a sign-in. Set 0 to disable.
+FREE_CREDIT_GLOBAL_PER_HOUR = int(os.environ.get("FREE_CREDIT_GLOBAL_PER_HOUR", "200"))
+
 api_router = APIRouter(prefix="/api")
 
 
@@ -86,6 +96,47 @@ async def send_welcome_if_new(user: dict) -> None:
         await db.users.update_one({"id": user["id"]}, {"$set": {"welcome_sent_at": None}})
 
 
+def email_lookup_forms(email: str) -> list[str]:
+    """Both spellings of an address, for matching an EXISTING account.
+
+    A Google/Apple account created before Gmail canonicalisation is stored
+    under the raw address; the OTP path stores the canonical one. Searching
+    only one form makes the same person look new and silently strands their
+    history and wallet on the old account. Never used to rewrite what is
+    stored."""
+    raw = (email or "").strip().lower()
+    if not raw:
+        return []
+    forms = {raw}
+    canonical = au.canonical_email(raw)
+    if canonical:
+        forms.add(canonical)
+    return sorted(forms)
+
+
+def tombstone_identifiers(identifier: str) -> list[str]:
+    """Every form of an identifier that should count as "this inbox already
+    had an account": what was stored, and its canonical form.
+
+    Needed because the two sign-in paths normalize differently. The OTP path
+    stores the canonical address, while Google/Apple hand back whatever the
+    provider has — so deleting a Google account created as `a.b@gmail.com` and
+    signing back in as `ab@gmail.com` (the same inbox) missed a tombstone
+    written under only one of the two spellings, and minted a fresh grant.
+    Phone numbers have one form, so this returns just the one."""
+    raw = (identifier or "").strip().lower()
+    if not raw:
+        return []
+    forms = {raw}
+    canonical = au.canonical_email(raw)
+    if canonical:
+        forms.add(canonical)
+    _, normalized = au.normalize_identifier(raw)
+    if normalized:
+        forms.add(normalized)
+    return sorted(forms)
+
+
 def free_credit_tombstone_hash_for(identifier: str) -> str:
     """Same HMAC pattern as owner_hash_for, keyed on the normalized
     email/phone rather than an account id. Lets the tombstone survive
@@ -118,9 +169,17 @@ async def signup_free_credits(device_id: Optional[str], request: Optional[Reques
         # had one. Device/IP throttling below is real but evadable by
         # rotating either signal; this check is not, since it's keyed on the
         # one thing farming this way still requires: a working email/phone.
-        tombstone_hash = free_credit_tombstone_hash_for(identifier)
-        if await db.free_credit_tombstones.find_one({"hash": tombstone_hash}):
+        # Checked in every spelling of the identifier, not just the one the
+        # caller happened to pass — see tombstone_identifiers().
+        hashes = [free_credit_tombstone_hash_for(form) for form in tombstone_identifiers(identifier)]
+        if hashes and await db.free_credit_tombstones.find_one({"hash": {"$in": hashes}}):
             logger.info("free credits withheld: this identifier already had an account")
+            return 0
+        # A throwaway inbox is the cheapest way to farm credits. It still signs
+        # in normally — only the credits are withheld, which is already this
+        # function's only sanction.
+        if au.is_disposable_email(identifier):
+            logger.info("free credits withheld: disposable email domain")
             return 0
     if device_id:
         seen = await db.free_credit_grants.count_documents({"device_id": device_id})
@@ -132,6 +191,18 @@ async def signup_free_credits(device_id: Optional[str], request: Optional[Reques
         recent = await db.free_credit_grants.count_documents({"ip": ip, "created_at": {"$gt": since}})
         if recent >= wal.FREE_CREDIT_GRANTS_PER_IP_PER_DAY:
             logger.info(f"free credits withheld: {recent} grants from this address in the last day")
+            return 0
+    # Last, and deliberately last: a whole-deployment ceiling. Device and IP
+    # are both rotatable, so a distributed farm slips under every per-caller
+    # rule while draining the promotional budget. This bounds the total. The
+    # account is still created and fully usable — it just pays like everyone
+    # else, which is this function's only sanction.
+    if FREE_CREDIT_GLOBAL_PER_HOUR > 0:
+        hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        granted_recently = await db.free_credit_grants.count_documents({"created_at": {"$gt": hour_ago}})
+        if granted_recently >= FREE_CREDIT_GLOBAL_PER_HOUR:
+            logger.error(f"GLOBAL FREE-CREDIT BUDGET REACHED: {granted_recently} grants in the last hour "
+                         f"(cap {FREE_CREDIT_GLOBAL_PER_HOUR}) — new accounts start with 0 credits")
             return 0
     return wal.FREE_CREDITS_ON_SIGNUP
 
@@ -397,7 +468,11 @@ async def auth_session(body: GoogleSession, request: Request):
     if not email:
         raise HTTPException(status_code=401, detail="Google didn't return an email address")
 
-    user = await db.users.find_one({"email": email})
+    # Match an existing account on EITHER spelling. A legacy Google user was
+    # stored under the raw address, while the OTP path stores the canonical
+    # one, so looking up only one form could hand the same person a brand-new
+    # empty account. Stored emails are never rewritten — only matched.
+    user = await db.users.find_one({"email": {"$in": email_lookup_forms(email)}})
     if not user:
         # Same identifier-keyed tombstone as the OTP path: deleting the account
         # and signing back in with the same Google address must not mint a
@@ -448,6 +523,14 @@ async def auth_apple(body: SocialSignIn, request: Request):
     if not claims:
         raise HTTPException(status_code=401, detail="Invalid Apple sign-in token")
     user = await db.users.find_one({"apple_sub": claims.get("sub")})
+    if not user and claims.get("email"):
+        # Apple only sends the address on the FIRST authorisation, so a
+        # returning user whose account predates apple_sub being stored has to
+        # be found by email — in either spelling, for the same reason as the
+        # Google path.
+        user = await db.users.find_one({"email": {"$in": email_lookup_forms(claims["email"])}})
+        if user and not user.get("apple_sub"):
+            await db.users.update_one({"id": user["id"]}, {"$set": {"apple_sub": claims.get("sub")}})
     if not user:
         # Apple can withhold the address (private relay), in which case there
         # is nothing to key a tombstone on and the device/IP caps are all we
@@ -519,9 +602,12 @@ async def delete_account(user: dict = Depends(get_current_user)):
     first place (see the Privacy Policy)."""
     user_id = user["id"]
     identifier = identity_for(user)
-    if identifier:
+    for form in tombstone_identifiers(identifier):
+        # One tombstone per spelling, so signing back in through a different
+        # path (Google returns the raw address, OTP stores the canonical one)
+        # still finds it.
         await db.free_credit_tombstones.update_one(
-            {"hash": free_credit_tombstone_hash_for(identifier)},
+            {"hash": free_credit_tombstone_hash_for(form)},
             {"$setOnInsert": {"deleted_at": now_iso()}},
             upsert=True,
         )

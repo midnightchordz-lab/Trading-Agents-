@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel
 
 import wallet as wal
@@ -92,23 +93,57 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         if not launch_key:
             raise HTTPException(status_code=400, detail="device_id is required")
         today_str = datetime.now(timezone.utc).date().isoformat()
-        wallet_doc = await db.wallets.find_one({"device_id": launch_key}) or {}
-        reset_date, reset_count = wal.launch_free_daily_state(
-            wallet_doc.get("launch_free_daily_date", ""),
-            wallet_doc.get("launch_free_daily_count", 0),
-            today_str,
-        )
-        launch_free_daily_ok = wal.has_launch_free_daily_quota(reset_count)
-        new_count = reset_count + 1 if launch_free_daily_ok else reset_count
-        await db.wallets.update_one(
-            {"device_id": launch_key},
-            {"$set": {
-                "launch_free_daily_date": reset_date,
-                "launch_free_daily_count": new_count,
+        # Claimed atomically instead of read-compute-write. The old version
+        # read the count, decided, then wrote it back with $set: two requests
+        # arriving together both read the same count and both got a free run,
+        # so the "10 per day" promotion could be exceeded by tapping twice —
+        # each extra run being a real multi-agent LLM run we pay for.
+        # Every response field and every wal helper stays exactly as it was.
+        try:
+            # 1. The wallet must exist for the claim below to match it.
+            #    $setOnInsert only, so an existing wallet is untouched.
+            await db.wallets.update_one(
+                {"device_id": launch_key},
+                {"$setOnInsert": {"device_id": launch_key, "created_at": now_iso()}},
+                upsert=True,
+            )
+        except DuplicateKeyError:
+            # Another request created it in the same instant. Fine — it exists,
+            # which is all this step wanted.
+            pass
+        # 2. Roll the day over AND claim a run in ONE atomic update, using an
+        #    aggregation-pipeline update so the new count is computed from the
+        #    document the write actually sees.
+        #
+        #    A separate reset step, then a separate claim, is NOT enough — and
+        #    that is measured, not theorised: with 20 requests in flight,
+        #    `tests/test_m4_launch_free_race.py` granted 20 free runs, because
+        #    a late-arriving reset (whose filter still matched the old date)
+        #    zeroed a counter that earlier requests had already incremented.
+        #    One statement cannot interleave with itself that way.
+        #
+        #    The filter allows the write when it is a NEW DAY (any count, since
+        #    it is about to be discarded) or when today's count is still under
+        #    the cap. The pipeline then either continues today's count or
+        #    starts a new day at 1.
+        claim = await db.wallets.update_one(
+            {"device_id": launch_key,
+             "$or": [{"launch_free_daily_date": {"$ne": today_str}},
+                     {"launch_free_daily_count": {"$lt": wal.LAUNCH_FREE_DAILY_CAP}}]},
+            [{"$set": {
+                "launch_free_daily_count": {
+                    "$cond": [
+                        {"$eq": [{"$ifNull": ["$launch_free_daily_date", ""]}, today_str]},
+                        {"$add": [{"$ifNull": ["$launch_free_daily_count", 0]}, 1]},
+                        1,
+                    ]
+                },
+                "launch_free_daily_date": today_str,
                 "updated_at": now_iso(),
-            }},
-            upsert=True,
+            }}],
         )
+        # Not claiming falls through to normal billing, exactly as before.
+        launch_free_daily_ok = claim.modified_count == 1
     admin_bypass = is_admin(user) or launch_free_daily_ok
 
     # Consent is about personal data — an anonymous device-only user (no
