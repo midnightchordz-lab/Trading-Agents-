@@ -7,8 +7,12 @@ deployed app only ever talks to the backend this way, so it gets its own file
 rather than being assumed.
 """
 import os
+from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 PUBLIC_BASE = (
     os.environ.get("TEST_PUBLIC_BASE_URL")
@@ -37,3 +41,39 @@ def test_forwarded_headers_survive_the_proxy():
         timeout=30,
     )
     assert res.status_code == 200
+
+
+def test_the_real_edge_chain_defeats_a_spoofed_client_address():
+    """The one thing only the live ingress can prove: that `client_ip()` picks
+    the address OUR edge saw and not the one the caller typed. Verified through
+    the stored OTP row rather than a debug endpoint, so nothing extra is
+    exposed to do it.
+
+    One email code is requested (the row is written before any send, so this
+    holds even if delivery fails). Phone is deliberately not used — that would
+    cost an SMS and reach a real handset.
+    """
+    import uuid
+
+    from pymongo import MongoClient
+
+    db = MongoClient(os.environ["MONGO_URL"])[os.environ.get("DB_NAME", "test_database")]
+    identifier = f"xffprobe{uuid.uuid4().hex[:8]}@gmail.com"
+    spoofed = "203.0.113.250"
+    res = requests.post(
+        f"{PUBLIC_BASE}/api/auth/otp/request",
+        json={"identifier": identifier},
+        headers={"X-Forwarded-For": spoofed},
+        timeout=40,
+    )
+    assert res.status_code in (200, 502), res.text  # 502 only if the mailer is down
+    row = db.otp_requests.find_one({"identifier": identifier})
+    try:
+        assert row is not None, "no OTP row was written"
+        assert row["ip"] != spoofed, (
+            "the spoofed X-Forwarded-For entry was recorded as the client address — "
+            "the per-IP OTP ceiling and the signup throttle are bypassable again"
+        )
+        assert row["ip"], "no client address was derived at all"
+    finally:
+        db.otp_requests.delete_many({"identifier": identifier})

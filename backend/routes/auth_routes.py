@@ -8,6 +8,7 @@ fields, so anything else writing them would be a privilege escalation.
 import asyncio
 import hashlib
 import hmac
+import os
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -30,6 +31,24 @@ from deps import APPLE_SERVICES_ID, AUTH_DEBUG_RETURN_OTP, CONSENT_VERSION, JWT_
 # per-identifier limit: it exists to stop one source pumping SMS across many
 # numbers, not to police a single person retrying their own code.
 OTP_MAX_PER_IP_PER_HOUR = 20
+
+# How many proxies APPEND to x-forwarded-for between the real client and this
+# process. Measured against this deployment, not assumed: a request carrying no
+# x-forwarded-for at all arrives as `<real client>,104.22.x.x,34.160.x.x`
+# (Cloudflare, then the Google load balancer) — two appended hops. So the
+# client's own address is the 3rd entry FROM THE RIGHT, and a client that sends
+# its own x-forwarded-for only pushes junk onto the LEFT of that.
+# Override if the edge topology ever changes; see client_ip().
+TRUSTED_PROXY_HOPS = int(os.environ.get("TRUSTED_PROXY_HOPS", "2"))
+
+# Whole-deployment ceilings per hour, because no per-IP rule stops a
+# distributed source. Sized far above any plausible real hour for this app
+# (dozens of sign-ins), so they are an abuse backstop rather than a throttle
+# real users meet. The SMS budget is separate and much tighter because those
+# are the requests that cost money and reach strangers' phones; hitting it
+# leaves email sign-in working, so the app never becomes unusable.
+OTP_GLOBAL_MAX_PER_HOUR = int(os.environ.get("OTP_GLOBAL_MAX_PER_HOUR", "300"))
+OTP_SMS_GLOBAL_MAX_PER_HOUR = int(os.environ.get("OTP_SMS_GLOBAL_MAX_PER_HOUR", "60"))
 
 api_router = APIRouter(prefix="/api")
 
@@ -136,19 +155,43 @@ async def record_free_credit_grant(user_id: str, device_id: Optional[str], reque
 
 
 def client_ip(request: Optional[Request]) -> str:
-    """Left-most x-forwarded-for entry — the original client as seen by the
-    ingress (verified against this deployment: the chain arrives as
-    `client, cloudflare, load-balancer`, and no trusted single-client header is
-    set). That entry is CLIENT-SUPPLIED and therefore spoofable, which is
-    exactly why it is one of two signals and why exceeding it costs free
-    credits rather than access — a false positive must never lock anyone
-    out."""
+    """The client's address, taken from the RIGHT of x-forwarded-for so it
+    can't be chosen by the caller.
+
+    The chain arrives as `client, cloudflare, load-balancer`: each proxy
+    APPENDS the address it received the request from, so everything to the
+    right of the client entry was written by our own infrastructure and
+    everything to the left is whatever the client sent. Reading the LEFT-most
+    entry — which this function used to do — let a caller pick a different
+    address on every request and walk straight past the per-IP OTP ceiling and
+    the signup free-credit throttle: unlimited SMS pumping across unlimited
+    numbers, on our Twilio bill, under our brand. Verified spoofable against
+    the live ingress (a request sending `1.2.3.4` arrived as
+    `1.2.3.4,<real>,<cf>,<lb>`), which is also what makes the fix work: the
+    injected entries land to the LEFT of the real one, so counting
+    TRUSTED_PROXY_HOPS in from the right always lands on the address our own
+    edge observed.
+
+    If the chain is SHORTER than the configured hops the request did not come
+    through that edge (local calls, tests, or a topology change), and the
+    left-most entry is used as before. That is deliberately the lenient
+    branch: getting it wrong the other way would collapse every real user onto
+    the load balancer's single address and lock them all out of sign-in. The
+    whole-deployment OTP budgets are the backstop that keeps the lenient case
+    from being worth attacking — and they are also the only thing that helps
+    against a genuinely distributed source, which no per-IP rule can stop."""
     if not request:
         return ""
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else ""
+    parts = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+    if not parts:
+        return request.client.host if request.client else ""
+    if len(parts) > TRUSTED_PROXY_HOPS:
+        return parts[-(TRUSTED_PROXY_HOPS + 1)]
+    return parts[0]
+
+
+async def otp_count_since(since: str, extra: Optional[dict] = None) -> int:
+    return await db.otp_requests.count_documents({"created_at": {"$gt": since}, **(extra or {})})
 
 
 def identity_type_for(user: dict) -> str:
@@ -247,9 +290,10 @@ async def auth_otp_request(body: OtpRequest, request: Request):
     # app's name. A looser per-IP ceiling closes that without troubling one
     # real person signing in.
     #
-    # Honest scope: this is per-IP, not global — a distributed attacker across
-    # many addresses isn't stopped by this alone, which would need a shared
-    # counter and careful sizing to avoid blocking real traffic in a spike.
+    # Honest scope: this is per-IP, so it only stops ONE source. A distributed
+    # source, or a topology change that makes client_ip fall back to the
+    # left-most (spoofable) entry, is caught by the whole-deployment budgets
+    # below instead.
     ip = client_ip(request)
     if ip:
         recent_ip = await db.otp_requests.find({"ip": ip}, None).sort("created_at", -1).to_list(50)
@@ -257,6 +301,35 @@ async def auth_otp_request(body: OtpRequest, request: Request):
                               window_seconds=3600, max_requests=OTP_MAX_PER_IP_PER_HOUR):
             raise HTTPException(status_code=429,
                                 detail="Too many attempts from this network — try again later")
+
+    # Whole-deployment budgets. Nothing keyed on the caller can stop a
+    # distributed pump — a botnet gets a fresh address per request and a fresh
+    # identifier per request, and stays under every per-IP and per-identifier
+    # limit while spending our Twilio balance. These two ceilings are the only
+    # thing that bounds the total damage, so they are checked for everyone,
+    # after the cheaper per-caller checks.
+    hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    if id_type == "phone":
+        # Checked first and sized tighter: texts cost money and land on real
+        # strangers' phones. Exhausting it must not lock the app — email
+        # sign-in still works, so people can still get in.
+        sent_sms = await otp_count_since(hour_ago, {"identifier_type": "phone"})
+        if sent_sms >= OTP_SMS_GLOBAL_MAX_PER_HOUR:
+            logger.error(
+                f"GLOBAL SMS OTP BUDGET REACHED: {sent_sms} texts in the last hour "
+                f"(cap {OTP_SMS_GLOBAL_MAX_PER_HOUR}) — possible pumping attack"
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Text messages are busy right now — sign in with your email address instead",
+            )
+    total = await otp_count_since(hour_ago)
+    if total >= OTP_GLOBAL_MAX_PER_HOUR:
+        logger.error(
+            f"GLOBAL OTP BUDGET REACHED: {total} codes in the last hour "
+            f"(cap {OTP_GLOBAL_MAX_PER_HOUR}) — possible pumping attack"
+        )
+        raise HTTPException(status_code=429, detail="Too many attempts — try again later")
 
     if id_type == "phone" and not sms.sms_configured():
         raise HTTPException(

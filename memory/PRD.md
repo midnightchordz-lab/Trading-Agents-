@@ -1271,7 +1271,7 @@ After the user updated the deployment secrets, `/api/pay/health` on the deployed
 same time `backend/.env` in the workspace had been rewritten (mtime 8 minutes old) with
 **`RAZORPAY_KEY_ID` set to the 24-char key SECRET** — the same value as `RAZORPAY_KEY_SECRET`. So
 the secret had been pasted into the key-id field, in both places. Restored
-`RAZORPAY_KEY_ID=rzp_live_Tds0LAGnVO2LyM`; the preview backend authenticates again
+the correct `RAZORPAY_KEY_ID` (the `…2LyM` pair, value only in `backend/.env`); the preview backend authenticates again
 (`razorpay_credentials_ok: true`).
 - That mistake is indistinguishable from an expired key from the outside: Razorpay answers
   "Authentication failed" either way, which is why it was chased as a stale-deploy problem.
@@ -1286,3 +1286,48 @@ the secret had been pasted into the key-id field, in both places. Restored
 - Full suite: **662 passed, 9 skipped in 2m27s**.
 - Still owner-side on the DEPLOYED environment: `RAZORPAY_KEY_SECRET` (the 24-char value, NOT the
   key id) and `RAZORPAY_WEBHOOK_SECRET` (48 chars) must be set in Deployment -> Secrets.
+
+## Spoofable client IP -> OTP/SMS pumping (2026-06-22, session 16) — FIXED
+User-reported finding, and correct. `client_ip()` returned the **left-most** `x-forwarded-for`
+entry. Proxies APPEND to that header, so the left-most entry is whatever the caller typed: a pump
+sends a different `X-Forwarded-For` per request, never reaches the 20/hour per-IP OTP ceiling, and
+changes the identifier every request so the 5/hour per-identifier limit never applies either —
+unlimited Twilio spend and SMS spam to strangers under this app's name. The signup free-credit
+throttle keyed on the same value.
+
+**Confirmed against the live ingress before changing anything** (temporary echo endpoint, removed):
+- no `x-forwarded-for` sent -> `34.16.56.64,104.22.64.124,34.160.159.238`, where the first entry is
+  the caller's real public address (checked against api.ipify.org) — so exactly **2 appended hops**
+  (Cloudflare, then the Google LB).
+- sending `X-Forwarded-For: 1.2.3.4` -> `1.2.3.4,34.16.56.64,104.22.64.124,34.160.159.238`.
+- No trusted single-client header exists to use: `cf-connecting-ip` / `true-client-ip` / `x-real-ip`
+  are NOT set by this edge (the CF worker doesn't forward them), so the finding's first suggestion
+  isn't available here and the second one — count from the right by trusted proxies — is the fix.
+
+**What changed:**
+- `TRUSTED_PROXY_HOPS = 2` (env-overridable) and `client_ip()` now returns
+  `parts[-(hops+1)]`, i.e. the address our own edge observed. Injected entries land to the LEFT, so
+  the length of a forgery is irrelevant — 50 requests each claiming a different address all count
+  into ONE bucket.
+- A chain SHORTER than the hop count (local calls, tests, or an edge topology change) falls back to
+  the left-most entry as before. Deliberately the lenient branch: reading a proxy's own address
+  there would collapse every real user onto the load balancer's single IP and lock them all out of
+  sign-in. The budgets below are what keep that case from being worth attacking.
+- **Whole-deployment OTP budgets**, the finding's third point and the only thing that helps against
+  a distributed source: `OTP_SMS_GLOBAL_MAX_PER_HOUR = 60` (checked first — texts cost money and
+  reach real handsets; exceeding it returns 503 "sign in with your email address instead", so the
+  app stays usable) and `OTP_GLOBAL_MAX_PER_HOUR = 300` (429). Both env-overridable, both sized as
+  backstops no real hour of traffic reaches, both windowed to the last hour so one attack can't
+  take sign-in offline permanently. Each breach logs `GLOBAL … BUDGET REACHED`.
+- Indexes added on `otp_requests`: `created_at`, `(identifier_type, created_at)`, `(ip, created_at)`
+  — the global count runs on every OTP request and must not scan.
+
+**Tests:** `tests/test_otp_ip_spoofing.py` (12) — the real chain, a spoofed entry, a 39-entry
+forged chain, 50 different forged values all mapping to one key, the short-chain fallback, no
+header, whitespace/empty entries, plus the SMS budget blocking while email still works, the overall
+budget, an hour-old burst not counting, and the sizing sanity. Plus
+`tests/test_ingress.py::test_the_real_edge_chain_defeats_a_spoofed_client_address`, which goes
+through the PUBLIC host with a spoofed header and asserts the stored `otp_requests.ip` is NOT the
+spoofed value — the one thing only the live edge can prove, done without adding any debug endpoint.
+Full suite: **674 passing** (two link/currency tests are the documented Razorpay-rate-limit
+flakiness under load; both pass in isolation).

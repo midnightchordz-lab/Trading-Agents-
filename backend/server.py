@@ -147,6 +147,12 @@ async def ensure_payment_indexes():
         # Signup abuse guard reads these two on every new account.
         await db.free_credit_grants.create_index("device_id")
         await db.free_credit_grants.create_index([("ip", 1), ("created_at", -1)])
+        # Every OTP request now counts the last hour globally (the only defence
+        # against a distributed pump), so that count must not be a collection
+        # scan.
+        await db.otp_requests.create_index([("created_at", -1)])
+        await db.otp_requests.create_index([("identifier_type", 1), ("created_at", -1)])
+        await db.otp_requests.create_index([("ip", 1), ("created_at", -1)])
         # And this one, checked ahead of them: an identifier that already had
         # an account doesn't get a second free grant after deletion.
         await db.free_credit_tombstones.create_index("hash", unique=True)

@@ -77,6 +77,7 @@ def suggest_currency(user: Optional[dict], region: Optional[str]) -> str:
     return "USD"
 
 
+
 @api_router.get("/pay/health")
 async def pay_health():
     """Is this deployment able to take money? No session, no secrets.
