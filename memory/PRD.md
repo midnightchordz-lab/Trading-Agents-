@@ -1479,9 +1479,12 @@ design and the shape check still stops it being committed).
   Razorpay webhook form is a value the merchant chooses, so generating it and handing it over is
   fewer steps than explaining where to find it. Verified by signing a synthetic
   `payment_link.paid` body: correct signature -> 200 accepted, wrong signature -> 400 rejected.
-  The OWNER must now paste that same value into Razorpay -> Settings -> Webhooks (and into
-  Deployment -> Secrets); until then Razorpay signs with the old secret and events are rejected,
-  with `/pay/status` polling still crediting.
+  The owner then set their OWN secret in the dashboard and supplied it, so `backend/.env` now holds
+  that value instead (an 11-char passphrase — functionally fine as an HMAC key, and matching the
+  dashboard is what matters). Re-verified through dotenv rather than trusted, because a `*` or `$`
+  in an unquoted .env value has broken this project before: correctly signed -> 200, wrong
+  signature -> 400, no signature -> 400. Still to do on the owner's side: the same value in
+  Deployment -> Secrets, plus the new key pair, `JWT_SECRET` and `HASH_SECRET`.
 - Deployment -> Secrets must be updated with the new `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`,
   `JWT_SECRET`, the new `HASH_SECRET`, and the new webhook secret.
 - `.gitignore` re-added its `.env` exclusion a THIRD time this session; removed again, caught by
