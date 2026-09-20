@@ -120,5 +120,6 @@ def test_the_gate_reads_the_environment_and_defaults_to_off():
     assert 'os.environ.get("EMAIL_REPAIR", "")' in source
     assert 'if EMAIL_REPAIR_MODE not in ("dryrun", "apply"):' in source
     env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
-    assert "EMAIL_REPAIR" not in open(env_path).read(), \
-        "the gate is set in the workspace env — it belongs in deployment secrets, temporarily"
+    assert "EMAIL_REPAIR=off" in open(env_path).read(), \
+        "the preview value must stay off — the key only lives in .env so the deployment " \
+        "Secrets panel exposes it; it is a one-shot, not a setting"

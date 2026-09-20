@@ -1703,8 +1703,9 @@ startup hook that does nothing unless asked.
   and the hook cannot drift. Its filter re-checks every condition the scan matched, which is what
   makes `apply` idempotent: a restored account no longer matches, so a second boot restores 0.
 - Logs carry **counts and internal user ids only, never an address**.
-- `EMAIL_REPAIR` is deliberately NOT in `backend/.env`; a test asserts that, because it is a
-  one-shot, not a setting.
+- `EMAIL_REPAIR` is in `backend/.env` as **`off`**, purely so the deployment Secrets panel exposes
+  the key (the panel only lists keys that already exist in preview). `off` is not one of the two
+  words the hook acts on, so preview never repairs anything; a test pins the preview value.
 - Tests: `tests/test_email_repair_gate.py` (7). `test_m2_billing_email_migration.py`'s
   "not wired into startup" test became `test_the_repair_never_runs_unasked_at_startup`, asserting
   the gate is off rather than that the hook does not exist. `require_admin` is still wired to no
