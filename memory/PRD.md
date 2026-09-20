@@ -1422,3 +1422,64 @@ check that every declared limiter refuses at N+1.
 **Edge rate rules:** not available to configure. Cloudflare fronts the app but it is Emergent's
 account, not the owner's, so WAF/rate rules there can't be set from here. Everything above is
 application-level, which the spec asked for anyway (edge rules were a bonus).
+
+## Key rotation + git-history leak audit (2026-06-22, session 16) — DONE
+
+### What was actually exposed (all 92 commits / 622 blobs scanned, not sampled)
+- **LEAKED, confirmed**: the old Razorpay **TEST key secret** and its test key id, pasted by a
+  previous testing agent into `test_reports/iteration_15.json` and `iteration_22.json`. HEAD was
+  scrubbed earlier, but the values remain in the old commits — deleting a file does not un-publish
+  a credential, only rotating it does. Owner asked to regenerate the test keys in the dashboard.
+- **NOT leaked**: no live Razorpay secret, no webhook secret, no Twilio token, no JWT secret, no LLM
+  key ever appeared in any commit — `backend/.env` was never tracked.
+- **In history but public by design**: the old and current Razorpay key IDs (the app receives one to
+  open checkout) and the RevenueCat iOS SDK key (ships inside every App Store binary).
+
+### Razorpay keys rotated (owner-side) — new pair wired and verified
+The owner regenerated the live pair. Proof it had happened, before any guessing: Razorpay answered
+the stored pair with *"The api key provided by you has expired and cannot be used"*. The new pair
+(id ends `…Inix`) is in `backend/.env`, authenticates, and a **real live ₹99 INR payment link was
+created, fetched and cancelled** to prove write access — not just a read probe.
+
+**Two real bugs this exposed, both fixed:**
+- The startup credential probe called `GET /payments?count=1`, which a RETIRED key still answered
+  200 to while `GET /payment_links` returned 401. So the probe reported healthy credentials while
+  every customer's checkout failed. It now probes the payment-links API that checkout actually uses.
+- A regenerated key says *"expired"*, not *"authentication failed"*, so it slipped past the handler
+  added earlier today and surfaced to customers as a raw 502 with Razorpay's wording.
+  `rzp.is_credential_failure()` now matches a 401/403 or any "api key" / "authentication failed"
+  description, so both cases give the plain "temporarily unavailable — nothing was charged" 503.
+
+### JWT_SECRET rotated — and the key split that made it safe
+A naive rotation would have been destructive: `owner_hash` (which analysis belongs to which
+account) and the free-credit tombstones were keyed with `JWT_SECRET`, so rotating it would have
+made 65 stored owner hashes and 129 tombstones unmatchable — **every user silently loses their
+entire history**, and every deleted identifier becomes eligible for free credits again.
+- `deps.HASH_SECRET` now keys all DATA hashes (`owner_hash_for`, the free-credit tombstone,
+  rate-limit buckets) and is PINNED to the pre-rotation JWT value, so every stored hash still
+  matches. `JWT_SECRET` now only signs sessions and was replaced with a fresh 64-char random value.
+  Falls back to `JWT_SECRET` when unset, for a deployment that predates the split.
+- Verified end-to-end, not assumed: a record hashed with the OLD key is still readable through the
+  API with a token signed by the NEW key (200), and a token signed with the old key is rejected
+  (401). Everyone signs in once more, which is the only intended effect.
+- `tests/test_private_history.py` and `tests/test_security_fixes_iter16.py` now compute owner hashes
+  with `HASH_SECRET`.
+- **When rotating JWT_SECRET again: set `HASH_SECRET` to the CURRENT value FIRST.**
+
+### Leak detection now covers history
+`tests/test_no_committed_secrets.py` gained two tests: one batched scan of every blob in git history
+for the values that are live RIGHT NOW (a hit means "rotate today" — history is immutable here), and
+a denylist of the already-leaked test secret so it can't be pasted back into a tracked file.
+`RAZORPAY_KEY_ID` was moved into the not-a-credential set for the value scan (it is public by
+design and the shape check still stops it being committed).
+
+### Still open
+- `RAZORPAY_WEBHOOK_SECRET` in `backend/.env` is the OLD value: the owner set a new one in the
+  dashboard but sent the webhook URL instead of the secret. Signature verification on
+  `/api/pay/webhook` will reject events until the real value is pasted in (`/pay/status` polling
+  still credits meanwhile).
+- Deployment -> Secrets must be updated with the new `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`,
+  `JWT_SECRET`, the new `HASH_SECRET`, and the new webhook secret.
+- `.gitignore` re-added its `.env` exclusion a THIRD time this session; removed again, caught by
+  `test_env_files_are_not_git_ignored` rather than by a customer.
+- Full suite: **700 passed, 9 skipped in 2m38s**.

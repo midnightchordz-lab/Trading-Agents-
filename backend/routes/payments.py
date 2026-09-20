@@ -607,14 +607,15 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
             # Razorpay refused something the customer typed. Ask for that field
             # again with Razorpay's reason, rather than failing the whole flow.
             raise HTTPException(status_code=400, detail=f"contact_invalid:{field}:{e.description}")
-        if "authentication failed" in (e.description or "").lower():
+        if rzp.is_credential_failure(e):
             # Nothing the customer can fix and nothing about their input: this
             # container's Razorpay keys are wrong (in practice a deployed image
             # holding a rotated-out pair). Say so plainly instead of showing
             # "Razorpay: Authentication failed", which reads like the user's
             # own payment was declined.
             rzp.CREDENTIALS_OK = False
-            logger.error("RAZORPAY CREDENTIALS REJECTED on /pay/order — this deployment's keys are stale")
+            logger.error(f"RAZORPAY CREDENTIALS REJECTED on /pay/order [{e.code}]: {e.description} "
+                         "— this deployment's keys are stale or have been regenerated")
             raise HTTPException(
                 status_code=503,
                 detail="Payments are temporarily unavailable — nothing was charged. Please try again later.",

@@ -36,13 +36,19 @@ BASE_URL = (
     or "http://localhost:8001"
 ).rstrip("/")
 JWT_SECRET = os.environ["JWT_SECRET"]
+# Owner hashes are keyed with HASH_SECRET, not the session-signing key: a JWT
+# rotation must log people out without making every stored owner_hash
+# unmatchable (which would silently erase everyone's history). Tokens still use
+# JWT_SECRET.
+HASH_SECRET = os.environ.get("HASH_SECRET") or JWT_SECRET
+
 
 _client = MongoClient(os.environ["MONGO_URL"])
 _db = _client[os.environ["DB_NAME"]]
 
 
 def owner_hash(user_id: str) -> str:
-    return hmac.new(JWT_SECRET.encode(), f"analysis-owner:{user_id}".encode(), hashlib.sha256).hexdigest()
+    return hmac.new(HASH_SECRET.encode(), f"analysis-owner:{user_id}".encode(), hashlib.sha256).hexdigest()
 
 
 def mint_user():

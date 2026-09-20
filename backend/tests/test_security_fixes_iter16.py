@@ -26,6 +26,12 @@ from auth_helper import AUTH_HEADERS, USER_ID, TOKEN  # noqa: E402
 
 BASE_URL = os.environ["EXPO_PUBLIC_BACKEND_URL"].rstrip("/") if os.environ.get("EXPO_PUBLIC_BACKEND_URL") else "https://trade-agent-app.preview.emergentagent.com"
 JWT_SECRET = os.environ["JWT_SECRET"]
+# Owner hashes are keyed with HASH_SECRET, not the session-signing key: a JWT
+# rotation must log people out without making every stored owner_hash
+# unmatchable (which would silently erase everyone's history). Tokens still use
+# JWT_SECRET.
+HASH_SECRET = os.environ.get("HASH_SECRET") or JWT_SECRET
+
 ADMIN_ID = "+918446307145"
 
 _client = MongoClient(os.environ["MONGO_URL"])
@@ -177,7 +183,7 @@ class TestSEC002AuthRequired:
         _db.analyses.insert_one({
             "id": aid, "symbol": "TESTX", "status": "completed",
             "owner_hash": _hmac.new(
-                JWT_SECRET.encode(), f"analysis-owner:{USER_ID}".encode(), hashlib.sha256
+                HASH_SECRET.encode(), f"analysis-owner:{USER_ID}".encode(), hashlib.sha256
             ).hexdigest(),
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
@@ -198,7 +204,7 @@ class TestSEC002AuthRequired:
         _db.analyses.insert_one({
             "id": aid, "symbol": "TESTX", "status": "completed",
             "owner_hash": _hmac.new(
-                JWT_SECRET.encode(), f"analysis-owner:{USER_ID}".encode(), hashlib.sha256
+                HASH_SECRET.encode(), f"analysis-owner:{USER_ID}".encode(), hashlib.sha256
             ).hexdigest(),
             "created_at": datetime.now(timezone.utc).isoformat(),
         })

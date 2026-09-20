@@ -36,6 +36,20 @@ if not JWT_SECRET or len(JWT_SECRET) < 32 or JWT_SECRET == "dev-only-change-me":
         "A missing, short or default secret lets anyone forge a valid session token — "
         "refusing to start."
     )
+
+# Separate key for DATA hashes, and the separation is the whole point: rotating
+# a signing key should log everyone out, nothing more. `owner_hash` (which
+# analysis belongs to which account) and the free-credit tombstones were keyed
+# with JWT_SECRET, so rotating it would ALSO have made every stored owner_hash
+# unmatchable — every user silently loses their entire history, and every
+# deleted identifier becomes eligible for free credits again. Those hashes must
+# outlive a key rotation, so they get their own key, which is set once and left
+# alone.
+#
+# Falls back to JWT_SECRET only for a deployment that predates this split
+# (where the two WERE the same value, so existing hashes keep matching). When
+# rotating JWT_SECRET, set HASH_SECRET to the OLD JWT_SECRET value FIRST.
+HASH_SECRET = os.environ.get("HASH_SECRET") or JWT_SECRET
 # Comma-separated phone/email allowlist — NOT hardcoded in source. Ships
 # with one default so the requested super-user works immediately; change
 # or extend via the real env var in your deployment, not by editing this line.
@@ -199,11 +213,13 @@ async def get_wallet_balance(device_id: str) -> float:
 def owner_hash_for(user: Optional[dict]) -> Optional[str]:
     """Keyed digest of the account id, stored on analyses so a record can be
     matched back to whoever ran it WITHOUT writing an identity onto it. Keyed
-    with JWT_SECRET, so the hashes are useless to anyone reading the database
-    without the server key."""
+    with HASH_SECRET (not the session-signing key — see above; these hashes
+    have to survive a JWT rotation or every user loses their history), so the
+    hashes are useless to anyone reading the database without the server
+    key."""
     if not user or not user.get("id"):
         return None
-    return hmac.new(JWT_SECRET.encode(), f"analysis-owner:{user['id']}".encode(), hashlib.sha256).hexdigest()
+    return hmac.new(HASH_SECRET.encode(), f"analysis-owner:{user['id']}".encode(), hashlib.sha256).hexdigest()
 
 
 def own_analyses_filter(user: Optional[dict]) -> dict:

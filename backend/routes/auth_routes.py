@@ -26,7 +26,7 @@ import mailer
 import sms
 import wallet as wal
 from core import db, logger, now_iso
-from deps import (APPLE_SERVICES_ID, AUTH_DEBUG_RETURN_OTP, CONSENT_VERSION, JWT_SECRET,
+from deps import (APPLE_SERVICES_ID, AUTH_DEBUG_RETURN_OTP, CONSENT_VERSION, HASH_SECRET, JWT_SECRET,
                   TRUSTED_PROXY_HOPS, client_ip, get_current_user)
 
 # Per-IP ceiling on OTP requests, deliberately much looser than the 5/hour
@@ -90,7 +90,7 @@ def free_credit_tombstone_hash_for(identifier: str) -> str:
     """Same HMAC pattern as owner_hash_for, keyed on the normalized
     email/phone rather than an account id. Lets the tombstone survive
     account deletion without storing the identifier itself in plain text."""
-    return hmac.new(JWT_SECRET.encode(), f"free-credit-tombstone:{identifier}".encode(), hashlib.sha256).hexdigest()
+    return hmac.new(HASH_SECRET.encode(), f"free-credit-tombstone:{identifier}".encode(), hashlib.sha256).hexdigest()
 
 
 async def signup_free_credits(device_id: Optional[str], request: Optional[Request],

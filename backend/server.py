@@ -175,7 +175,13 @@ async def ensure_payment_indexes():
         # Prove the keys actually authenticate. A deployed image carrying stale
         # keys otherwise looks fine until a customer taps top-up and gets a 502.
         try:
-            await rzp.razorpay_request("GET", "/payments?count=1")
+            # Probe the payment-links API specifically, because that is what
+            # checkout actually calls. Evidence for why it matters: with a
+            # RETIRED key pair, `GET /payments` answered 200 while
+            # `GET /payment_links` answered 401 "api key ... has expired" —
+            # so the old probe reported healthy credentials while every
+            # customer's top-up failed.
+            await rzp.razorpay_request("GET", "/payment_links?count=1")
             rzp.CREDENTIALS_OK = True
             logger.info("razorpay credentials authenticated")
         except rzp.RazorpayError as e:

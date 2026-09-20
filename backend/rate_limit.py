@@ -10,7 +10,7 @@ two concurrent requests cannot both create the window, and a TTL index so the
 collection cleans itself up instead of growing forever.
 
 WHAT IS STORED: never a raw IP, email or phone. The bucket key is
-HMAC-SHA256(JWT_SECRET, "<bucket>:<raw key>"), the same pattern used for
+HMAC-SHA256(HASH_SECRET, "<bucket>:<raw key>"), the same pattern used for
 `owner_hash`, so the counter can be matched to a caller by this server and by
 nobody reading the collection.
 
@@ -37,7 +37,7 @@ from fastapi import HTTPException
 from pymongo.errors import DuplicateKeyError
 
 from core import db, logger
-from deps import JWT_SECRET
+from deps import HASH_SECRET
 
 # One place to switch the whole thing off if it ever misbehaves in production.
 RATE_LIMIT_ENABLED = os.environ.get("RATE_LIMIT_ENABLED", "true").lower() == "true"
@@ -56,7 +56,7 @@ def env_int(name: str, default: int) -> int:
 
 
 def bucket_key(bucket: str, raw_key: str) -> str:
-    return hmac.new(JWT_SECRET.encode(), f"ratelimit:{bucket}:{raw_key}".encode(), hashlib.sha256).hexdigest()
+    return hmac.new(HASH_SECRET.encode(), f"ratelimit:{bucket}:{raw_key}".encode(), hashlib.sha256).hexdigest()
 
 
 async def ensure_indexes() -> None:

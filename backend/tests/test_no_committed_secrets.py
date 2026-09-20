@@ -27,6 +27,13 @@ NOT_SECRET = {
     "EMAIL_FROM", "TWILIO_FROM_NUMBER", "ADMIN_IDENTIFIERS", "AUTH_REQUIRED_ENABLED",
     "AUTH_DEBUG_RETURN_OTP", "WALLET_ENFORCEMENT_ENABLED", "LAUNCH_FREE_UNTIL",
     "APPLE_SERVICES_ID", "PUBLIC_HOST_SUFFIXES", "REVENUECAT_IOS_KEY",
+    # Public by design, not a credential: the Razorpay key ID is handed to the
+    # app by /api/pay/order (checkout cannot work without it) and the
+    # RevenueCat iOS SDK key ships inside every App Store binary. Neither can
+    # read or move money on its own — the matching SECRET can, and that one is
+    # never in this set. The "Razorpay key id" shape check below still stops a
+    # key id being committed, since it identifies the merchant account.
+    "RAZORPAY_KEY_ID",
 }
 
 # Shapes that are credentials wherever they appear.
@@ -159,3 +166,60 @@ def test_the_scan_actually_reads_files(corpus):
     assert len(corpus) > 50
     assert any(str(p).endswith("backend/routes/payments.py") for p, _ in corpus)
     assert any(text.strip() for _, text in corpus)
+
+
+# --- git HISTORY, not just the working tree -------------------------------
+# The check above only sees files as they are NOW. That is how a leak survived
+# unnoticed: a testing agent pasted a Razorpay TEST key id and secret into
+# `test_reports/iteration_15.json` and `iteration_22.json`, both were committed,
+# and scrubbing the files later left the values in every old commit. Deleting a
+# file does not un-publish a credential; only rotating it does. So history is
+# scanned for the values that are live RIGHT NOW — a hit means "rotate this
+# today", not "edit a file".
+
+def history_blobs() -> list[str]:
+    out = subprocess.run(["git", "cat-file", "--batch-all-objects", "--batch-check"],
+                         cwd=REPO, capture_output=True, text=True)
+    return [line.split()[0] for line in out.stdout.splitlines()
+            if len(line.split()) >= 2 and line.split()[1] == "blob"]
+
+
+@pytest.fixture(scope="module")
+def history_text() -> str:
+    blobs = history_blobs()
+    if not blobs:
+        pytest.skip("no git history available")
+    # One batched call: 600+ separate `git cat-file` invocations took longer
+    # than the rest of this file put together.
+    proc = subprocess.run(["git", "cat-file", "--batch"], cwd=REPO,
+                          input="\n".join(blobs), capture_output=True, text=True,
+                          errors="ignore")
+    return proc.stdout
+
+
+def test_no_currently_live_credential_appears_anywhere_in_git_history(history_text):
+    if not ENV_PATH.exists():
+        pytest.skip("backend/.env not present")
+    values = {
+        k: v for k, v in dotenv_values(ENV_PATH).items()
+        if v and len(v) >= 12 and k not in NOT_SECRET
+    }
+    assert values, "no credentials found in backend/.env — the check would be vacuous"
+    leaked = [name for name, value in values.items() if value in history_text]
+    assert not leaked, (
+        "these credentials exist in git history and must be ROTATED, not edited out "
+        f"(history is immutable here): {leaked}"
+    )
+
+
+def test_known_leaked_values_are_never_reintroduced(corpus):
+    """The specific values already exposed in history. They are dead (rotated),
+    and this makes sure nobody pastes them back into a tracked file — including
+    into a report explaining the leak."""
+    dead = ("Jtpe6gVa8o5dkbMGcIqhb2XT",)  # old Razorpay TEST key secret, leaked in old test reports
+    hits = []
+    for path, text in corpus:
+        for value in dead:
+            if value in text:
+                hits.append(str(path.relative_to(REPO)))
+    assert not hits, f"a known-leaked credential was re-committed: {hits}"

@@ -82,6 +82,18 @@ class RazorpayError(RuntimeError):
         super().__init__(f"razorpay {status_code} {code}: {description}")
 
 
+def is_credential_failure(error: "RazorpayError") -> bool:
+    """Razorpay refusing our KEYS, as opposed to refusing the request.
+
+    Two different messages mean the same thing, and the second one is the
+    reason this function exists: a key pair that has been REGENERATED reports
+    "The api key provided by you has expired and cannot be used", not
+    "Authentication failed", so matching only the latter let a retired key
+    surface to customers as a raw 502 with Razorpay's wording."""
+    text = (error.description or "").lower()
+    return error.status_code in (401, 403) or "api key" in text or "authentication failed" in text
+
+
 def is_rate_limited(error: "RazorpayError") -> bool:
     """Razorpay throttling, which it reports as a 400 saying "Too many
     requests" rather than a 429. The most common failure in our logs by far,
