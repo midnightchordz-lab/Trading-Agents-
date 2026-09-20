@@ -6,10 +6,11 @@ calculation over what has already been produced.
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 import portfolio_optimizer as pfopt
+from limits import limit_portfolio
 from core import db, logger
 from market_data import TICKER_RE, _yf_get, fetch_quote_sync
 
@@ -60,7 +61,7 @@ class PortfolioOptimizeRequest(BaseModel):
     cash: float = Field(default=0.0, allow_inf_nan=False)  # uninvested cash included in total value
 
 
-@api_router.post("/portfolio/optimize")
+@api_router.post("/portfolio/optimize", dependencies=[Depends(limit_portfolio)])
 async def portfolio_optimize(body: PortfolioOptimizeRequest):
     if not body.holdings:
         raise HTTPException(status_code=400, detail="No holdings supplied")

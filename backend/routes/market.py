@@ -5,9 +5,12 @@ All public and all cheap — no LLM calls, no billing, no session required.
 import asyncio
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+import rate_limit as rl
 from core import logger
+from deps import client_ip
+from limits import NEWS_LLM_GLOBAL_PER_MIN, NEWS_LLM_PER_MIN, limit_market
 from market_data import (
     RANGE_MAP,
     TICKER_RE,
@@ -32,7 +35,7 @@ async def root():
     return {"service": "TradingAgents", "status": "ok"}
 
 
-@api_router.get("/search")
+@api_router.get("/search", dependencies=[Depends(limit_market)])
 async def search(q: str):
     q = (q or "").strip()
     if not q:
@@ -45,7 +48,7 @@ async def search(q: str):
         return {"results": []}
 
 
-@api_router.get("/quote/{symbol}")
+@api_router.get("/quote/{symbol}", dependencies=[Depends(limit_market)])
 async def quote(symbol: str):
     # Matched on the upper-cased form: case isn't a security property, and the
     # app does request lowercase symbols in places. Rejecting those would be a
@@ -60,7 +63,7 @@ async def quote(symbol: str):
         raise HTTPException(status_code=404, detail="Quote unavailable for this ticker")
 
 
-@api_router.get("/chart/{symbol}")
+@api_router.get("/chart/{symbol}", dependencies=[Depends(limit_market)])
 async def chart(symbol: str, range: str = "1M"):
     # Matched on the upper-cased form: case isn't a security property, and the
     # app does request lowercase symbols in places. Rejecting those would be a
@@ -78,7 +81,7 @@ async def chart(symbol: str, range: str = "1M"):
         raise HTTPException(status_code=404, detail="Chart unavailable for this ticker")
 
 
-@api_router.get("/ohlc/{symbol}")
+@api_router.get("/ohlc/{symbol}", dependencies=[Depends(limit_market)])
 async def ohlc(symbol: str, range: str = "1M"):
     # Matched on the upper-cased form: case isn't a security property, and the
     # app does request lowercase symbols in places. Rejecting those would be a
@@ -96,7 +99,7 @@ async def ohlc(symbol: str, range: str = "1M"):
 
 
 @api_router.get("/news/{symbol}")
-async def news(symbol: str):
+async def news(symbol: str, request: Request):
     # Matched on the upper-cased form: case isn't a security property, and the
     # app does request lowercase symbols in places. Rejecting those would be a
     # regression for real users, not a fix.
@@ -106,6 +109,16 @@ async def news(symbol: str):
     entry = _news_cache.get(key)
     if entry and time.time() - entry["ts"] < 600:
         return {"results": entry["data"]}
+    # Limited HERE, after the cache check, not on the route: a cache hit is
+    # free (a dict read) and there is no reason to refuse one. Only a MISS is
+    # expensive — a Yahoo fetch plus a real LLM classification call — so only a
+    # miss is counted. Limiting the route instead would have throttled users
+    # reading the same cached headlines while doing nothing about the cost.
+    await rl.enforce("news_llm", client_ip(request), NEWS_LLM_PER_MIN, 60)
+    # And a whole-deployment ceiling on those LLM calls, because a distributed
+    # source asking for a different symbol each time misses the cache every
+    # time and no per-IP rule sees it.
+    await rl.global_enforce("news_llm_global", NEWS_LLM_GLOBAL_PER_MIN, 60)
     try:
         items = await asyncio.to_thread(fetch_news_sync, symbol)
         items = await tag_news_sentiment(key, items)
@@ -123,12 +136,12 @@ async def news(symbol: str):
 
 
 
-@api_router.get("/trending")
+@api_router.get("/trending", dependencies=[Depends(limit_market)])
 async def trending():
     return {"results": await get_market("trending")}
 
 
-@api_router.get("/markets/{category}")
+@api_router.get("/markets/{category}", dependencies=[Depends(limit_market)])
 async def markets(category: str):
     return {"results": await get_market(category)}
 

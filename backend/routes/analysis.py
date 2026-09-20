@@ -8,7 +8,7 @@ deps.own_analyses_filter.
 import asyncio
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -31,6 +31,7 @@ from deps import (
     require_user,
     wallet_key_for,
 )
+from limits import ANALYZE_MAX_CONCURRENT, limit_analyze, limit_poll
 from market_data import fetch_quote_sync
 from pipeline import SUPPORTED_LANGUAGES, TOTAL_STEPS, run_analysis
 
@@ -43,12 +44,37 @@ class AnalyzeRequest(BaseModel):
     language: str = "en"
     device_id: Optional[str] = None  # required only when WALLET_ENFORCEMENT_ENABLED
 
-@api_router.post("/analyze")
+@api_router.post("/analyze", dependencies=[Depends(limit_analyze)])
 async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_user)):
     symbol = (body.symbol or "").strip().upper()
     if not symbol or not re.match(r'^[A-Z0-9.\-\^=]{1,20}$', symbol):
         raise HTTPException(status_code=400, detail="Invalid ticker symbol")
     language = body.language if body.language in SUPPORTED_LANGUAGES else "en"
+
+    # A per-minute limit alone doesn't bound the real cost here: an analysis is
+    # a long multi-agent LLM run, so six starts in a minute can leave six runs
+    # executing at once for minutes afterwards. This caps what a single account
+    # can have IN FLIGHT.
+    #
+    # Counted only over the last 10 minutes on purpose: a run whose process
+    # died mid-pipeline stays `status: running` forever, and without the window
+    # three of those would lock the account out of analysis permanently — a
+    # self-inflicted denial of service that the user could never clear. It is
+    # matched on `owner_hash`, the same HMAC the private-history filter uses,
+    # so no identity is written onto an analysis to make this work.
+    if user:
+        since = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        in_flight = await db.analyses.count_documents({
+            "owner_hash": owner_hash_for(user),
+            "status": "running",
+            "created_at": {"$gt": since},
+        })
+        if in_flight >= ANALYZE_MAX_CONCURRENT:
+            raise HTTPException(
+                status_code=429,
+                detail=f"You already have {in_flight} analyses running — wait for one to finish.",
+                headers={"Retry-After": "30"},
+            )
 
     # During a configured launch-free window, everyone gets a capped daily
     # allowance instead of unlimited free runs — unlimited-free has real,
@@ -193,7 +219,7 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
     return analysis
 
 
-@api_router.get("/analysis/{analysis_id}")
+@api_router.get("/analysis/{analysis_id}", dependencies=[Depends(limit_poll)])
 async def get_analysis(analysis_id: str, user: dict = Depends(get_current_user)):
     doc = await db.analyses.find_one(
         {"id": analysis_id, **own_analyses_filter(user)}, {"_id": 0, "owner_hash": 0, "viewer_hashes": 0}
@@ -205,7 +231,7 @@ async def get_analysis(analysis_id: str, user: dict = Depends(get_current_user))
     return doc
 
 
-@api_router.get("/history")
+@api_router.get("/history", dependencies=[Depends(limit_poll)])
 async def history(user: dict = Depends(get_current_user)):
     docs = await db.analyses.find(
         own_analyses_filter(user), {"_id": 0, "messages": 0, "owner_hash": 0, "viewer_hashes": 0}

@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
+import rate_limit as ratelimit
 import razorpay_pay as rzp
 from core import client, db, logger
 from routes import analysis, auth_routes, market, payments, portfolio
@@ -153,6 +154,11 @@ async def ensure_payment_indexes():
         await db.otp_requests.create_index([("created_at", -1)])
         await db.otp_requests.create_index([("identifier_type", 1), ("created_at", -1)])
         await db.otp_requests.create_index([("ip", 1), ("created_at", -1)])
+        # Rate limiting: the unique (key, window_start) index is what makes the
+        # counter atomic, and the TTL index is what stops the collection
+        # growing with traffic. Created here so a deploy can't start serving
+        # with a limiter that silently isn't atomic.
+        await ratelimit.ensure_indexes()
         # And this one, checked ahead of them: an identifier that already had
         # an account doesn't get a second free grant after deletion.
         await db.free_credit_tombstones.create_index("hash", unique=True)

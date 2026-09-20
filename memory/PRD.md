@@ -1331,3 +1331,94 @@ through the PUBLIC host with a spoofed header and asserts the stored `otp_reques
 spoofed value — the one thing only the live edge can prove, done without adding any debug endpoint.
 Full suite: **674 passing** (two link/currency tests are the documented Razorpay-rate-limit
 flakiness under load; both pass in isolation).
+
+## Rate limiting (2026-06-22, session 16, emergent-rate-limit-prompt.txt) — DONE
+Implemented from the user's spec. Five conflicts were reported BEFORE writing code (as the spec
+required) and the user picked a resolution for each; nothing was guessed.
+
+**Resolved conflicts**
+1. *Rule 1's fallback.* Spec: fall back to `request.client.host` when the chain is shorter than the
+   hop count. The suite talks to the backend over the LOOPBACK with a one-entry
+   `X-Forwarded-For` to look like many clients, so a strict peer fallback makes every test
+   `127.0.0.1` and the new per-IP limits would throttle the suite itself. User chose: peer for
+   anything arriving over the network, PLUS one narrow exception — a LOOPBACK peer may declare its
+   address (nothing outside the container can reach 127.0.0.1; ingress traffic arrives from the pod
+   network, verified peer `10.79.x.x`). The left-most entry is never used for real traffic.
+2. *OTP global budgets.* Spec wanted 300 SMS/h + 1000 email/h; 60 SMS/h was already live from
+   earlier today. User chose: keep **60 SMS/h**, add a **separate 1000 email/h**. The old combined
+   300/h ceiling was replaced by the two per-channel budgets — one shared number would have let
+   email traffic eat the SMS allowance and vice versa.
+3. *Polling limit.* The spec's own "3x measured peak" rule contradicts its stated 120/min: measured
+   from the frontend, `compare.tsx:215` polls TWO analyses every 1.5s = **80 req/min**. User chose
+   **240/min**.
+4. */pay/callback per IP* is effectively global (Razorpay posts from its own servers). User chose to
+   keep **60/min**; a dropped callback is self-healed by the `/pay/status` poll.
+5. *"In-memory Mongo"* doesn't exist here (no mongomock). User chose to test against the real Mongo
+   with per-test unique keys, which is also what makes the atomicity test meaningful.
+
+**TRUSTED_PROXY_HOPS = 2**, verified on the live ingress (no header sent -> `<real
+client>,<cloudflare>,<load balancer>`, first entry matched api.ipify.org; header sent -> the forged
+value appears to the LEFT of the real one).
+
+**`rate_limit.py`** — Mongo fixed-window counter, no new dependency. One atomic `$inc` upsert per
+check (a read-then-write would be the exact race a limiter must not have), unique index on
+`(key, window_start)`, TTL index on `expires_at` (a real BSON date — an ISO string would silently
+never expire), one retry on `DuplicateKeyError`. No in-process dict: that resets on every deploy
+and is per-instance, so it would be wrong in production and right in testing. Keys are
+`HMAC-SHA256(JWT_SECRET, "ratelimit:<bucket>:<raw>")`, so the collection never becomes a log of who
+used the app from where (asserted by test). `RATE_LIMIT_ENABLED=false` switches the whole thing off.
+Indexes are created in `ensure_payment_indexes` with the rest and log
+`rate limit indexes ready …` at startup.
+
+**`limits.py`** — every limit declared in one place as a FastAPI dependency on its route, each an
+env var so production can be retuned without a code change.
+
+| Endpoint | Limit | Key |
+|---|---|---|
+| `POST /auth/otp/request` | 3/min (+ existing 5/h per identifier, 20/h per IP) | trusted IP, **fails closed** |
+| — global OTP budgets | 60 SMS/h, 1000 email/h | whole deployment |
+| `POST /auth/otp/verify` | 30 per 10 min | trusted IP |
+| `POST /auth/session`, `POST /auth/apple` | 30/min | trusted IP |
+| `POST /analyze` | 6/min **+ max 3 in flight** (running, started <10 min ago) | user id / `owner_hash` |
+| `GET /analysis/{id}`, `/history`, `/wallet/balance`, `/pay/status/{id}` | 240/min, one shared bucket | user id |
+| `POST /pay/order` | 10/min | user id |
+| `GET/POST /pay/callback` | 60/min | trusted IP |
+| `GET /pay/health`, `/pay/iap/config` | 30/min | trusted IP |
+| `GET /news/{symbol}` | 10/min **counting cache misses only** + global 60 LLM calls/min | trusted IP |
+| `GET /search`, `/quote/*`, `/chart/*`, `/ohlc/*`, `/trending`, `/markets/*` | 120/min, one shared bucket | trusted IP |
+| `POST /portfolio/optimize` | 10/min | trusted IP |
+| `/health`, `/pay/webhook`, `/pay/iap/webhook` | **never limited** | — |
+
+- Authenticated limits key on the USER ID, never the IP: an office, school or carrier NAT is one
+  address for many real people, and an IP-keyed limit there means the busiest person locks everyone
+  else out. Unauthenticated ones key on the trusted IP. Nothing is ever keyed on a client-supplied
+  value (`device_id`, any header) — the same mistake as trusting the left-most XFF entry.
+- The concurrency cap counts only runs started in the last 10 minutes: a run whose process died
+  stays `status: running` forever, and without the window three of those would deny the account
+  analysis permanently.
+- The news limit sits AFTER the cache check, so a cache hit (a dict read) is never refused — the
+  cost is the Yahoo fetch plus the LLM classification on a miss.
+- 429 always, with `Retry-After` and a JSON `detail`; never 502/503/504, which the app auto-retries
+  and would double the load being limited.
+
+**Tests:** `tests/test_rate_limits.py` (22) — exact-limit-then-refuse, window reset (1s window
+rather than waiting a real minute), **50 concurrent hits allowing exactly the limit**, independent
+buckets, no raw identifier stored, OTP failing closed and everything else failing open on a
+limiter DB error, the market group's shared ceiling with `Retry-After` over HTTP, **forged
+`X-Forwarded-For` not dodging the limit**, authenticated buckets following the account across three
+addresses (and no per-IP bucket created), `/health` + both webhooks never limited, the app's real
+polling replayed (80 + 24 + 2 per minute, and three minutes of analysis polling) staying inside the
+limit, the analyze concurrency cap, a crashed run NOT locking an account out, and a table-driven
+check that every declared limiter refuses at N+1.
+- `tests/conftest.py` now also gives each test its own `X-Forwarded-For` (trusted only from a
+  loopback peer, so it cannot exist in production). Without it one module's traffic spent another's
+  allowance and the failure surfaced somewhere unrelated — `/portfolio/optimize` failing in
+  `test_security_part2` because `test_portfolio_api` had just used the 10/min.
+- A fixed-window subtlety found honestly, by a full-suite failure: eleven bogus news lookups took
+  ~1.5s each and crossed a minute boundary, splitting the count. `window_headroom()` waits out the
+  boundary in the HTTP limit tests.
+- Full suite: **698 passed, 9 skipped in 3m14s**.
+
+**Edge rate rules:** not available to configure. Cloudflare fronts the app but it is Emergent's
+account, not the owner's, so WAF/rate rules there can't be set from here. Everything above is
+application-level, which the spec asked for anyway (edge rules were a bonus).

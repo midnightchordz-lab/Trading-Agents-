@@ -247,3 +247,48 @@ async def latest_completed_analysis_for(symbol: str, language: str = "en") -> Op
         sort=[("updated_at", -1)],
     )
 
+
+
+# How many proxies APPEND to x-forwarded-for between the real client and this
+# process. Measured against this deployment, not assumed: a request carrying no
+# x-forwarded-for at all arrives as `<real client>,104.22.x.x,34.160.x.x`
+# (Cloudflare, then the Google load balancer) — two appended hops. So the
+# client's own address is the 3rd entry FROM THE RIGHT, and a client that sends
+# its own x-forwarded-for only pushes junk onto the LEFT of that.
+TRUSTED_PROXY_HOPS = int(os.environ.get("TRUSTED_PROXY_HOPS", "2"))
+
+
+def client_ip(request: Optional[Request]) -> str:
+    """The client's address, taken from the RIGHT of x-forwarded-for so the
+    caller cannot choose it.
+
+    Every proxy APPENDS the address it received the request from, so everything
+    to the right of the client entry was written by our own infrastructure and
+    everything to the left is whatever the client sent. Reading the LEFT-most
+    entry — which this used to do — let a caller pick a different address per
+    request and walk past the per-IP OTP ceiling and the signup free-credit
+    throttle: unlimited SMS pumping across unlimited numbers, on our Twilio
+    bill, under our brand. Verified spoofable against the live ingress (a
+    request sending `1.2.3.4` arrived as `1.2.3.4,<real>,<cf>,<lb>`), which is
+    also what makes the fix work — injected entries land to the LEFT, so
+    counting TRUSTED_PROXY_HOPS in from the right always lands on the address
+    our own edge observed, however long the forgery is.
+
+    Two fallbacks, and the distinction between them is the whole safety
+    argument:
+    - A LOOPBACK caller may declare its address. Nothing outside the container
+      can reach 127.0.0.1 — ingress traffic arrives from the pod network
+      (verified: peer 10.79.x.x) — so this is the in-container test path and
+      not an attack surface.
+    - Anything else with too short a chain gets `request.client.host`, the
+      socket peer, which no caller can forge. Never the left-most entry.
+    """
+    if not request:
+        return ""
+    parts = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+    peer = request.client.host if request.client else ""
+    if len(parts) > TRUSTED_PROXY_HOPS:
+        return parts[-(TRUSTED_PROXY_HOPS + 1)]
+    if parts and peer in ("127.0.0.1", "::1", "localhost"):
+        return parts[0]
+    return peer

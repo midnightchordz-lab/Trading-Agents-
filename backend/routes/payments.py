@@ -17,6 +17,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 import auth as au
+from limits import limit_pay_callback, limit_pay_config, limit_pay_order, limit_poll
 import iap
 import razorpay_pay as rzp
 import wallet as wal
@@ -78,7 +79,7 @@ def suggest_currency(user: Optional[dict], region: Optional[str]) -> str:
 
 
 
-@api_router.get("/pay/health")
+@api_router.get("/pay/health", dependencies=[Depends(limit_pay_config)])
 async def pay_health():
     """Is this deployment able to take money? No session, no secrets.
 
@@ -109,7 +110,7 @@ async def pay_health():
     }
 
 
-@api_router.get("/wallet/balance")
+@api_router.get("/wallet/balance", dependencies=[Depends(limit_poll)])
 async def wallet_balance(
     device_id: Optional[str] = None,
     region: Optional[str] = None,
@@ -484,7 +485,7 @@ async def resolve_payment_customer(user: Optional[dict], body: "WalletTopup") ->
     return customer, missing
 
 
-@api_router.post("/pay/order")
+@api_router.post("/pay/order", dependencies=[Depends(limit_pay_order)])
 async def create_topup_order(body: WalletTopup, request: Request, user: Optional[dict] = Depends(require_user)):
     """Creates a Razorpay Payment Link for one of the fixed top-up packs and
     returns its hosted checkout URL. The amount is validated here — never taken
@@ -650,7 +651,8 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
     }
 
 
-@api_router.api_route("/pay/callback", methods=["POST", "GET"], response_class=HTMLResponse)
+@api_router.api_route("/pay/callback", methods=["POST", "GET"], response_class=HTMLResponse,
+                      dependencies=[Depends(limit_pay_callback)])
 async def pay_callback(request: Request):
     """Razorpay redirects the customer back here after the hosted payment page.
     Payment Links arrive as a GET with the razorpay_payment_link_* params; the
@@ -872,7 +874,7 @@ async def pay_webhook(request: Request):
     return {"ok": True}
 
 
-@api_router.get("/pay/status/{order_id}")
+@api_router.get("/pay/status/{order_id}", dependencies=[Depends(limit_poll)])
 async def pay_status(order_id: str, device_id: Optional[str] = None, user: Optional[dict] = Depends(require_user)):
     """Polled by the app after checkout closes. If the browser redirect never
     made it back (WebView dismissed, network dropped), this asks Razorpay
@@ -931,7 +933,7 @@ async def pay_status(order_id: str, device_id: Optional[str] = None, user: Optio
 
 # --- Apple In-App Purchase top-ups (iOS only), via RevenueCat. See iap.py for
 # why this exists alongside Razorpay. ---
-@api_router.get("/pay/iap/config")
+@api_router.get("/pay/iap/config", dependencies=[Depends(limit_pay_config)])
 async def iap_config(currency: str = "USD"):
     """What the iOS app needs to open StoreKit: the RevenueCat public SDK key
     and the product ids to offer. Served from here rather than bundled so the
