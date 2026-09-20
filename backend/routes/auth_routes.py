@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from pymongo import ReturnDocument
 
+import alerts
 import auth as au
 import limits as lim
 import mailer
@@ -203,6 +204,13 @@ async def signup_free_credits(device_id: Optional[str], request: Optional[Reques
         if granted_recently >= FREE_CREDIT_GLOBAL_PER_HOUR:
             logger.error(f"GLOBAL FREE-CREDIT BUDGET REACHED: {granted_recently} grants in the last hour "
                          f"(cap {FREE_CREDIT_GLOBAL_PER_HOUR}) — new accounts start with 0 credits")
+            alerts.raise_alert("free_credit_budget", "Free-credit budget reached — possible signup farming", [
+                f"<b>{granted_recently}</b> new accounts were granted free credits in the last hour "
+                f"(cap {FREE_CREDIT_GLOBAL_PER_HOUR}).",
+                "New accounts are still being created and can sign in normally — they just start "
+                "with 0 free credits and pay like everyone else.",
+                "If this is a genuine launch spike, raise FREE_CREDIT_GLOBAL_PER_HOUR.",
+            ])
             return 0
     return wal.FREE_CREDITS_ON_SIGNUP
 
@@ -347,6 +355,13 @@ async def auth_otp_request(body: OtpRequest, request: Request):
                 f"GLOBAL SMS OTP BUDGET REACHED: {sent_sms} texts in the last hour "
                 f"(cap {OTP_SMS_GLOBAL_MAX_PER_HOUR}) — possible pumping attack"
             )
+            alerts.raise_alert("otp_sms_budget", "SMS budget reached — possible pumping attack", [
+                f"<b>{sent_sms}</b> text messages were requested in the last hour "
+                f"(cap {OTP_SMS_GLOBAL_MAX_PER_HOUR}).",
+                "Further SMS codes are being withheld. Email sign-in still works, so nobody is "
+                "locked out.",
+                "If this is genuine traffic, raise OTP_SMS_GLOBAL_MAX_PER_HOUR.",
+            ])
             raise HTTPException(
                 status_code=503,
                 detail="Text messages are busy right now — sign in with your email address instead",
@@ -362,6 +377,12 @@ async def auth_otp_request(body: OtpRequest, request: Request):
                 f"GLOBAL EMAIL OTP BUDGET REACHED: {sent_email} codes in the last hour "
                 f"(cap {OTP_EMAIL_GLOBAL_MAX_PER_HOUR}) — possible pumping attack"
             )
+            alerts.raise_alert("otp_email_budget", "Email code budget reached — possible pumping attack", [
+                f"<b>{sent_email}</b> email codes were requested in the last hour "
+                f"(cap {OTP_EMAIL_GLOBAL_MAX_PER_HOUR}).",
+                "Further codes are being withheld until the hour rolls over.",
+                "If this is genuine traffic, raise OTP_EMAIL_GLOBAL_MAX_PER_HOUR.",
+            ])
             raise HTTPException(status_code=429, detail="Too many attempts — try again later")
 
     if id_type == "phone" and not sms.sms_configured():
@@ -614,4 +635,3 @@ async def delete_account(user: dict = Depends(get_current_user)):
     await db.users.delete_one({"id": user_id})
     await db.wallets.delete_one({"device_id": f"user:{user_id}"})
     return {"deleted": True}
-

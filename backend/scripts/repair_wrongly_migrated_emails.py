@@ -34,38 +34,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import auth as au  # noqa: E402
-from core import db  # noqa: E402
-
-
-async def find_candidates():
-    """Users whose verified email was taken away by the old migration."""
-    repairable, conflicts = [], []
-    async for doc in db.users.find({
-        "identity_type": "phone",
-        "billing_email": {"$ne": None},
-        "$or": [{"email": None}, {"email": {"$exists": False}}],
-    }):
-        billing = (doc.get("billing_email") or "").strip().lower()
-        if not billing:
-            continue
-        _, canonical = au.normalize_identifier(billing)
-        candidates = [e for e in {billing, canonical} if e]
-        verified = await db.otp_requests.find_one(
-            {"identifier": {"$in": candidates}, "verified": True}, {"_id": 1})
-        if not verified:
-            # No proof this person ever signed in with that address, so it is
-            # exactly what the migration was meant to move. Leave it.
-            continue
-        holder = await db.users.find_one(
-            {"email": {"$in": candidates}, "id": {"$ne": doc["id"]}}, {"id": 1})
-        (conflicts if holder else repairable).append(
-            {"id": doc["id"], "restore_to": billing, "held_by": holder["id"] if holder else None})
-    return repairable, conflicts
+from email_repair import apply_email_repair, find_email_repair_candidates  # noqa: E402
 
 
 async def main(apply: bool):
-    repairable, conflicts = await find_candidates()
+    repairable, conflicts = await find_email_repair_candidates()
     print(f"scanned users with identity_type=phone and a billing_email but no email")
     print(f"  repairable (verified OTP exists for that address): {len(repairable)}")
     print(f"  skipped, another account already holds the address: {len(conflicts)}")
@@ -78,17 +51,7 @@ async def main(apply: bool):
         print("\nDRY RUN — nothing was changed. Re-run with --apply to restore the accounts above.")
         return
 
-    restored = 0
-    for row in repairable:
-        result = await db.users.update_one(
-            # Re-checked at write time: if anything about the account changed
-            # since the scan, skip it rather than overwrite.
-            {"id": row["id"], "identity_type": "phone", "billing_email": {"$ne": None},
-             "$or": [{"email": None}, {"email": {"$exists": False}}]},
-            {"$set": {"email": row["restore_to"], "identity_type": "email"},
-             "$unset": {"billing_email": ""}},
-        )
-        restored += result.modified_count
+    restored = await apply_email_repair(repairable)
     print(f"\nrestored {restored} of {len(repairable)} accounts; {len(conflicts)} conflicts left untouched")
 
 

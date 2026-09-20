@@ -29,7 +29,9 @@ def fresh_ip():
     another's allowance (conftest does the same thing for every other
     module)."""
     n = uuid.uuid4().int
-    return f"198.51.{n % 250}.{(n >> 8) % 250 + 1}"
+    # 198.19.x.x, outside the 198.51.100.0/24 that test_security_part2
+    # draws from, so these limits never spend that suite's allowance.
+    return f"198.19.{n % 250}.{(n >> 8) % 250 + 1}"
 
 
 def window_headroom(seconds_needed: float = 6.0):
@@ -207,7 +209,7 @@ def test_authenticated_limits_key_on_the_user_not_the_address():
     from core import db
 
     uid, headers = fresh_account()
-    addresses = ["203.0.113.11", "198.51.100.22", "192.0.2.33"]
+    addresses = ["203.0.113.11", "198.19.200.22", "192.0.2.33"]
     for ip in addresses:
         res = requests.get(f"{BASE}/wallet/balance", headers={**headers, "X-Forwarded-For": ip}, timeout=30)
         assert res.status_code == 200, res.text

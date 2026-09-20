@@ -5,6 +5,8 @@ endpoints in routes/, the agent pipeline in pipeline.py and the market feeds in
 market_data.py. This file only assembles them and owns the startup work that
 has to happen exactly once per process.
 """
+import os
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -14,6 +16,7 @@ import auth as au
 import rate_limit as ratelimit
 import razorpay_pay as rzp
 from core import client, db, logger, now_iso
+from email_repair import apply_email_repair, find_email_repair_candidates
 from routes import analysis, auth_routes, market, payments, portfolio
 
 app = FastAPI()
@@ -158,6 +161,53 @@ async def migrate_unverified_billing_email():
                                        upsert=True)
     except Exception as e:
         logger.warning(f"billing email migration failed: {e}")
+
+
+EMAIL_REPAIR_MODE = os.environ.get("EMAIL_REPAIR", "").strip().lower()
+
+
+@app.on_event("startup")
+async def run_gated_email_repair():
+    """The email repair, run from inside the container — off unless asked for.
+
+    The production database is only reachable from the deployed pod, and the
+    repair must not become an admin endpoint (a privacy test forbids wiring
+    `require_admin` to a route). So it runs here, and ONLY when EMAIL_REPAIR is
+    set in the deployment secrets:
+
+        EMAIL_REPAIR=dryrun   report counts and internal user ids, change nothing
+        EMAIL_REPAIR=apply    restore the accounts the dry run listed
+
+    Unset — which is every normal boot — this is a no-op. Remove the variable
+    once the log has been read; a data repair that runs itself on every boot is
+    how the original problem happened. `apply` is safe to leave set by accident
+    only in the sense that it is idempotent: the second run finds nothing,
+    because a restored account no longer matches the scan.
+    """
+    if EMAIL_REPAIR_MODE not in ("dryrun", "apply"):
+        return
+    try:
+        repairable, conflicts = await find_email_repair_candidates()
+        # Counts and internal ids only — never an email address.
+        logger.warning(
+            f"EMAIL_REPAIR[{EMAIL_REPAIR_MODE}] scan: repairable={len(repairable)} "
+            f"conflicts={len(conflicts)}")
+        for row in repairable:
+            logger.warning(f"EMAIL_REPAIR repairable user_id={row['id']}")
+        for row in conflicts:
+            logger.warning(
+                f"EMAIL_REPAIR conflict user_id={row['id']} address already on user_id={row['held_by']}")
+        if EMAIL_REPAIR_MODE == "dryrun":
+            logger.warning("EMAIL_REPAIR dry run — nothing was changed. "
+                           "Set EMAIL_REPAIR=apply to restore the accounts above.")
+            return
+        restored = await apply_email_repair(repairable)
+        logger.warning(f"EMAIL_REPAIR applied: restored={restored} of {len(repairable)}; "
+                       f"{len(conflicts)} conflicts left untouched. "
+                       "Remove the EMAIL_REPAIR variable now.")
+    except Exception as e:
+        # Never let a repair stop the API from starting.
+        logger.error(f"EMAIL_REPAIR failed: {e}")
 
 
 async def guarded_index(label: str, coro_factory) -> bool:

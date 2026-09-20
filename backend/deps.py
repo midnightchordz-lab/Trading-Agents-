@@ -6,6 +6,7 @@ admin, how much free allowance is left — and neither should own them.
 """
 import hashlib
 import hmac
+import ipaddress
 import os
 from datetime import datetime, timezone
 from typing import Optional
@@ -273,6 +274,54 @@ async def latest_completed_analysis_for(symbol: str, language: str = "en") -> Op
 # its own x-forwarded-for only pushes junk onto the LEFT of that.
 TRUSTED_PROXY_HOPS = int(os.environ.get("TRUSTED_PROXY_HOPS", "2"))
 
+# The address ranges our own edge appends to x-forwarded-for. Used INSTEAD of
+# the hop count where possible (see client_ip): Cloudflare's published ranges,
+# Google's load balancer, and private/loopback space, which cannot be a real
+# internet client and is what the in-cluster proxies use.
+#
+# Cloudflare's list is from https://www.cloudflare.com/ips-v4 and changes
+# rarely; TRUSTED_PROXY_RANGES appends to it without a code change if it does.
+_CLOUDFLARE_V4 = (
+    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+    "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+    "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+    "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+)
+_CLOUDFLARE_V6 = (
+    "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
+    "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+)
+# Google Cloud's global load balancers front this deployment and append the
+# address they received the request from.
+_GOOGLE_LB = ("35.191.0.0/16", "130.211.0.0/22", "34.96.0.0/20", "34.127.192.0/18",
+              "34.160.0.0/11", "34.64.0.0/10")
+# Private and loopback space: never a real internet client, always our own
+# cluster networking.
+_PRIVATE = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128", "fc00::/7")
+
+TRUSTED_PROXY_RANGES = tuple(
+    r.strip() for r in os.environ.get("TRUSTED_PROXY_RANGES", "").split(",") if r.strip()
+)
+_TRUSTED_NETWORKS = []
+for _cidr in _CLOUDFLARE_V4 + _CLOUDFLARE_V6 + _GOOGLE_LB + _PRIVATE + TRUSTED_PROXY_RANGES:
+    try:
+        _TRUSTED_NETWORKS.append(ipaddress.ip_network(_cidr))
+    except ValueError:
+        logger.warning(f"ignoring unparseable trusted proxy range: {_cidr!r}")
+
+
+def _is_trusted_proxy(value: str) -> bool:
+    """Is this x-forwarded-for entry one of OUR hops rather than a client?
+
+    An unparseable value is NOT trusted: junk in the header is exactly what a
+    forger sends, and treating it as ours would skip past it to something the
+    forger also controls."""
+    try:
+        address = ipaddress.ip_address(value.split("%")[0])
+    except ValueError:
+        return False
+    return any(address in network for network in _TRUSTED_NETWORKS)
+
 
 def client_ip(request: Optional[Request]) -> str:
     """The client's address, taken from the RIGHT of x-forwarded-for so the
@@ -303,8 +352,48 @@ def client_ip(request: Optional[Request]) -> str:
         return ""
     parts = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
     peer = request.client.host if request.client else ""
-    if len(parts) > TRUSTED_PROXY_HOPS:
-        return parts[-(TRUSTED_PROXY_HOPS + 1)]
-    if parts and peer in ("127.0.0.1", "::1", "localhost"):
-        return parts[0]
+    if parts:
+        # Walk in from the RIGHT and discard entries that belong to our own
+        # edge, identified by ADDRESS RANGE rather than only by counting. A
+        # hop count alone is a guess about the topology: if the edge adds or
+        # removes a proxy it silently points at the wrong entry — too far
+        # right and every user collapses onto the load balancer's address,
+        # too far left and the value is forgeable again. A range check knows
+        # which entries are ours.
+        #
+        # The number of skips is CAPPED at the number of hops our edge is
+        # known to append, and that cap is the security part, not a detail:
+        # range-skipping on its own is forgeable by an attacker hosted INSIDE
+        # Cloudflare or Google Cloud, who can send
+        # `X-Forwarded-For: <forged>, <a Cloudflare address>` and have their
+        # own real entry skipped too. With the cap, at most our own hops are
+        # ever discarded.
+        skipped = 0
+        for candidate in reversed(parts):
+            if skipped < TRUSTED_PROXY_HOPS and _is_trusted_proxy(candidate):
+                skipped += 1
+                continue
+            if skipped == 0:
+                # Nothing in this header was written by our edge, so the header
+                # itself did not come through our edge — a direct call to the
+                # origin, or a topology change. Trusting the entry here would
+                # hand the caller their own bucket back, so the unforgeable
+                # socket peer is used instead (or, for a loopback caller, the
+                # declared address: the in-container test path).
+                return parts[0] if peer in ("127.0.0.1", "::1", "localhost") else peer
+            if _is_trusted_proxy(candidate):
+                # Our edge appended MORE hops than expected. Returning this
+                # would put every user in one bucket, so it is worth shouting
+                # about — set TRUSTED_PROXY_HOPS to the new hop count.
+                logger.warning(
+                    "x-forwarded-for has more trusted hops than TRUSTED_PROXY_HOPS "
+                    f"({TRUSTED_PROXY_HOPS}) — per-IP limits will treat many users as one"
+                )
+            return candidate
+        # Every entry was one of ours, so the real client address never made it
+        # into the header. The socket peer is the only thing left that no
+        # caller can forge.
+        if peer in ("127.0.0.1", "::1", "localhost"):
+            return parts[0]
+        return peer
     return peer

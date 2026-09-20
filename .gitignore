@@ -89,6 +89,3 @@ credentials.json
 # in production three times: payments then fail with "Authentication failed"
 # and the app shows "Couldn't start checkout · HTTP 502"). Verify with
 # `git check-ignore -v backend/.env` — it must print nothing.
-.env
-.env.*
-*.env

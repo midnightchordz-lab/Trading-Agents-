@@ -230,8 +230,10 @@ def test_the_repair_leaves_genuine_billing_emails_alone(scratch):
     assert after["billing_email"] == email
 
 
-def test_the_repair_is_not_wired_into_startup():
+def test_the_repair_never_runs_unasked_at_startup():
     """A data repair that runs itself on every boot is how the original damage
-    happened."""
-    source = open(os.path.join(os.path.dirname(__file__), "..", "server.py")).read()
-    assert "repair_wrongly_migrated_emails" not in source
+    happened. There IS a startup hook now — the production database is only
+    reachable from inside the deployed pod — but it is gated on EMAIL_REPAIR
+    and does nothing without it. See test_email_repair_gate.py."""
+    assert server.EMAIL_REPAIR_MODE not in ("dryrun", "apply"), \
+        "EMAIL_REPAIR is set in this environment; it is a one-shot, not a setting"

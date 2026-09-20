@@ -1601,3 +1601,121 @@ real Google authorisation code); its lookup change is covered by unit tests.
 - NOT touched: `routes/payments.py`, both webhooks, auth verification, existing rate-limit numbers,
   `deps.client_ip`, the frontend, `requirements.txt`, secrets/.env. V1-V3 and all ten low-severity
   items were not attempted.
+
+## V1 (trusted proxy ranges) + abuse alerting (2026-06-22, session 16) — DONE
+Suite: **776 passed, 9 skipped, 0 failed** (34 tests added).
+
+### V1 — client address resolved by skipping OUR OWN ranges, capped
+`deps.py` (`_TRUSTED_NETWORKS`, `_is_trusted_proxy`, `client_ip`).
+The hop count alone was a guess about the topology: if the edge adds or removes a proxy it points
+at the wrong entry — one way every user collapses onto the load balancer's address (per-IP limits
+become global and lock people out), the other way the value is forgeable again. Entries our own
+edge appended are now identified by ADDRESS RANGE — Cloudflare's published v4+v6 ranges, Google's
+global LB ranges, and private/loopback space — walking in from the right.
+- **The skip count is still capped at `TRUSTED_PROXY_HOPS`, and that cap is the security part, not
+  a detail:** range-skipping alone is forgeable by an attacker hosted INSIDE Cloudflare or Google
+  Cloud, whose own entry would be skipped too. With the cap, at most our own hops are discarded.
+- If the entry at the cap is itself in a trusted range, the edge added a hop: it is returned anyway
+  (availability) with a WARNING naming `TRUSTED_PROXY_HOPS`.
+- If NOTHING in the header is ours (`skipped == 0`), the header did not come through our edge — a
+  direct call to the origin — so the unforgeable socket peer is used. Loopback callers may still
+  declare an address (the in-container test path).
+- An unparseable entry is NOT trusted: junk is what a forger sends, and skipping it would land on
+  something the forger also controls.
+- `TRUSTED_PROXY_RANGES` appends ranges without a code change if the edge ever moves.
+- **I could NOT confirm the other half of V1** (that the load balancer only accepts Cloudflare
+  traffic) — that is Emergent's infrastructure, not configurable or inspectable from here. The
+  range-based resolution is the alternative the finding itself offered, and it is what was done.
+- Tests: `tests/test_v1_trusted_proxy_ranges.py` (12) — the measured honest chain, a forged entry,
+  a forged CF-shaped entry, a 29-entry padded chain, a client hosted inside a trusted range, a
+  SHORTER chain (the case a hop count gets wrong), junk entries, an all-ours chain, the loopback
+  path, and the range membership itself.
+
+### Abuse alerting — `backend/alerts.py` (new)
+All three global budgets (SMS, email codes, free credits) now email the owner in addition to
+logging. Three rules, because bad alerting is worse than none:
+1. **Never affects the request** — fire-and-forget task, all failures swallowed. A budget breach
+   already withholds something; it must not also become a 500.
+2. **One email per kind per hour**, using the same Mongo counter as the rate limiter (so the cap
+   survives a restart and is shared across instances). An attack trips a budget on EVERY request;
+   10,000 identical emails is a denial of service on the owner's inbox and the sending domain.
+3. **No PII** — counts, caps and the alert kind only, the same rule the logs follow. Asserted.
+Each email says plainly that the app keeps working and which env var to raise if the traffic was
+genuine. Sends go through `mailer.send_email`, so the existing email safety guard (no forms, no
+credential asks, no misleading links) applies — asserted by a test.
+- **`ALERT_EMAIL`** is now set in `backend/.env` (the owner's address; not repeated here,
+  because a test forbids any live env value appearing in a tracked file) (the fallback to
+  `ADMIN_IDENTIFIERS` was no use here — this deployment's is a phone number). Proven end to end,
+  not mocked: one real alert was sent through the live email service (202 Accepted,
+  `abuse alert sent` in the log). **Must also be added to Deployment -> Secrets**, or the deployed
+  app stays silent.
+- Tests: `tests/test_abuse_alerting.py` (10).
+
+### Test isolation fixed (found by the suite, twice)
+- The global OTP budget tests used to seed 1000 real `otp_requests` rows to reach the cap, which
+  made every other test in that hour see an exhausted budget — confirmed in the backend log
+  (`GLOBAL EMAIL OTP BUDGET REACHED: 1001 codes`) and surfacing as an unrelated 429. They now call
+  the route in-process and lower the cap RELATIVE to ambient traffic, so only two rows exist.
+- The newer test files seeded IP history inside `198.51.100.0/24`, which is exactly where
+  `test_security_part2` draws its own addresses from — so one of its tests would occasionally find
+  its "fresh" address already at the per-IP ceiling. Seeds moved to `198.18.0.0/15` and
+  `198.19.0.0/16`.
+
+### Branch merge (asked for, cannot be done here)
+This workspace has ONE branch, `main`, with no remotes configured — there is no
+`conflict_160926_1053` branch here and nothing to merge. Every fix from this session is on `main`.
+A merge between branches on the owner's GitHub repo has to happen there.
+
+## Production repair scan — NOT POSSIBLE from this environment (2026-06-22)
+The owner supplied the production Atlas connection string. It cannot be used from here: DNS
+resolves the shard hosts, but **TCP 27017 times out from this pod**, and Atlas allow-lists by IP
+while this container's outbound address rotates (observed `34.16.56.64`, later
+`104.198.214.223`). The connection never completed, so nothing was read.
+- **The owner was told to rotate that database password in Atlas and update `MONGO_URL` in
+  Deployment -> Secrets**, since it passed through chat.
+- An admin-only, read-only `GET /api/admin/email-repair-scan` was built as the alternative and then
+  **reverted at the owner's explicit instruction**: it would have wired `Depends(require_admin)` to
+  a route, and `test_wallet_razorpay_admin.py::TestPrivacy::
+  test_require_admin_exists_but_is_not_wired_to_any_route` deliberately forbids that. The existing
+  test was NOT edited.
+- What remains is `backend/email_repair.py` (the shared scan) plus
+  `scripts/repair_wrongly_migrated_emails.py`. Production can only be scanned by running that
+  script where the database is reachable. Preview showed **0 repairable**, 2 conflicts skipped.
+- Final suite: **776 passed, 9 skipped, 0 failed**.
+
+## Production repair — the way through: EMAIL_REPAIR, an env-gated one-shot (2026-06-22, later)
+Atlas was re-confirmed unreachable from this pod. Evidence, so nobody retries it a third time:
+outbound address is **104.198.214.223** (agreed by an HTTP echo and a raw UDP/STUN binding — so it
+is not an HTTP-proxy artefact), outbound **27017 is open on our side** (a control connection to
+another host on 27017 succeeded), the cluster's SRV record resolves and all three shard hosts
+time out. Owner confirmed the allow-list entry; it still timed out after a propagation wait. So
+the shard hosts simply do not accept this address, and the allow-list is not the lever here
+(`customer-apps.mmwehk.mongodb.net` looks like a shared Emergent cluster the owner may not
+administer).
+
+The repair therefore runs where the database IS reachable: **inside the deployed container**, as a
+startup hook that does nothing unless asked.
+- `server.py` -> `run_gated_email_repair()`, gated on `EMAIL_REPAIR_MODE = os.environ["EMAIL_REPAIR"]`.
+  `dryrun` logs counts and internal user ids and writes nothing; `apply` restores; anything else,
+  including unset, returns immediately. Wrapped in try/except — a repair must never stop the API
+  from booting.
+- The write path moved out of the script into `email_repair.apply_email_repair()`, so the script
+  and the hook cannot drift. Its filter re-checks every condition the scan matched, which is what
+  makes `apply` idempotent: a restored account no longer matches, so a second boot restores 0.
+- Logs carry **counts and internal user ids only, never an address**.
+- `EMAIL_REPAIR` is deliberately NOT in `backend/.env`; a test asserts that, because it is a
+  one-shot, not a setting.
+- Tests: `tests/test_email_repair_gate.py` (7). `test_m2_billing_email_migration.py`'s
+  "not wired into startup" test became `test_the_repair_never_runs_unasked_at_startup`, asserting
+  the gate is off rather than that the hook does not exist. `require_admin` is still wired to no
+  route — the privacy test is untouched.
+- Also fixed: `ALERT_EMAIL`'s value had been written into this file, which
+  `test_no_committed_secrets` correctly failed on. Redacted.
+- Suite: **783 passed, 9 skipped, 0 failed**.
+
+### What the owner has to do
+1. Deployment -> Secrets: add `EMAIL_REPAIR=dryrun`, redeploy, read the backend log for
+   `EMAIL_REPAIR[dryrun] scan: repairable=N conflicts=M`.
+2. If N > 0 and the ids look right, change it to `EMAIL_REPAIR=apply` and redeploy.
+3. **Delete the variable and redeploy.** Leaving it set is not dangerous (it is idempotent) but it
+   is a one-shot, and every boot re-scanning the users collection is waste.

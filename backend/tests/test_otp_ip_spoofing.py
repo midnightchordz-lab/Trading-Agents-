@@ -27,10 +27,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 import requests
+from fastapi import HTTPException
 from pymongo import MongoClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from routes import auth_routes as ar  # noqa: E402
+from tests.async_loop import run_async  # noqa: E402
 
 BASE_URL = (os.environ.get("EXPO_PUBLIC_BACKEND_URL") or "http://localhost:8001").rstrip("/")
 db = MongoClient(os.environ["MONGO_URL"])[os.environ.get("DB_NAME", "test_database")]
@@ -130,7 +132,11 @@ def seed(n, identifier_type, tag, minutes_ago=1):
         "id": str(uuid.uuid4()),
         "identifier": f"{tag}-{i}",
         "identifier_type": identifier_type,
-        "ip": f"198.51.100.{i % 250}",
+        # 198.18.0.0/15 (benchmark range), deliberately NOT 198.51.100.0/24:
+        # that /24 is what test_security_part2 draws its own addresses
+        # from, and seeding rows there made ITS tests hit the per-IP
+        # ceiling — a 429 in a test that had nothing to do with this one.
+        "ip": f"198.18.{i // 250 % 250}.{i % 250}",
         "otp_hash": "x",
         "attempts": 0,
         "verified": False,
@@ -151,44 +157,86 @@ def request_otp(identifier, ip="203.0.113.77"):
     )
 
 
-def test_sms_budget_stops_a_distributed_pump_but_leaves_email_working(clean_otp_window):
+class FakeRoutedRequest:
+    def __init__(self, ip):
+        self.headers = {"x-forwarded-for": ip}
+        self.client = type("C", (), {"host": "127.0.0.1"})()
+
+
+def call_otp_request(identifier, ip):
+    """The route function directly, rather than over HTTP.
+
+    A whole-deployment budget is whole-deployment: the first version of these
+    tests seeded 1000 real `otp_requests` rows to reach the cap, which made
+    every OTHER test running in parallel see an exhausted budget and fail with
+    a 429 that had nothing to do with them (confirmed in the backend log:
+    "GLOBAL EMAIL OTP BUDGET REACHED: 1001 codes"). Calling in-process lets the
+    cap itself be lowered for the length of one test instead, so only a couple
+    of rows exist and nothing else is disturbed.
+    """
+    from routes.auth_routes import OtpRequest, auth_otp_request
+    return run_async(auth_otp_request(OtpRequest(identifier=identifier), FakeRoutedRequest(ip)))
+
+
+def ambient(identifier_type):
+    """Codes already sent in the last hour by whatever else is running. The cap
+    has to be set RELATIVE to this: a fixed low cap is already exceeded by the
+    suite's own traffic, and a fixed high one needs 1000 seeded rows, which is
+    what disturbed other tests in the first place."""
+    return db.otp_requests.count_documents(
+        {"identifier_type": identifier_type, "created_at": {"$gt": _iso(60)}})
+
+
+def cap_just_above_ambient(monkeypatch, attr, identifier_type, headroom):
+    cap = ambient(identifier_type) + headroom
+    monkeypatch.setattr(ar, attr, cap)
+    return cap
+
+
+def exhaust(monkeypatch, attr, identifier_type, tag, rows=2):
+    """Put the budget exactly at its cap, using a couple of rows instead of a
+    thousand."""
+    cap_just_above_ambient(monkeypatch, attr, identifier_type, rows)
+    seed(rows, identifier_type, tag)
+
+
+def test_sms_budget_stops_a_distributed_pump_but_leaves_email_working(clean_otp_window, monkeypatch):
     tag = clean_otp_window
-    seed(ar.OTP_SMS_GLOBAL_MAX_PER_HOUR, "phone", tag)
+    exhaust(monkeypatch, "OTP_SMS_GLOBAL_MAX_PER_HOUR", "phone", tag)
+    with pytest.raises(HTTPException) as caught:
+        call_otp_request("+919812345678", "203.0.113.31")
+    assert caught.value.status_code == 503
+    assert "email" in caught.value.detail.lower()
+
+    # The app must stay usable: the SMS budget does not touch email sign-in,
+    # so nobody is locked out by it. A 502 here is the email provider refusing
+    # a made-up address, which is not what this test is about — a 429/503 would
+    # be.
+    cap_just_above_ambient(monkeypatch, "OTP_EMAIL_GLOBAL_MAX_PER_HOUR", "email", 50)
     try:
-        res = request_otp("+919812345678", ip=f"203.0.113.{uuid.uuid4().int % 250}")
-        # The app must stay usable: email sign-in is unaffected by the SMS
-        # budget. Checked while the budget is still full, then the seed is
-        # removed IMMEDIATELY (see below).
-        email_res = request_otp(f"{uuid.uuid4().hex[:10]}@gmail.com")
-    finally:
-        # A global budget is global: while these rows exist, every other test
-        # running in parallel sees an exhausted budget too. Deleting them in a
-        # fixture teardown left that window open for the whole test and broke
-        # an unrelated OTP test on the other xdist worker.
-        db.otp_requests.delete_many({"identifier": {"$regex": f"^{tag}-"}})
-    assert res.status_code == 503, res.text
-    assert "email" in res.json()["detail"].lower()
-    assert email_res.status_code != 503, email_res.text
+        call_otp_request(f"{uuid.uuid4().hex[:10]}@gmail.com", "203.0.113.32")
+    except HTTPException as e:
+        assert e.status_code not in (429, 503), e.detail
 
 
-def test_the_email_budget_stops_email_pumping_too(clean_otp_window):
+def test_the_email_budget_stops_email_pumping_too(clean_otp_window, monkeypatch):
     tag = clean_otp_window
-    seed(ar.OTP_EMAIL_GLOBAL_MAX_PER_HOUR, "email", tag)
-    try:
-        res = request_otp(f"{uuid.uuid4().hex[:10]}@gmail.com")
-    finally:
-        # Held for one request only — see the note above.
-        db.otp_requests.delete_many({"identifier": {"$regex": f"^{tag}-"}})
-    assert res.status_code == 429, res.text
+    exhaust(monkeypatch, "OTP_EMAIL_GLOBAL_MAX_PER_HOUR", "email", tag)
+    with pytest.raises(HTTPException) as caught:
+        call_otp_request(f"{uuid.uuid4().hex[:10]}@gmail.com", "203.0.113.33")
+    assert caught.value.status_code == 429
 
 
-def test_an_hour_old_burst_does_not_count(clean_otp_window):
-    """A budget that never forgets would take the app permanently offline after
+def test_an_hour_old_burst_does_not_count(clean_otp_window, monkeypatch):
+    """A budget that never forgets would take sign-in offline permanently after
     one attack."""
     tag = clean_otp_window
-    seed(ar.OTP_EMAIL_GLOBAL_MAX_PER_HOUR + 50, "email", tag, minutes_ago=61)
-    res = request_otp(f"{uuid.uuid4().hex[:10]}@gmail.com")
-    assert res.status_code != 429, res.text
+    cap_just_above_ambient(monkeypatch, "OTP_EMAIL_GLOBAL_MAX_PER_HOUR", "email", 5)
+    seed(50, "email", tag, minutes_ago=61)  # an hour-old burst, far over the cap
+    try:
+        call_otp_request(f"{uuid.uuid4().hex[:10]}@gmail.com", "203.0.113.34")
+    except HTTPException as e:
+        assert e.status_code not in (429, 503), f"an expired burst still counted: {e.detail}"
 
 
 def test_normal_traffic_is_nowhere_near_the_budget(clean_otp_window):

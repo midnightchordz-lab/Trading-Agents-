@@ -120,7 +120,7 @@ def test_the_global_budget_withholds_credits_without_blocking_signup(scratch):
     sign-in, only the credits."""
     now = datetime.now(timezone.utc)
     rows = [{"user_id": f"budget-{uuid.uuid4()}", "device_id": None,
-             "ip": f"198.51.100.{i % 250}", "created_at": now.isoformat()}
+             "ip": f"198.18.{i // 250 % 250}.{i % 250}", "created_at": now.isoformat()}
             for i in range(ar.FREE_CREDIT_GLOBAL_PER_HOUR)]
     inserted = db.free_credit_grants.insert_many(rows)
     scratch["grants"].extend(inserted.inserted_ids)
@@ -144,7 +144,7 @@ def test_an_hour_old_burst_does_not_hold_the_budget_down(scratch):
     """A budget that never forgets would withhold credits from every future
     user after one attack."""
     old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-    rows = [{"user_id": f"old-{uuid.uuid4()}", "device_id": None, "ip": "198.51.100.9",
+    rows = [{"user_id": f"old-{uuid.uuid4()}", "device_id": None, "ip": "198.18.0.9",
              "created_at": old} for _ in range(ar.FREE_CREDIT_GLOBAL_PER_HOUR + 20)]
     inserted = db.free_credit_grants.insert_many(rows)
     scratch["grants"].extend(inserted.inserted_ids)
