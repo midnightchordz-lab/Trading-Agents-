@@ -78,11 +78,23 @@ async def ensure_indexes() -> None:
         except DuplicateKeyError:
             # Counters created while the index was missing can contain
             # duplicate (key, window_start) pairs, which makes the unique build
-            # fail forever. They are ephemeral counters worth nothing, so drop
-            # them and build the index that keeps the limiter atomic.
-            logger.warning("rate_limits contained duplicate windows (built while the unique index was "
-                           "missing) — clearing the counters and retrying the index build")
-            await db.rate_limits.delete_many({})
+            # fail forever.
+            #
+            # This used to clear the whole collection, which is a destructive
+            # write on an automatic startup path — the deploy check blocks on
+            # that, and rightly: "it's only ephemeral counters" is exactly the
+            # reasoning that precedes deleting something that turns out not to
+            # be. So only rows the TTL monitor was ALREADY going to delete are
+            # removed, which is nearly all of them (the longest window is
+            # minutes), and no live counter is touched. If duplicates remain
+            # among still-live windows the build fails, this boot fails closed
+            # as before, and the next boot finds them expired and succeeds.
+            expired = await db.rate_limits.delete_many(
+                {"expires_at": {"$lte": _now_utc()}})
+            logger.warning(
+                "rate_limits contained duplicate windows (built while the unique index was "
+                f"missing) — dropped {expired.deleted_count} already-expired counters and "
+                "retried the index build; live counters were left alone")
             await db.rate_limits.create_index([("key", 1), ("window_start", 1)], unique=True)
         # Mongo's TTL monitor deletes on this field, so the collection is
         # bounded by the longest window rather than by traffic.
@@ -127,6 +139,11 @@ async def hit(bucket: str, raw_key: str, limit: int, window_seconds: int) -> tup
                 raise
             continue
     return True, reset_in
+
+
+def _now_utc():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc)
 
 
 def _expiry(window_start: int, window_seconds: int):

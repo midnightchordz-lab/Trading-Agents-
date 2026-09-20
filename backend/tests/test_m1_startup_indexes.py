@@ -101,11 +101,19 @@ def test_the_limiter_marks_itself_broken_when_its_own_index_fails(fake_db):
 
 def test_duplicate_counters_are_cleared_so_the_unique_index_can_build(monkeypatch):
     """Counters written while the unique index was missing can contain
-    duplicate windows, which makes the build fail forever. They are ephemeral
-    counts worth nothing, so they are dropped and the build retried once."""
+    duplicate windows, which makes the build fail forever. The build is retried
+    once — after removing ONLY rows the TTL monitor was already going to
+    delete. It must never be a `delete_many({})`: a destructive write on an
+    automatic startup path is a deploy blocker, and a live counter carries a
+    real limit someone is currently under."""
+    from datetime import datetime
+
     from pymongo.errors import DuplicateKeyError
 
-    state = {"attempts": 0, "deleted": False}
+    state = {"attempts": 0, "filters": []}
+
+    class Result:
+        deleted_count = 3
 
     class Coll:
         async def create_index(self, keys, **kwargs):
@@ -115,8 +123,9 @@ def test_duplicate_counters_are_cleared_so_the_unique_index_can_build(monkeypatc
                     raise DuplicateKeyError("duplicate window")
             return None
 
-        async def delete_many(self, *a, **k):
-            state["deleted"] = True
+        async def delete_many(self, filt, *a, **k):
+            state["filters"].append(filt)
+            return Result()
 
     class Db:
         rate_limits = Coll()
@@ -126,7 +135,12 @@ def test_duplicate_counters_are_cleared_so_the_unique_index_can_build(monkeypatc
     try:
         run_async(rl.ensure_indexes())
         assert state["attempts"] == 2, "the build was not retried"
-        assert state["deleted"] is True, "the duplicate counters were not cleared"
+        assert state["filters"], "the duplicate counters were not cleared"
+        for filt in state["filters"]:
+            assert filt, "startup deleted the whole rate_limits collection"
+            cutoff = filt["expires_at"]["$lte"]
+            assert isinstance(cutoff, datetime), \
+                "the cutoff must be a real date, or it matches nothing and the build still fails"
         assert rl.INDEXES_OK is True
     finally:
         rl.INDEXES_OK = before
@@ -142,3 +156,29 @@ def test_no_response_gained_a_new_field(fake_db):
     source = inspect.getsource(payments.pay_health)
     for leak in ("INDEXES_OK", "indexes_ok", "rate_limit"):
         assert leak not in source, f"/api/pay/health now exposes {leak}"
+
+
+def test_no_startup_path_deletes_a_whole_collection():
+    """Pinned as source across the backend, not just the limiter.
+
+    `delete_many({})` inside anything the app runs on boot is a deploy blocker
+    (the deploy check calls it DESTRUCTIVE_DB_STARTUP) and it is a blocker for
+    a good reason: startup code runs unattended, on every instance, including
+    the one that came up during an incident. Whatever the collection is, the
+    argument for wiping it is always "those records are worthless", and that
+    argument is only ever checked once.
+    """
+    import pathlib
+
+    backend = pathlib.Path(__file__).resolve().parent.parent
+    offenders = []
+    for path in backend.glob("*.py"):
+        text = path.read_text()
+        for pattern in ("delete_many({})", "delete_many( {} )", "delete_many({ })",
+                        "drop_collection(", ".drop()"):
+            if pattern in text:
+                offenders.append(f"{pattern} in {path.name}")
+    for path in (backend / "routes").glob("*.py"):
+        if "delete_many({})" in path.read_text():
+            offenders.append(f"delete_many({{}}) in routes/{path.name}")
+    assert not offenders, f"collection-wide deletes in application code: {offenders}"
