@@ -1,5 +1,7 @@
 // API client for the TradingAgents backend.
+import * as Linking from "expo-linking";
 import * as Localization from "expo-localization";
+import { Platform } from "react-native";
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
 const API = `${BASE}/api`;
@@ -11,6 +13,20 @@ const API = `${BASE}/api`;
 const REGION = (() => {
   try {
     return Localization.getLocales()[0]?.regionCode || "";
+  } catch {
+    return "";
+  }
+})();
+
+// Deep link back into THIS app, sent with a top-up so the payment page can
+// render a "Return to the app" button. `createURL` knows which runtime we are
+// in — `frontend://` in an installed build, `exp://…` in Expo Go — which is
+// why the server is told rather than left to guess a scheme. Not needed on
+// web, where checkout is a script-opened popup that can close itself.
+const RETURN_URL = (() => {
+  if (Platform.OS === "web") return "";
+  try {
+    return Linking.createURL("/");
   } catch {
     return "";
   }
@@ -331,6 +347,7 @@ export const api = {
         ...(contact || {}),
         ...(currency ? { currency } : {}),
         ...(REGION ? { region: REGION } : {}),
+        ...(RETURN_URL ? { return_url: RETURN_URL } : {}),
       }),
     }),
   getPaymentStatus: (orderId: string) => j<PaymentStatus>(`/pay/status/${orderId}`),

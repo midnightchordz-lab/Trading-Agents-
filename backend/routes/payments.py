@@ -61,6 +61,38 @@ class WalletTopup(BaseModel):
     # Device region (ISO 3166-1 alpha-2), used only to pick the currency for a
     # wallet that hasn't locked one yet.
     region: Optional[str] = None
+    # Deep link back into THIS app, from `Linking.createURL('/')` — so it is
+    # `frontend://` in an installed build and `exp://…` in Expo Go, rather than
+    # a scheme the server guesses. Stored on the payment and rendered as the
+    # "Return to the app" button on the callback page. An Android Custom Tab
+    # cannot be closed programmatically (expo-web-browser's dismissBrowser is
+    # iOS-only), so the way back has to be something the customer can tap.
+    return_url: Optional[str] = None
+
+
+SAFE_RETURN_URL = re.compile(r"^[a-z][a-z0-9+.\-]{1,30}://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%\-]{0,200}$")
+
+# Schemes a browser would follow to somewhere other than this app. The button
+# on the callback page must never become an open redirect: it is rendered
+# straight into a page anyone can reach with a payment link id.
+WEB_SCHEMES = ("http://", "https://", "javascript:", "data:", "file://", "vbscript:")
+
+
+def safe_return_url(raw: Optional[str]) -> Optional[str]:
+    """Accept a custom-scheme deep link back into the app, or nothing.
+
+    The value comes from the client, so it is treated like any other: only a
+    custom scheme (`frontend://`, `exp://…`) is kept, never http(s) or
+    javascript:, and only from a conservative character set. Anything else is
+    dropped and the page simply shows no button — a missing button is a much
+    smaller problem than a payment page that can be made to redirect anywhere.
+    """
+    url = (raw or "").strip()
+    if not url or len(url) > 240:
+        return None
+    if url.lower().startswith(WEB_SCHEMES):
+        return None
+    return url if SAFE_RETURN_URL.match(url) else None
 
 
 def suggest_currency(user: Optional[dict], region: Optional[str]) -> str:
@@ -548,6 +580,8 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
             detail=f"Choose one of the top-up packs: {', '.join(str(int(p)) for p in wal.topup_packs_for(currency))}",
         )
 
+    return_url = safe_return_url(body.return_url)
+
     customer, missing = await resolve_payment_customer(user, body)
     if missing:
         # Machine-readable so the app can ask for exactly what's missing.
@@ -573,6 +607,12 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
     )
     if open_link and open_link.get("short_url"):
         logger.info(f"reusing open payment link {open_link['razorpay_payment_link_id']} for {key}")
+        # The reused link's callback page must lead back to whichever runtime
+        # is asking NOW — a link created in Expo Go and reused by an installed
+        # build would otherwise offer a button into the wrong one.
+        if return_url and open_link.get("return_url") != return_url:
+            await db.payments.update_one({"_id": open_link["_id"]},
+                                         {"$set": {"return_url": return_url}})
         return {
             "order_id": open_link["razorpay_payment_link_id"],
             "amount": open_link["amount"],
@@ -632,6 +672,7 @@ async def create_topup_order(body: WalletTopup, request: Request, user: Optional
         **({"razorpay_order_id": link["order_id"]} if link.get("order_id") else {}),
         "reference_id": reference_id,
         "wallet_key": key,
+        **({"return_url": return_url} if return_url else {}),
         "amount": body.amount,
         "currency": currency,
         "status": "created",
@@ -703,22 +744,28 @@ async def pay_callback(request: Request):
                     "updated_at": now_iso(),
                 }},
             )
-        return HTMLResponse(rzp.result_html("Payment wasn't completed — nothing was charged.", ok=False))
+        return HTMLResponse(rzp.result_html("Payment wasn't completed — nothing was charged.", ok=False,
+                                           return_url=(order or {}).get("return_url")))
 
     if not order or not rzp.verify_checkout_signature(
         order["razorpay_order_id"], razorpay_payment_id, razorpay_signature
     ):
         logger.warning(f"invalid payment signature for order {razorpay_order_id}")
-        return HTMLResponse(rzp.result_html("We couldn't verify that payment.", ok=False), status_code=400)
+        return HTMLResponse(rzp.result_html("We couldn't verify that payment.", ok=False,
+                                           return_url=(order or {}).get("return_url")), status_code=400)
+    back = order.get("return_url")
     try:
         status = await settle_payment(order, razorpay_payment_id)
     except Exception as e:
         logger.error(f"payment settle failed: {e}")
-        return HTMLResponse(rzp.result_html("Payment received — we're still confirming it.", ok=True))
+        return HTMLResponse(rzp.result_html("Payment received — we're still confirming it.", ok=True,
+                                            return_url=back))
     if status == "captured":
         return HTMLResponse(rzp.result_html(
-            f"Added {wal.currency_symbol_for(order.get('currency') or 'USD')}{order['amount']:.0f} to your wallet.", ok=True))
-    return HTMLResponse(rzp.result_html("That payment didn't go through — nothing was charged.", ok=False))
+            f"Added {wal.currency_symbol_for(order.get('currency') or 'USD')}{order['amount']:.0f} to your wallet.",
+            ok=True, return_url=back))
+    return HTMLResponse(rzp.result_html("That payment didn't go through — nothing was charged.", ok=False,
+                                        return_url=back))
 
 
 async def link_callback(fields: dict, q, link_id: str) -> HTMLResponse:
@@ -740,25 +787,33 @@ async def link_callback(fields: dict, q, link_id: str) -> HTMLResponse:
                 {"reference_id": record["reference_id"], "status": {"$ne": "captured"}},
                 {"$set": {"status": "failed", "updated_at": now_iso()}},
             )
-        return HTMLResponse(rzp.result_html("Payment wasn't completed — nothing was charged.", ok=False))
+        return HTMLResponse(rzp.result_html("Payment wasn't completed — nothing was charged.", ok=False,
+                                           return_url=(record or {}).get("return_url")))
 
     if not record or record["reference_id"] != reference_id or not rzp.verify_link_signature(
         link_id=link_id, reference_id=reference_id, status=link_status,
         payment_id=payment_id, supplied=signature,
     ):
         logger.warning(f"invalid payment link signature for {link_id}")
-        return HTMLResponse(rzp.result_html("We couldn't verify that payment.", ok=False), status_code=400)
+        return HTMLResponse(rzp.result_html("We couldn't verify that payment.", ok=False,
+                                           return_url=(record or {}).get("return_url")), status_code=400)
 
+    # Captured before the record is rewritten, so the way back survives every
+    # branch below — including the one where settling raises.
+    back = record.get("return_url")
     try:
         record = await bind_order_id(record, payment_id)
         status = await settle_payment(record, payment_id)
     except Exception as e:
         logger.error(f"payment link settle failed: {e}")
-        return HTMLResponse(rzp.result_html("Payment received — we're still confirming it.", ok=True))
+        return HTMLResponse(rzp.result_html("Payment received — we're still confirming it.", ok=True,
+                                            return_url=back))
     if status == "captured":
         return HTMLResponse(rzp.result_html(
-            f"Added {wal.currency_symbol_for(record.get('currency') or 'USD')}{record['amount']:.0f} to your wallet.", ok=True))
-    return HTMLResponse(rzp.result_html("That payment didn't go through — nothing was charged.", ok=False))
+            f"Added {wal.currency_symbol_for(record.get('currency') or 'USD')}{record['amount']:.0f} to your wallet.",
+            ok=True, return_url=back))
+    return HTMLResponse(rzp.result_html("That payment didn't go through — nothing was charged.", ok=False,
+                                        return_url=back))
 
 
 async def mark_webhook_event_processed(event_id: str) -> None:

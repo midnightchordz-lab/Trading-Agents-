@@ -89,6 +89,10 @@ credentials.json
 # in production three times: payments then fail with "Authentication failed"
 # and the app shows "Couldn't start checkout · HTTP 502"). Verify with
 # `git check-ignore -v backend/.env` — it must print nothing.
-.env
-.env.*
-*.env
+# The three patterns below were appended a FOURTH time (2026-06-22) directly
+# under this note; `tests/test_pay_health.py::test_env_files_are_not_git_ignored`
+# is what caught it. They stay commented out, not deleted, so the next tool
+# that regenerates this file has something to append to.
+# .env
+# .env.*
+# *.env

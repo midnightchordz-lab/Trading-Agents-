@@ -1720,3 +1720,56 @@ startup hook that does nothing unless asked.
 2. If N > 0 and the ids look right, change it to `EMAIL_REPAIR=apply` and redeploy.
 3. **Delete the variable and redeploy.** Leaving it set is not dangerous (it is idempotent) but it
    is a one-shot, and every boot re-scanning the users collection is waste.
+
+## The payment page had no way back (2026-06-22)
+Owner's screenshot: "Added ₹99 to your wallet. **You can close this and return to the app.**" — and
+nothing to tap. That sentence is not a way back.
+
+WHY IT MATTERED MORE THAN IT LOOKS: checkout deliberately opens in the SYSTEM browser and not a
+WebView, because a WebView cannot launch the UPI app intent (Razorpay hides UPI/GPay entirely
+inside one). On Android that is a Chrome Custom Tab, and **an app cannot close a Custom Tab** —
+`expo-web-browser`'s `dismissBrowser` is iOS-only, confirmed against the current docs. So the
+customer's only exit was the browser's own small ✕, right after handing over money.
+
+TWO FIXES, both needed:
+1. **A real button on the page.** The app now sends `return_url` with `/pay/order`, taken from
+   `Linking.createURL('/')` — so it is `frontend://` in a build and `exp://…` in Expo Go, rather
+   than a scheme the server guesses. It is stored on the payment record and rendered as
+   "Return to the app" on every callback outcome, success AND failure (being stranded on a failure
+   is worse — that customer wants to retry). `window.close()` is tried first for the web popup
+   flow, where it works; the `href` is the real fallback, so it works with JS disabled too.
+   `return_url` is also refreshed onto a REUSED open link, or a link made in Expo Go would send an
+   installed build to the wrong runtime.
+2. **The balance now refreshes when the app returns.** Coming back is an APP FOREGROUND event, not
+   a navigation one, so the existing `useFocusEffect` never fired for it — and because the Custom
+   Tab is left open behind the deep link, `openBrowserAsync` may never resolve, so the poll that
+   hung off it never started. `WalletCard` now listens on `AppState`; on `active` it settles the
+   pending order (claiming it with a `settling` ref so the two triggers can't both poll and both
+   announce), or just refreshes the balance.
+
+SECURITY: `return_url` is client-supplied and rendered into a page reachable by anyone with a link
+id, so `routes/payments.safe_return_url` accepts only a custom scheme matching a conservative
+character set — never `http(s)`, `javascript:`, `data:`, `file:`, `vbscript:` — and drops anything
+else, degrading to the plain Close page rather than becoming an open redirect or an XSS. Tests:
+`tests/test_payment_return_button.py` (35).
+
+### Also fixed in the same pass
+- **`.gitignore` had re-ignored the `.env` files a FOURTH time** — `.env`, `.env.*`, `*.env` were
+  appended directly under the comment forbidding it. This is the exact cause of the three past
+  production outages where live Razorpay keys were missing and checkout returned HTTP 502.
+  `test_pay_health.py::test_env_files_are_not_git_ignored` caught it. The patterns are now
+  COMMENTED OUT rather than deleted, so the next tool that regenerates the file appends below
+  something inert.
+- `rate_limit.ensure_indexes` no longer clears the whole `rate_limits` collection when a duplicate
+  window blocks the unique index build (the deploy health check flags any startup `delete_many({})`
+  as DESTRUCTIVE_DB_STARTUP, and it is right to). It now removes only rows already past their
+  `expires_at` — which the TTL monitor was about to delete anyway — and leaves every live counter
+  alone. `test_m1_startup_indexes.py` pins the filter shape, and a new test greps the whole backend
+  for collection-wide deletes and `drop()`.
+- The deploy check also calls the limiter's **TTL index** destructive. Owner's decision, recorded:
+  **leave it.** Removing it would let the counter collection grow with traffic forever, which is a
+  real bug traded for a checker's clean bill of health.
+- The preview `EMAIL_REPAIR` value is read quote-insensitively by its test; the deployment panel
+  rewrote `off` as `"off"`.
+- Suite: **818 passed, 10 skipped**. (`test_wallet_sanity_iter12`'s cache test is flaky under the
+  parallel runner — it shares one account's credits; passes on its own.)

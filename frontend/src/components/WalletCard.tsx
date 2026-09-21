@@ -6,6 +6,7 @@ import {
   Pressable,
   StyleSheet,
   Alert,
+  AppState,
   Platform,
   Modal,
   ActivityIndicator,
@@ -41,6 +42,9 @@ export function WalletCard() {
   const [phoneInput, setPhoneInput] = useState("");
   const [contactError, setContactError] = useState<string | null>(null);
   const pendingOrder = useRef<string | null>(null);
+  // Two things can start the poll — the browser closing, and the app coming
+  // back to the foreground — and on Android both can happen for one payment.
+  const settling = useRef(false);
   // Why the balance is missing, when it is. Distinguishes "we couldn't load
   // it" from "payments are off", which the card used to conflate.
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -103,6 +107,30 @@ export function WalletCard() {
     },
     [deviceId, refresh, wallet?.symbol]
   );
+
+  // Coming back from the payment page is an APP FOREGROUND event, not a
+  // navigation one — so `useFocusEffect` above never fires for it and the
+  // balance stayed stale. It matters most on Android: the app cannot close a
+  // Chrome Custom Tab (expo-web-browser's dismissBrowser is iOS-only), so the
+  // customer returns by tapping the deep-link button on the confirmation page,
+  // which leaves the tab open behind us and `openBrowserAsync` unresolved.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      const order = pendingOrder.current;
+      if (order && !settling.current) {
+        // Claimed here rather than inside `settle`, so the two triggers can
+        // never both poll the same order and both announce it.
+        settling.current = true;
+        settle(order).finally(() => {
+          settling.current = false;
+        });
+      } else if (!order && deviceId) {
+        refresh(deviceId);
+      }
+    });
+    return () => sub.remove();
+  }, [settle, refresh, deviceId]);
 
   const topUp = async (amount: number, contact?: { email?: string; phone?: string }) => {
     if (!deviceId) return;

@@ -206,14 +206,47 @@ def verify_webhook_signature(raw_body: bytes, supplied: str) -> bool:
     return hmac.compare_digest(expected, supplied)
 
 
-def result_html(message: str, ok: bool) -> str:
+def result_html(message: str, ok: bool, return_url: str | None = None) -> str:
+    """The page the customer lands on after paying.
+
+    The button is always the app-green, on a failed payment too: it is the way
+    back, not a status, and a red "get me out of here" reads like a warning.
+
+    It used to say "You can close this and return to the app" and give them
+    nothing to tap. That sentence is not a way back: the payment opens in the
+    system browser (a Chrome Custom Tab on Android, which is what makes the
+    UPI hand-off possible), and an Android Custom Tab CANNOT be closed by the
+    app — expo-web-browser's `dismissBrowser` is iOS-only. So the customer was
+    left staring at a confirmation with only the browser's own small ✕ to find.
+
+    Now there is a button. `window.close()` is tried first because the web flow
+    opens this in a script-opened popup, where it works; when it doesn't (a
+    Custom Tab was not opened by script), the deep link the app supplied takes
+    over and Android brings the app back to the front. The link is rendered as
+    a real `href` too, so it still works with JavaScript disabled, and it is
+    validated server-side — see `safe_return_url`.
+    """
     from html import escape
 
     colour = "#AEFA3C" if ok else "#FF6B6B"
+    if return_url:
+        target = escape(return_url, quote=True)
+        action = f"""<p><a id="back" href="{target}"
+onclick="try{{window.close()}}catch(e){{}};return true"
+style="display:inline-block;margin-top:20px;padding:14px 28px;border-radius:12px;
+background:#AEFA3C;color:#05070B;font-weight:700;font-size:16px;text-decoration:none;
+min-width:200px;min-height:48px;box-sizing:border-box">Return to the app</a></p>
+<p style="color:#66755A;font-size:12px;margin-top:14px">Or close this tab with the ✕ above.</p>"""
+    else:
+        action = """<p><button onclick="window.close()"
+style="margin-top:20px;padding:14px 28px;border-radius:12px;border:0;background:#AEFA3C;
+color:#05070B;font-weight:700;font-size:16px;min-width:200px;min-height:48px">Close</button></p>
+<p style="color:#66755A;font-size:12px;margin-top:14px">Or close this tab with the ✕ above and
+return to the app.</p>"""
     return f"""<!doctype html>
 <html><head><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>body{{margin:0;background:#05070B;color:#EEF7E0;font:15px -apple-system,Arial,sans-serif;
 display:flex;align-items:center;justify-content:center;height:100vh;padding:24px;text-align:center}}
 strong{{color:{colour}}}</style></head>
 <body><div><p><strong>{escape(message)}</strong></p>
-<p style="color:#66755A;font-size:13px">You can close this and return to the app.</p></div></body></html>"""
+{action}</div></body></html>"""
