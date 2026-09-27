@@ -56,7 +56,20 @@ HASH_SECRET = os.environ.get("HASH_SECRET") or JWT_SECRET
 # or extend via the real env var in your deployment, not by editing this line.
 ADMIN_IDENTIFIERS = au.parse_admin_identifiers(os.environ.get("ADMIN_IDENTIFIERS", "+918446307145"))
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")  # unused: Google runs through Emergent managed auth
-APPLE_SERVICES_ID = os.environ.get("APPLE_SERVICES_ID", "")
+# Every `aud` a Sign in with Apple identity token may legitimately carry.
+#
+# THE ONE THING THAT BREAKS THIS FLOW: for a NATIVE iOS sign-in Apple sets
+# `aud` to the app's BUNDLE IDENTIFIER — not to a Services ID, which is only
+# for the web/redirect flow. Expo Go is its own app, so a token minted there
+# carries `host.exp.Exponent` instead, and an audience list that omits it makes
+# every sign-in in Expo Go a 401 with nothing in the logs to explain it.
+# The legacy single-value `APPLE_SERVICES_ID` is still honoured so a
+# deployment that already sets it keeps working.
+APPLE_AUDIENCES = [
+    a.strip() for a in (
+        os.environ.get("APPLE_AUDIENCES", "") or os.environ.get("APPLE_SERVICES_ID", "")
+    ).split(",") if a.strip()
+]
 
 
 async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:

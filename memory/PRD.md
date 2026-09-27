@@ -1773,3 +1773,80 @@ else, degrading to the plain Close page rather than becoming an open redirect or
   rewrote `off` as `"off"`.
 - Suite: **818 passed, 10 skipped**. (`test_wallet_sanity_iter12`'s cache test is flaky under the
   parallel runner — it shares one account's credits; passes on its own.)
+
+## Sign in with Apple, and a store-reviewer demo account (2026-06-22)
+Owner asked "do we have a test login for iOS", then asked for BOTH fixes. There was no way for an
+App Store reviewer to get into this app at all: sign-in was a one-time code sent to a phone or an
+inbox the reviewer does not have, and the Apple button read "APPLE — SOON" — which is itself a
+rejection, because an app offering Google sign-in MUST offer Sign in with Apple.
+
+### Apple: it was one environment variable, not a missing feature
+The backend already verified Apple tokens properly (RS256 against Apple's live JWKS, issuer and
+audience checked). It answered 501 only because no audience was configured. **The audience for a
+NATIVE iOS sign-in is the app's BUNDLE IDENTIFIER — not a Services ID, which is the web/redirect
+flow only** — and the same sign-in inside Expo Go carries `host.exp.Exponent`, because Expo Go is a
+different app. So:
+- `deps.APPLE_SERVICES_ID` (one string) became `deps.APPLE_AUDIENCES` (a list); the old variable is
+  still read as a single entry so an existing deployment keeps working.
+- `auth.verify_apple_id_token` takes a list, and refuses everything when the list is EMPTY — an
+  unconfigured audience must not mean "skip the check".
+- `.env`: `APPLE_AUDIENCES=com.emergent.tradeagentapp.kht259,host.exp.Exponent`.
+- `frontend/app.json`: `ios.usesAppleSignIn: true` (the entitlement; without it the native button
+  cannot work in a build).
+- `LoginScreen` renders Apple's OWN `AppleAuthenticationButton` — App Review requires the official
+  mark and wording, so a styled Pressable would be a rejection — gated on `isAvailableAsync()`, so
+  Android and web show Google on its own rather than a button that cannot work.
+- **No Apple credential was needed.** A native-only flow requires no Services ID and no `.p8`.
+  Those are needed only for the web flow and for token REVOCATION on account deletion, which Apple
+  requires of apps offering Apple sign-in and which is **still outstanding** (needs the owner's
+  Team ID, a Key ID and a `.p8` from their Apple Developer account).
+- Cannot be tested in Expo Go, on web, or on Android. Needs a real iOS build and a real Apple ID.
+
+### The reviewer demo account: no new code path, which is the point
+`REVIEW_IDENTIFIER` + `REVIEW_OTP` let ONE identifier sign in with a FIXED code. The safety
+argument is structural rather than careful: `auth_otp_request` stores the fixed code's HASH exactly
+where a random code's hash would go and skips delivery — and `auth_otp_verify` is untouched. So the
+5-minute expiry, the 5-attempt cap, the atomic single-use claim and every rate limit apply
+unchanged, and there is no branch anywhere that accepts a code without checking it. A test greps
+`auth_otp_verify` to prove no reviewer symbol appears in it.
+- Off unless BOTH variables are set and the code is at least 4 characters.
+- Identifier is normalised like any other, so case and Gmail-alias spellings of the same inbox
+  match and nothing else does; compared with `compare_digest`.
+- An ORDINARY account, deliberately NOT in `ADMIN_IDENTIFIERS`: it gets the standard 10 free
+  credits and sees the real paywall and purchase flow, which is what App Review wants to inspect.
+  An admin account would also have handed a published credential real privileges.
+- Nothing is emailed or texted, and the code appears in no response and no log.
+- Values live in `.env` / deployment secrets; `REVIEW_IDENTIFIER` and `APPLE_AUDIENCES` were added
+  to `test_no_committed_secrets.NOT_SECRET` (neither is a credential — the bundle id ships in every
+  binary and the identifier is typed into the submission form). `REVIEW_OTP` was deliberately NOT
+  added, and is in no tracked file.
+
+### `.gitignore` re-ignored the .env files a FIFTH time — fixed properly this time
+Commenting the patterns out in the root file did not hold: the tooling appended `*.env` again, and
+because **the last matching pattern wins**, a negation in the root file can never survive an
+append. The defence now lives in `backend/.gitignore` and `frontend/.gitignore`, each containing
+`!.env` — a `.gitignore` in a SUBDIRECTORY takes precedence over a parent's for files beneath it,
+whatever order the root ends up in. Proven by a test that appends `*.env` to the root file and
+asserts the env files are still not ignored.
+`test_pay_health.py::test_env_files_are_not_git_ignored` was also rewritten: it asked
+`git check-ignore`, which exits 0 for a NEGATED match too — it answers "a pattern matched", not
+"this file is ignored", so the negation made it a false positive. It now reads
+`git status --porcelain --ignored` and looks for `!!`.
+
+### Tests
+- `tests/test_apple_signin_and_reviewer_account.py` (30): mints real RS256 tokens from a synthetic
+  Apple key pair — native audience, Expo Go audience, another app's audience, wrong issuer, expired,
+  wrong signing key, unknown kid, no email (private relay), plus every reviewer-account property.
+- `tests/test_iteration_27_adversarial.py` (19, written by the testing agent): reviewer single-use,
+  attempt-cap lockout, cross-identifier bypass attempts, endpoint-level Apple rejections, the
+  .gitignore negation under a simulated root append, and a `git grep` for the fixed code.
+- Suite: **878 passed, 9 skipped.** Two pre-existing parallel-only flakes
+  (`test_iteration.py::TestChart::test_chart_ranges[1W]`,
+  `test_security_part2.py::...::test_a_different_address_is_unaffected`) pass in isolation.
+
+### Outstanding for the owner
+1. Apple **token revocation on account deletion** — needs Team ID + Key ID + `.p8`.
+2. Paste the reviewer identifier and code into App Store Connect → App Review Information →
+   Sign-in required. Read `REVIEW_OTP` from `backend/.env`.
+3. Apple sign-in and the reviewer login both need a **redeploy**, and Apple additionally needs a
+   fresh iOS build.

@@ -230,16 +230,29 @@ def verify_google_id_token_stub(id_token: str, expected_audience: str) -> Option
     return None
 
 
-def verify_apple_id_token(identity_token: str, expected_audience: str, jwks: list) -> Optional[dict]:
+def verify_apple_id_token(identity_token: str, expected_audience, jwks: list) -> Optional[dict]:
     """Verifies a real Sign in with Apple identity token against Apple's
     published public keys. `jwks` is Apple's JWKS response (the list under
     its "keys" field) — fetched separately by the caller (see
     fetch_apple_jwks in server.py), since this function has no network
     access itself and is fully testable with a synthetic JWKS + token pair.
+
+    `expected_audience` is a LIST of acceptable audiences (a single string is
+    still accepted). It has to be a list because the same app produces
+    different `aud` values: a native iOS sign-in carries the app's BUNDLE
+    IDENTIFIER, while the same sign-in performed inside Expo Go carries
+    `host.exp.Exponent`. Only these exact values pass — PyJWT rejects anything
+    not in the list, so widening it is the only way in.
+
     Returns {"sub": ..., "email": ...} on success, None on any verification
     failure — a malformed token, a tampered signature, an expired token, or
     a wrong audience are all treated the same way: reject, don't
     authenticate. Never raises."""
+    audiences = [expected_audience] if isinstance(expected_audience, str) else list(expected_audience or [])
+    if not audiences:
+        # No configured audience means every token would be checked against
+        # nothing. Refuse rather than authenticate.
+        return None
     try:
         unverified_header = jwt.get_unverified_header(identity_token)
     except Exception:
@@ -256,7 +269,7 @@ def verify_apple_id_token(identity_token: str, expected_audience: str, jwks: lis
             identity_token,
             key=public_key,
             algorithms=["RS256"],
-            audience=expected_audience,
+            audience=audiences,
             issuer="https://appleid.apple.com",
         )
     except jwt.PyJWTError:

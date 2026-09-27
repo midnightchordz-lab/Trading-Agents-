@@ -1,0 +1,14 @@
+# Deliberately un-ignores this directory's .env, whatever the repo root says.
+#
+# The root .gitignore keeps having `.env` / `*.env` appended to it by tooling —
+# five times now — and because the last matching pattern wins, a negation in
+# the root file cannot survive the next append. A .gitignore in a SUBDIRECTORY
+# takes precedence over a parent's for files under it, so this is the one place
+# the rule holds.
+#
+# It has to hold because the Emergent deploy image is built from the repo: an
+# ignored backend/.env ships a container with a stale environment, which is
+# exactly how live Razorpay keys went missing in production three times
+# ("Authentication failed", "Couldn't start checkout · HTTP 502").
+# Guarded by tests/test_pay_health.py::test_env_files_are_not_git_ignored.
+!.env

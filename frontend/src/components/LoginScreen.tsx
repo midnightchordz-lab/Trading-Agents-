@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, TextInput, Pressable, ActivityIndicator, StyleSheet, Alert, Animated } from "react-native";
+import { View, Text, TextInput, Pressable, ActivityIndicator, StyleSheet, Alert, Animated, Platform } from "react-native";
+import * as AppleAuthentication from "expo-apple-authentication";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GoogleLogo } from "phosphor-react-native";
 import { fonts, spacing } from "@/src/theme";
@@ -11,8 +12,15 @@ import { getWalletDeviceId } from "@/src/wallet";
 // Futuristic "agent terminal" look — scoped to the login screen only, per
 // product decision. Dark panel, acid-green accent, monospace throughout,
 // HUD-style corner brackets. Same OTP login logic as before; visuals only.
-// Google sign-in stays live (Emergent managed auth); Apple is still pending
-// an Apple Services ID.
+// Google sign-in runs through Emergent managed auth; Apple is the native
+// Sign in with Apple flow, verified on the backend against Apple's JWKS.
+//
+// The Apple button is Apple's OWN component, not a styled Pressable: App
+// Review requires the official mark and wording, and an app that offers
+// another social login (we offer Google) MUST offer Sign in with Apple or it
+// is rejected on that alone. It only exists on iOS — `isAvailableAsync` is
+// false on Android, on web, and on iOS below 13 — and the row simply shows
+// Google on its own there rather than a button that cannot work.
 
 const LIME = "#AEFA3C";
 const PANEL_BG = "#0B1220";
@@ -57,7 +65,21 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [appleReady, setAppleReady] = useState(false);
   const [debugOtp, setDebugOtp] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (Platform.OS !== "ios") return;
+    let cancelled = false;
+    AppleAuthentication.isAvailableAsync()
+      .then((ok) => {
+        if (!cancelled) setAppleReady(ok);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const requestCode = async () => {
     if (!identifier.trim()) {
@@ -107,6 +129,29 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
       Alert.alert("Google sign-in failed", e?.message || "Try again.");
     } finally {
       setGoogleLoading(false);
+    }
+  };
+
+  const signInWithApple = async () => {
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+      if (!credential.identityToken) {
+        Alert.alert("Apple sign-in failed", "Apple didn't return a sign-in token. Try again.");
+        return;
+      }
+      const deviceId = await getWalletDeviceId();
+      const res = await api.appleSignIn(credential.identityToken, deviceId);
+      await setStoredToken(res.token);
+      onAuthenticated();
+    } catch (e: any) {
+      // Cancelling is a normal choice, not an error to apologise for.
+      if (e?.code === "ERR_REQUEST_CANCELED") return;
+      Alert.alert("Apple sign-in failed", e?.message || "Try again.");
     }
   };
 
@@ -191,9 +236,16 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
               </>
             )}
           </Pressable>
-          <Pressable disabled style={styles.socialBtn}>
-            <Text style={styles.socialBtnText}>APPLE — SOON</Text>
-          </Pressable>
+          {appleReady ? (
+            <AppleAuthentication.AppleAuthenticationButton
+              testID="login-apple"
+              buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+              buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+              cornerRadius={8}
+              style={styles.appleBtn}
+              onPress={signInWithApple}
+            />
+          ) : null}
         </View>
       </View>
     </View>
@@ -250,6 +302,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   socialBtnText: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 0.5, color: TEXT_MID },
+  // Apple's component draws its own label and mark, so it takes a size and
+  // nothing else; 44 is the platform minimum touch target.
+  appleBtn: { flex: 1, height: 44 },
   googleBtn: { flexDirection: "row", gap: 6, borderColor: LIME },
   googleBtnText: { fontFamily: fonts.monoBold, fontSize: 10, letterSpacing: 0.5, color: LIME },
 });

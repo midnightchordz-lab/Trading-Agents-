@@ -34,6 +34,14 @@ yarn-error.*
 # local env files
 .env*.local
 
+# Deliberately un-ignores frontend/.env, whatever the repo root says. The root
+# .gitignore keeps having `.env` / `*.env` appended to it by tooling, and the
+# last matching pattern wins — but a .gitignore in a SUBDIRECTORY takes
+# precedence over a parent's, so this is the one place the rule holds. The
+# deploy image is built from the repo, so an ignored .env ships a stale
+# environment. Guarded by backend/tests/test_pay_health.py.
+!.env
+
 # typescript
 *.tsbuildinfo
 

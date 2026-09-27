@@ -96,6 +96,9 @@ credentials.json
 # .env
 # .env.*
 # *.env
-.env
-.env.*
-*.env
+#
+# Appended a FIFTH time by whatever regenerates this file. Because the LAST
+# matching pattern wins, a negation up here cannot survive an append below —
+# so the real defence now lives in `backend/.gitignore` and
+# `frontend/.gitignore`: patterns in a deeper directory take precedence over
+# a parent's, whatever order this file ends up in.

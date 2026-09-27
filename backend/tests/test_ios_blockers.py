@@ -198,9 +198,20 @@ class TestDeleteAccount:
 
 
 class TestAppleEndpointGuard:
-    def test_returns_501_until_the_services_id_is_configured(self):
-        if os.environ.get("APPLE_SERVICES_ID"):
-            pytest.skip("APPLE_SERVICES_ID is configured — the 501 guard no longer applies")
+    def test_a_junk_token_is_refused_now_that_apple_is_configured(self):
+        """Apple sign-in is live (see test_apple_signin_and_reviewer_account.py),
+        so this endpoint no longer answers 501. What it must never do is accept
+        an unverifiable token: a bare string carries no signature, so the only
+        acceptable answer is 401 — or 502 if Apple's key service is unreachable
+        from this container, which is a network condition, not an auth one.
+
+        The 501 branch still exists for a deployment with no APPLE_AUDIENCES
+        set, and is asserted directly in the other module."""
+        if not (os.environ.get("APPLE_AUDIENCES") or os.environ.get("APPLE_SERVICES_ID")):
+            r = requests.post(f"{BASE_URL}/api/auth/apple", json={"token": "anything"}, timeout=15)
+            assert r.status_code == 501, r.text
+            assert "not configured" in r.json()["detail"].lower()
+            return
         r = requests.post(f"{BASE_URL}/api/auth/apple", json={"token": "anything"}, timeout=15)
-        assert r.status_code == 501, r.text
-        assert "not configured" in r.json()["detail"].lower()
+        assert r.status_code in (401, 502), r.text
+        assert r.status_code != 200, "an unsigned token was accepted"

@@ -1,0 +1,39 @@
+{
+  "summary": "Adversarial audit of the reviewer demo account + Apple sign-in + .gitignore negation. All 19 new tests pass. Full backend suite: 878 passed, 9 skipped, 2 parallel-flaky (both pass when re-run in isolation — same class of flakiness the main agent already documented). No new failures introduced.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_27_adversarial.py",
+    "/app/test_reports/pytest/iteration_27_adversarial.xml",
+    "/app/test_reports/pytest/iteration_27_full.xml"
+  ],
+  "action_items": [
+    "No action required from main agent — both the reviewer account and Apple sign-in behave exactly as the design intended under adversarial probing."
+  ],
+  "critical_code_review_comments": [
+    "The reviewer path is well-scoped: auth_otp_verify has no reference to REVIEW_OTP / is_review_login / review_login (verified by both test_apple_signin_and_reviewer_account.test_verify_has_no_special_case_for_the_reviewer and manual grep). The whole safety argument holds — the fixed code goes through the ordinary expiry/attempt-cap/single-use path.",
+    "APPLE_AUDIENCES is derived from env with the legacy APPLE_SERVICES_ID kept as a fallback — good backward-compat.",
+    "backend/.gitignore and frontend/.gitignore both contain `!.env`; verified via `git status --porcelain --ignored` that appending `*.env` to root .gitignore does NOT re-ignore them (subdirectory pattern wins). Root .gitignore was restored after the test.",
+    "Minor: FastAPI @app.on_event('startup') is deprecated (server.py:100,169,231) — should move to lifespan handler. Not urgent."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_27_adversarial.py (new — 19 adversarial tests)"
+  ],
+  "success_rate": {
+    "backend": "99.8% (878/880 non-flaky, 2 parallel-flakies both pass in isolation)",
+    "frontend": "not tested (backend-only per instructions)"
+  },
+  "seed_data_creation": "None. Tests clear per-identifier otp_requests rows before their bursts to avoid rate-limit leakage from earlier tests; the running test_credentials.md admin/reviewer accounts are used as-is.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 27 focused on: (1) the store-reviewer demo account cannot be turned into a general OTP bypass — a foreign identifier cannot use REVIEW_OTP, the reviewer code is single-use, the 5-attempt cap and 5-min expiry apply unchanged, the /request response leaks nothing; (2) Apple sign-in endpoint /api/auth/apple correctly rejects junk / wrong-key / wrong-audience tokens with 401; (3) APPLE_AUDIENCES contains BOTH com.emergent.tradeagentapp.kht259 and host.exp.Exponent, and app.json has usesAppleSignIn:true; (4) .gitignore negation defence holds even when *.env is appended to root .gitignore. Two pre-existing parallel-flaky tests (test_iteration.py::TestChart::test_chart_ranges[1W] and test_security_part2.py::TestFinding5OtpPumpingIsCapped::test_a_different_address_is_unaffected) both pass when re-run in isolation — same class as the two flakies main agent flagged. REVIEW_OTP is confirmed not committed anywhere except backend/.env (which the negation intentionally keeps in the tree for the deploy image).",
+  "rca_of_issue": "Not applicable — no bugs were reproduced. The two parallel-flakies observed under `pytest -n 2` both PASS when re-run standalone; they are network/rate-limit or shared-state contention artifacts of the loadscope-parallel runner and are the same class of flakiness the main agent already documented for test_wallet_sanity_iter12 and test_wallet_razorpay_admin."
+}

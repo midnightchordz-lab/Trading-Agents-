@@ -91,9 +91,11 @@ class TestAuthRoutesShape:
         # Backend may 200 (accepted) or 429 (rate limited). Should never 5xx.
         assert r.status_code in (200, 400, 429), r.text
 
-    def test_apple_disabled_returns_501(self):
+    def test_apple_rejects_a_malformed_payload(self):
+        # `id_token` is not the field name (`token` is), so this is a Pydantic
+        # 422. It stays here as a smoke test that the route is mounted and
+        # never 5xxs; whether Apple is configured is asserted elsewhere.
         r = requests.post(f"{BASE_URL}/api/auth/apple", json={"id_token": "x"}, timeout=10)
-        # Payload validation may 422 (missing required fields per Pydantic) or 501.
         assert r.status_code in (400, 422, 501)
 
 

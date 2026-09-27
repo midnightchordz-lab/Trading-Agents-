@@ -27,7 +27,7 @@ import mailer
 import sms
 import wallet as wal
 from core import db, logger, now_iso
-from deps import (APPLE_SERVICES_ID, AUTH_DEBUG_RETURN_OTP, CONSENT_VERSION, HASH_SECRET, JWT_SECRET,
+from deps import (APPLE_AUDIENCES, AUTH_DEBUG_RETURN_OTP, CONSENT_VERSION, HASH_SECRET, JWT_SECRET,
                   TRUSTED_PROXY_HOPS, client_ip, get_current_user)
 
 # Per-IP ceiling on OTP requests, deliberately much looser than the 5/hour
@@ -54,13 +54,52 @@ OTP_EMAIL_GLOBAL_MAX_PER_HOUR = int(os.environ.get("OTP_EMAIL_GLOBAL_MAX_PER_HOU
 # reaching it withholds credits only — never a sign-in. Set 0 to disable.
 FREE_CREDIT_GLOBAL_PER_HOUR = int(os.environ.get("FREE_CREDIT_GLOBAL_PER_HOUR", "200"))
 
+# --- The store-reviewer demo account ---------------------------------------
+#
+# An App Store or Play reviewer has neither our phone nor our inbox, so an
+# OTP-only sign-in is a wall they cannot get past — a routine rejection. This
+# lets ONE configured identifier sign in with a FIXED code.
+#
+# HOW IT AVOIDS BEING A BACKDOOR: there is no new path in `verify`. The request
+# endpoint simply stores the fixed code's hash where a random one would have
+# gone and skips delivery. Everything after that is the ordinary flow — the
+# same 5-minute expiry, the same 5-attempt cap, the same atomic single-use
+# claim, the same rate limits — and the account it creates is an ORDINARY user,
+# not an admin, so the reviewer sees the real paywall and purchase flow (which
+# is what Apple wants to see anyway).
+#
+# Off unless BOTH variables are set. The identifier is normalised the same way
+# every other identifier is, so case and Gmail-alias spellings of the same
+# inbox match, and nothing else does.
+REVIEW_IDENTIFIER = (os.environ.get("REVIEW_IDENTIFIER", "") or "").strip()
+REVIEW_OTP = (os.environ.get("REVIEW_OTP", "") or "").strip()
+
+
+def review_identifier() -> Optional[str]:
+    """The normalised reviewer identifier, or None when it isn't configured."""
+    if not REVIEW_IDENTIFIER or len(REVIEW_OTP) < 4:
+        return None
+    id_type, normalised = au.normalize_identifier(REVIEW_IDENTIFIER)
+    return normalised if id_type else None
+
+
+def is_review_login(identifier: str) -> bool:
+    """Whether this (already normalised) identifier is the reviewer account.
+
+    Compared with `compare_digest` because the comparison decides whether a
+    known code is accepted; a near-miss must not be distinguishable by timing.
+    """
+    configured = review_identifier()
+    if not configured or not identifier:
+        return False
+    return hmac.compare_digest(configured, identifier)
+
 api_router = APIRouter(prefix="/api")
 
 
-# --- Auth endpoints. Phone/email OTP + Google sign-in. Email codes go out via
-# Emergent managed email, SMS via Twilio, and Google sign-in via Emergent
-# managed auth. Apple sign-in is still a placeholder (needs an Apple Services
-# ID from the app owner). ---
+# --- Auth endpoints. Phone/email OTP, Google and Apple sign-in. Email codes go
+# out via Emergent managed email, SMS via Twilio, Google through Emergent
+# managed auth, and Apple natively (verified here against Apple's JWKS). ---
 EMERGENT_SESSION_DATA_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
 
 
@@ -338,6 +377,8 @@ async def auth_otp_request(body: OtpRequest, request: Request):
             raise HTTPException(status_code=429,
                                 detail="Too many attempts from this network — try again later")
 
+    is_review = is_review_login(identifier)
+
     # Whole-deployment budgets. Nothing keyed on the caller can stop a
     # distributed pump — a botnet gets a fresh address per request and a fresh
     # identifier per request, and stays under every per-IP and per-identifier
@@ -345,7 +386,12 @@ async def auth_otp_request(body: OtpRequest, request: Request):
     # thing that bounds the total damage, so they are checked for everyone,
     # after the cheaper per-caller checks.
     hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-    if id_type == "phone":
+    if is_review:
+        # Nothing is sent for the reviewer account, so it spends no SMS or
+        # email budget and must not be refused when someone else has spent it:
+        # a reviewer locked out by an unrelated traffic spike is a rejection.
+        pass
+    elif id_type == "phone":
         # Checked first and sized tighter: texts cost money and land on real
         # strangers' phones. Exhausting it must not lock the app — email
         # sign-in still works, so people can still get in.
@@ -384,6 +430,26 @@ async def auth_otp_request(body: OtpRequest, request: Request):
                 "If this is genuine traffic, raise OTP_EMAIL_GLOBAL_MAX_PER_HOUR.",
             ])
             raise HTTPException(status_code=429, detail="Too many attempts — try again later")
+
+    if is_review:
+        # The fixed code's hash goes exactly where a random one would, so
+        # `verify` needs no special case at all — expiry, the attempt cap and
+        # the single-use claim all apply unchanged. Nothing is delivered and
+        # nothing is returned; the reviewer already has the code, from the
+        # submission form.
+        await db.otp_requests.insert_one({
+            "id": str(uuid.uuid4()),
+            "identifier": identifier,
+            "identifier_type": id_type,
+            "ip": ip,
+            "otp_hash": au.hash_otp(REVIEW_OTP),
+            "attempts": 0,
+            "verified": False,
+            "review_login": True,
+            "created_at": now_iso(),
+        })
+        logger.info("reviewer demo sign-in code issued (fixed code, nothing sent)")
+        return {"identifier": identifier, "identifier_type": id_type, "sent": True}
 
     if id_type == "phone" and not sms.sms_configured():
         raise HTTPException(
@@ -533,14 +599,14 @@ def fetch_apple_jwks() -> list:
 
 @api_router.post("/auth/apple", dependencies=[Depends(lim.limit_auth_exchange)])
 async def auth_apple(body: SocialSignIn, request: Request):
-    if not APPLE_SERVICES_ID:
-        raise HTTPException(status_code=501, detail="Apple sign-in is not configured yet (APPLE_SERVICES_ID unset)")
+    if not APPLE_AUDIENCES:
+        raise HTTPException(status_code=501, detail="Apple sign-in is not configured yet (APPLE_AUDIENCES unset)")
     try:
         jwks = await asyncio.to_thread(fetch_apple_jwks)
     except Exception as e:
         logger.warning(f"Apple JWKS fetch failed: {e}")
         raise HTTPException(status_code=502, detail="Could not verify Apple sign-in right now — try again")
-    claims = au.verify_apple_id_token(body.token, APPLE_SERVICES_ID, jwks)
+    claims = au.verify_apple_id_token(body.token, APPLE_AUDIENCES, jwks)
     if not claims:
         raise HTTPException(status_code=401, detail="Invalid Apple sign-in token")
     user = await db.users.find_one({"apple_sub": claims.get("sub")})

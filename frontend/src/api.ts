@@ -371,6 +371,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ session_id: sessionId, device_id: deviceId }),
     }),
+  // The raw Apple identity token. It is never trusted here — the backend
+  // verifies its signature against Apple's published keys and checks the
+  // audience before it becomes a session.
+  appleSignIn: (identityToken: string, deviceId?: string) =>
+    j<{ token: string; user: SessionUser }>(`/auth/apple`, {
+      method: "POST",
+      body: JSON.stringify({ token: identityToken, device_id: deviceId }),
+    }),
   authMe: (token: string) =>
     j<SessionUser>(`/auth/me`, { headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` } }),
   deleteAccount: () => j<{ deleted: boolean }>(`/account`, { method: "DELETE" }),

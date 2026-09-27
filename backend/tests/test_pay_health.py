@@ -122,14 +122,28 @@ def test_env_files_are_not_git_ignored():
     .gitignore excluding `.env` / `.env.*` / `*.env`: the deploy build context
     is the repo, so the container shipped with a stale environment and kept the
     old (deactivated) Razorpay keys while the preview had the new ones. The
-    pattern has regenerated twice, so it is asserted rather than remembered."""
+    pattern has now regenerated FIVE times, so it is asserted rather than
+    remembered.
+
+    Asked via `git status --ignored`, not `git check-ignore`: the defence is a
+    NEGATION (`!.env` in backend/.gitignore and frontend/.gitignore, which take
+    precedence over the root file no matter what gets appended to it), and
+    `check-ignore` exits 0 for a negated match too — it answers "a pattern
+    matched", not "this file is ignored". `git status` answers the question we
+    actually care about: `!!` means ignored, `??` means it will be in the
+    build context.
+    """
     import subprocess
     root = Path(__file__).parent.parent.parent
-    for rel in ("backend/.env", "frontend/.env"):
-        done = subprocess.run(
-            ["git", "check-ignore", "-v", rel], cwd=root, capture_output=True, text=True
-        )
-        assert done.returncode != 0, (
-            f"{rel} is git-ignored by {done.stdout.strip()} — a deploy will ship "
-            "without it and payments will fail with 'Authentication failed'."
-        )
+    done = subprocess.run(
+        ["git", "status", "--porcelain", "--ignored", "backend/.env", "frontend/.env"],
+        cwd=root, capture_output=True, text=True,
+    )
+    ignored = [line[3:] for line in done.stdout.splitlines() if line.startswith("!!")]
+    assert not ignored, (
+        f"these are git-ignored: {ignored} — a deploy will ship without them and payments "
+        "will fail with 'Authentication failed'. Check for an appended `*.env` in the root "
+        ".gitignore, and that backend/.gitignore still contains `!.env`."
+    )
+    seen = {line[3:] for line in done.stdout.splitlines()}
+    assert "backend/.env" in seen, "backend/.env is missing from the working tree entirely"

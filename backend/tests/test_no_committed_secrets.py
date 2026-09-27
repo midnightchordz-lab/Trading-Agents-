@@ -27,6 +27,12 @@ NOT_SECRET = {
     "EMAIL_FROM", "TWILIO_FROM_NUMBER", "ADMIN_IDENTIFIERS", "AUTH_REQUIRED_ENABLED",
     "AUTH_DEBUG_RETURN_OTP", "WALLET_ENFORCEMENT_ENABLED", "LAUNCH_FREE_UNTIL",
     "APPLE_SERVICES_ID", "PUBLIC_HOST_SUFFIXES", "REVENUECAT_IOS_KEY",
+    # Not credentials: the Apple audiences are the app's own bundle identifier
+    # (which ships in app.json and in every binary) plus Expo Go's, and the
+    # reviewer identifier is typed into the App Store submission form. The
+    # fixed code that goes with it, REVIEW_OTP, is deliberately NOT here — it
+    # stays out of every tracked file.
+    "APPLE_AUDIENCES", "REVIEW_IDENTIFIER",
     # Public by design, not a credential: the Razorpay key ID is handed to the
     # app by /api/pay/order (checkout cannot work without it) and the
     # RevenueCat iOS SDK key ships inside every App Store binary. Neither can
