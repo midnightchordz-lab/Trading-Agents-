@@ -102,3 +102,6 @@ credentials.json
 # so the real defence now lives in `backend/.gitignore` and
 # `frontend/.gitignore`: patterns in a deeper directory take precedence over
 # a parent's, whatever order this file ends up in.
+.env
+.env.*
+*.env
