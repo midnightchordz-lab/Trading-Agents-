@@ -1893,8 +1893,8 @@ loudly instead of silently never revoking.
 generated EC key pair, both Apple calls with a faked Apple (correct URLs, `grant_type`,
 `token_type_hint`), every failure mode (`invalid_client`, `invalid_grant`, 500, 200-with-no-token,
 a raised connection error), the off-until-configured behaviour, revoke-before-delete ORDER pinned
-by source inspection, no `raise` after the revocation attempt, a `git grep` for `BEGIN PRIVATE KEY`
-in tracked files, and the live configuration including the key's curve.
+by source inspection, no `raise` after the revocation attempt, a `git grep` for the PEM private-key
+header in tracked files, and the live configuration including the key's curve.
 Suite: **904 passed, 9 skipped, 0 failed.**
 
 ### Owner still has to

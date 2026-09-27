@@ -166,6 +166,27 @@ def test_the_configured_bundle_id_matches_the_app():
         "the iOS entitlement is off, so the native button cannot work in a build"
 
 
+def test_expo_apple_authentication_plugin_is_registered():
+    """The expo-apple-authentication config plugin MUST appear in the
+    app.json plugins array. Without it the build process may silently omit
+    the `com.apple.developer.applesignin` entitlement and the
+    `CFBundleAllowMixedLocalizations` Info.plist key — both needed for
+    Apple Sign-In to work on a real device. `ios.usesAppleSignIn: true`
+    alone is not sufficient: that flag triggers a warning, not the actual
+    entitlement write, if the plugin is absent from the list.
+
+    This is the most likely reason the first App Store review failed."""
+    app_json = json.load(open(os.path.join(os.path.dirname(__file__), "..", "..",
+                                           "frontend", "app.json")))
+    plugins = app_json["expo"].get("plugins", [])
+    # plugins entries can be strings or [string, options] arrays.
+    plugin_names = [p if isinstance(p, str) else p[0] for p in plugins]
+    assert "expo-apple-authentication" in plugin_names, (
+        "expo-apple-authentication is missing from app.json plugins — "
+        "the build will lack the Apple Sign-In entitlement on a real device"
+    )
+
+
 def test_the_app_no_longer_says_apple_is_coming_soon():
     """Shipping "APPLE — SOON" next to a working Google button is itself an App
     Store rejection."""
