@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from pymongo import ReturnDocument
 
 import alerts
+import apple_revoke
 import auth as au
 import limits as lim
 import mailer
@@ -117,6 +118,11 @@ class OtpVerify(BaseModel):
 class SocialSignIn(BaseModel):
     token: str  # Google id_token or Apple identity_token
     device_id: Optional[str] = None
+    # Apple only. The one-time code from the native sign-in, which is the ONLY
+    # way to obtain a refresh token — and a refresh token is the only thing
+    # Apple's revoke endpoint accepts, which App Review requires us to call on
+    # account deletion. Optional: sign-in must still work without it.
+    authorization_code: Optional[str] = None
 
 
 async def send_welcome_if_new(user: dict) -> None:
@@ -630,9 +636,25 @@ async def auth_apple(body: SocialSignIn, request: Request):
         if granted:
             await record_free_credit_grant(user["id"], body.device_id, request)
     await link_device_wallet_to_user(body.device_id, user["id"])
+    # Fire-and-forget: the code is single-use and expires in minutes, so it is
+    # now or never — but a sign-in must not wait on Apple, or fail if Apple is
+    # slow. Without a stored refresh token this account simply cannot be
+    # revoked later; deletion still works.
+    if body.authorization_code and apple_revoke.configured():
+        asyncio.create_task(store_apple_refresh_token(user["id"], body.authorization_code))
     token = au.create_session_token(user["id"], JWT_SECRET)
     return {"token": token, "user": {"id": user["id"], "email": user.get("email"),
                                      "identity": identity_for(user), "identity_type": identity_type_for(user)}}
+
+
+async def store_apple_refresh_token(user_id: str, code: str) -> None:
+    """Exchanges the authorization code and keeps the refresh token for the one
+    thing it is for: revoking this user's Apple tokens if they delete their
+    account. Never overwrites a stored token with a failure."""
+    refresh = await apple_revoke.exchange_code_for_refresh_token(code)
+    if not refresh:
+        return
+    await db.users.update_one({"id": user_id}, {"$set": {"apple_refresh_token": refresh}})
 
 
 @api_router.get("/auth/me")
@@ -689,6 +711,20 @@ async def delete_account(user: dict = Depends(get_current_user)):
     first place (see the Privacy Policy)."""
     user_id = user["id"]
     identifier = identity_for(user)
+    # Apple FIRST, while the record still exists. Apple requires an app
+    # offering Sign in with Apple to revoke the user's tokens on deletion —
+    # deleting our row alone leaves the Apple side of the relationship intact,
+    # and App Review checks for this. It is best-effort by design: the deletion
+    # must complete whether or not Apple answers, and an account that signed in
+    # before revocation was configured has no token to revoke at all.
+    apple_refresh = user.get("apple_refresh_token")
+    if apple_refresh:
+        revoked = await apple_revoke.revoke_refresh_token(apple_refresh)
+        logger.info(f"apple token revocation on account deletion: {'ok' if revoked else 'failed'}")
+    elif user.get("apple_sub"):
+        logger.info("account deletion: Apple account with no stored refresh token — "
+                    "nothing to revoke (signed in before revocation was configured, "
+                    "or the code exchange failed)")
     for form in tombstone_identifiers(identifier):
         # One tombstone per spelling, so signing back in through a different
         # path (Google returns the raw address, OTP stores the canonical one)

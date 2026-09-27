@@ -1850,3 +1850,56 @@ asserts the env files are still not ignored.
    Sign-in required. Read `REVIEW_OTP` from `backend/.env`.
 3. Apple sign-in and the reviewer login both need a **redeploy**, and Apple additionally needs a
    fresh iOS build.
+
+## Apple token revocation on account deletion — DONE and verified against Apple (2026-06-22)
+The last App Review blocker for Sign in with Apple: an app offering it must revoke the user's
+Apple tokens when they delete their account. Deleting our own row leaves the Apple side of the
+relationship intact, and Apple's technote (TN3194) is explicit that the revoke endpoint is the only
+way to do it without user interaction.
+
+WHY IT IS TWO CALLS, NOT ONE: `POST /auth/revoke` wants a REFRESH TOKEN, and native sign-in never
+produces one — it returns an identity token (which proves identity and cannot be revoked) and a
+single-use AUTHORIZATION CODE. So the code has to be exchanged at `POST /auth/token` at sign-in
+time and the refresh token stored. Both calls are authenticated with a `client_secret` that is
+itself an ES256 JWT signed with the .p8 key: `iss` = Team ID, `sub` = client id, `aud` =
+`https://appleid.apple.com`, `kid` header = Key ID. For a NATIVE app the client id is the BUNDLE
+IDENTIFIER, the same distinction that decides the identity token's audience.
+
+- New `backend/apple_revoke.py`: `configured()`, `client_secret()`,
+  `exchange_code_for_refresh_token()`, `revoke_refresh_token()`. Neither network call can raise —
+  a sign-in must not fail because an optional exchange did, and a user must never be blocked from
+  deleting their account because a third party is down.
+- `SocialSignIn` gained `authorization_code` (optional). `auth_apple` exchanges it in a background
+  task — the code is single-use and expires in minutes, so it is now or never, but the sign-in does
+  not wait on Apple. A failed exchange writes nothing.
+- `DELETE /account` revokes BEFORE deleting (the token lives on the user document) and carries on
+  regardless. An account that signed in before this existed has no stored token and nothing can be
+  done for it retroactively — that case is logged explicitly rather than looking like a success.
+- Frontend sends `credential.authorizationCode` alongside the identity token.
+
+### Credentials (owner supplied; a .p8 downloads exactly ONCE)
+`APPLE_TEAM_ID=LLOY197677`, `APPLE_KEY_ID=2VH5FS2TKK`, `APPLE_PRIVATE_KEY` = the whole PEM with
+`\n` escapes (a deployment secret is a single-line box; the module accepts both forms).
+**VERIFIED AGAINST APPLE'S LIVE ENDPOINTS**, which is the only way to know a client secret is
+right: `/auth/revoke` answered **200**, and `/auth/token` with a deliberately bogus code answered
+**400 `invalid_grant`** — NOT `invalid_client`. `invalid_grant` means Apple authenticated us and
+only rejected the fake code, so the team id, key id, private key and client id all match.
+The owner first sent a Key ID of `Milokiko*25`, which is a password, not a key id — a Key ID is
+exactly 10 alphanumeric characters, and a test now asserts that shape so the same confusion fails
+loudly instead of silently never revoking.
+
+### Tests
+`tests/test_apple_revocation.py` (24): the client secret's claims and `kid` verified against a real
+generated EC key pair, both Apple calls with a faked Apple (correct URLs, `grant_type`,
+`token_type_hint`), every failure mode (`invalid_client`, `invalid_grant`, 500, 200-with-no-token,
+a raised connection error), the off-until-configured behaviour, revoke-before-delete ORDER pinned
+by source inspection, no `raise` after the revocation attempt, a `git grep` for `BEGIN PRIVATE KEY`
+in tracked files, and the live configuration including the key's curve.
+Suite: **904 passed, 9 skipped, 0 failed.**
+
+### Owner still has to
+1. Set `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` in **Deployment -> Secrets** (the
+   workspace values do not travel), then publish.
+2. Generate a fresh iOS build — Apple sign-in cannot be exercised in Expo Go or on web.
+3. Optionally revoke key `2VH5FS2TKK` in the Apple portal and issue a replacement entered only in
+   the Secrets panel, since this one passed through chat.

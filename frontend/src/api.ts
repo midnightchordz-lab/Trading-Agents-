@@ -374,10 +374,20 @@ export const api = {
   // The raw Apple identity token. It is never trusted here — the backend
   // verifies its signature against Apple's published keys and checks the
   // audience before it becomes a session.
-  appleSignIn: (identityToken: string, deviceId?: string) =>
+  //
+  // `authorizationCode` is sent alongside it and is NOT for signing in: it is
+  // the only thing that can be exchanged for a refresh token, and a refresh
+  // token is the only thing Apple's revoke endpoint accepts — which Apple
+  // requires us to call when the user deletes their account. It is single-use
+  // and expires in minutes, so it has to travel with the sign-in.
+  appleSignIn: (identityToken: string, deviceId?: string, authorizationCode?: string | null) =>
     j<{ token: string; user: SessionUser }>(`/auth/apple`, {
       method: "POST",
-      body: JSON.stringify({ token: identityToken, device_id: deviceId }),
+      body: JSON.stringify({
+        token: identityToken,
+        device_id: deviceId,
+        ...(authorizationCode ? { authorization_code: authorizationCode } : {}),
+      }),
     }),
   authMe: (token: string) =>
     j<SessionUser>(`/auth/me`, { headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` } }),

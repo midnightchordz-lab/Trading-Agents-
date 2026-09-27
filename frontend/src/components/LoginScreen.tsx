@@ -145,7 +145,11 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
         return;
       }
       const deviceId = await getWalletDeviceId();
-      const res = await api.appleSignIn(credential.identityToken, deviceId);
+      const res = await api.appleSignIn(
+        credential.identityToken,
+        deviceId,
+        credential.authorizationCode
+      );
       await setStoredToken(res.token);
       onAuthenticated();
     } catch (e: any) {
