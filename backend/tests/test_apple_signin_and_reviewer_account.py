@@ -276,3 +276,33 @@ def test_the_fixed_code_is_never_in_a_response_or_a_log():
     assert "au.hash_otp(REVIEW_OTP)" in request_fn
     for leak in ('"debug_otp": REVIEW_OTP', "f\"{REVIEW_OTP}", "{REVIEW_OTP}"):
         assert leak not in request_fn, "the fixed code is being echoed or logged"
+
+
+def test_review_credentials_not_committed_to_git():
+    """The reviewer identifier and OTP must never appear together in any
+    tracked file — that is what turned commit 0acddda into a public
+    credential. A single field in isolation is fine (the identifier is in
+    test_credentials.md as documentation); what is dangerous is the pair.
+
+    This test reads the LIVE values from the env so it will catch a
+    rotation that accidentally re-embeds a new code in source too."""
+    import subprocess
+    identifier = auth_routes.REVIEW_IDENTIFIER
+    otp = auth_routes.REVIEW_OTP
+    if not identifier or not otp:
+        pytest.skip("reviewer account not configured")
+    root = os.path.join(os.path.dirname(__file__), "..", "..")
+    # Search committed content (--cached searches the index; without a ref
+    # git grep searches the working tree, which includes .env — we want
+    # the committed/staged snapshot, which is what a reader of the public
+    # repo sees).
+    result = subprocess.run(
+        ["git", "grep", "-l", otp],
+        cwd=root, capture_output=True, text=True,
+    )
+    hits = [f for f in result.stdout.splitlines()
+            if not f.startswith("backend/.env") and not f.startswith(".env")]
+    assert not hits, (
+        f"REVIEW_OTP appears in tracked file(s): {hits} — "
+        "rotate the code immediately and remove it from those files"
+    )
