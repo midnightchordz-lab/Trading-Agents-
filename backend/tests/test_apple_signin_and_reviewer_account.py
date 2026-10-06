@@ -297,11 +297,15 @@ def test_review_credentials_not_committed_to_git():
     # the committed/staged snapshot, which is what a reader of the public
     # repo sees).
     result = subprocess.run(
-        ["git", "grep", "-l", otp],
+        # -w: the code as a whole word, so digits inside a longer number or a
+        # base64 hash don't count; -F: a literal string, not a regex. Lockfiles
+        # and the Firebase client config are machine-generated and hold nothing
+        # a person typed.
+        ["git", "grep", "-l", "-w", "-F", "-e", otp, "--", ".",
+         ":!*.lock", ":!frontend/google-services.json"],
         cwd=root, capture_output=True, text=True,
     )
-    hits = [f for f in result.stdout.splitlines()
-            if not f.startswith("backend/.env") and not f.startswith(".env")]
+    hits = result.stdout.splitlines()
     assert not hits, (
         f"REVIEW_OTP appears in tracked file(s): {hits} — "
         "rotate the code immediately and remove it from those files"

@@ -1904,16 +1904,20 @@ Suite: **904 passed, 9 skipped, 0 failed.**
 3. Optionally revoke key `2VH5FS2TKK` in the Apple portal and issue a replacement entered only in
    the Secrets panel, since this one passed through chat.
 
-## Firebase Crashlytics + Analytics (2026-06-23) — CODE DONE, needs config files
+## Firebase Crashlytics + Analytics (2026-10-06) — ANDROID LIVE IN CONFIG, iOS pending
 - **Packages**: `@react-native-firebase/app|crashlytics|analytics` 26.4.0 + `expo-build-properties`. Not usable in Expo Go (native SDKs) — the wrapper no-ops there.
-- **Gated build config** (`frontend/app.config.js`): the Firebase config plugins and `googleServicesFile` paths are added ONLY when both `frontend/google-services.json` and `frontend/GoogleService-Info.plist` exist (the plugins throw otherwise). Until the owner adds them, the resolved config is app.json unchanged.
+- **Gated build config, per platform** (`frontend/app.config.js`):
+  - `frontend/google-services.json` present: sets `android.googleServicesFile` (Expo itself copies the file and applies the Google Services Gradle plugin) and adds the Android-only `@react-native-firebase/crashlytics` plugin.
+  - `frontend/GoogleService-Info.plist` present: sets `ios.googleServicesFile` and adds `@react-native-firebase/app` (its iOS half throws without the plist and adds `FirebaseApp.configure()`) plus the iOS-only analytics plugin.
+  - A platform without its file builds exactly as before.
+  - **Android only for now:** `google-services.json` (project `tradingagents-c5d4a`) is committed; there is no plist yet.
 - **Always on** (app.json): `expo-build-properties` `ios.useFrameworks: "dynamic"` (RNFB resolves the Firebase Apple SDK via SPM, which needs dynamic frameworks, and RNFB is autolinked regardless of the files) and `android.blockedPermissions: [AD_ID]`.
 - **Privacy** (`frontend/firebase.json`): Analytics collection OFF by default; ad-ID / SSAID / ad-network / ad-storage signals all off; iOS built `withoutAdIdSupport`. `src/firebase.ts` `setTelemetryUser(id, consented)` turns Analytics on and attaches the account id to crash reports ONLY after consent; signed-out/pre-consent crash reports stay anonymous. Events never carry tickers: `analysis_started{source}`, `compare_started`, `portfolio_optimized{objective,holdings}`, `wallet_topup{method[,value,currency]}`; screen views by route (`/analysis/[id]` collapsed). `src/firebase.web.ts` is a no-op for the web build.
 - **Consent**: consent screen now discloses crash reports/app-usage statistics and Google Firebase; `CONSENT_VERSION` 1.0 -> **1.1**, so every existing user sees the consent screen once more (test fixtures updated to 1.1).
 - **Verified**: `expo config --type public` without Firebase files — no `@react-native-firebase/*` plugins, no `googleServicesFile`, `AD_ID` blocked, `useFrameworks: dynamic`. `test_firebase_config.py` (7/7 passed). Consent tests (15/15 passed).
 
 ### Owner still has to
-1. Firebase console: add an Android app and an iOS app, both `com.emergent.tradeagentapp.kht259`; download `google-services.json` + `GoogleService-Info.plist` into `frontend/`.
+1. Android: done, `google-services.json` committed. Still to do: restrict its API key in Google Cloud Console to the Android package `com.emergent.tradeagentapp.kht259`, because the repo is public. iOS later: add the iOS app (same id) in Firebase and drop `GoogleService-Info.plist` into `frontend/`.
 2. Enable Crashlytics in the console; rebuild (Android + iOS) — Firebase only exists in a fresh native build.
 3. Update the privacy policy (tradingagents.in/privacy.html) for Firebase crash/usage data.
 4. Play Console data-safety form: declare Crash logs, Diagnostics and App interactions (collected, shared with Google, not used for ads, not linked to tickers); Advertising ID: not used. App Store Connect privacy labels: same.
