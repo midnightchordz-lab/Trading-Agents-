@@ -204,3 +204,8 @@ def test_ambiguous_name_suggests_but_asks():
 def test_non_tradeable_results_ignored():
     assert pi.choose_symbol("xyz", [c("XYZ", "Some Option", type_="OPTION")])[:2] == ("not_found", None)
     assert pi.choose_symbol("xyz", [])[:2] == ("not_found", None)
+
+
+def test_a_nameless_search_hit_is_never_auto_accepted():
+    status, symbol, _ = pi.choose_symbol("Relaince", [c("XYZ.NS", None)])
+    assert status == "check" and symbol == "XYZ.NS"

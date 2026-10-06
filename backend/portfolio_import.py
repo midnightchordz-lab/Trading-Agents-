@@ -227,8 +227,12 @@ def choose_symbol(user_input: str, candidates: list[dict]) -> tuple[str, Optiona
     # A name match is trusted only when the listing's own name starts with what
     # was typed (or vice versa) — a typo can still return one wrong company.
     wanted = _norm(user_input)
-    named = [c for c in cands if wanted and (_norm(c.get("name")).startswith(wanted)
-                                              or wanted.startswith(_norm(c.get("name")) or ""))]
+
+    def _name_matches(name: object) -> bool:
+        n = _norm(name)
+        return bool(wanted and n) and (n.startswith(wanted) or wanted.startswith(n))
+
+    named = [c for c in cands if _name_matches(c.get("name"))]
     if len(named) == 1:
         return "ok", named[0]["symbol"], cands
     named_nse = [c for c in named if c["symbol"].upper().endswith(".NS")]

@@ -6,15 +6,15 @@ calculation over what has already been produced.
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request
+from starlette.datastructures import UploadFile
 from pydantic import BaseModel, Field
 
-import portfolio_import as pi
+import portfolio_import as pimport
 import portfolio_optimizer as pfopt
 from limits import limit_portfolio, limit_portfolio_import, limit_portfolio_import_global
 from core import db, logger
 from market_data import TICKER_RE, _yf_get, fetch_quote_sync, search_sync
-from deps import require_user
 
 api_router = APIRouter(prefix="/api")
 
@@ -153,54 +153,94 @@ async def portfolio_optimize(body: PortfolioOptimizeRequest):
     }
 
 
+# --- Holdings import from a spreadsheet (additive) ---
+# Parses an uploaded .xlsx/.csv and resolves each stock name to a ticker, but
+# saves nothing: holdings live on the device, so the app shows this result as
+# a preview and the user confirms which rows to add.
+_IMPORT_SEARCH_CONCURRENCY = 5
+# The file cap plus room for the multipart envelope (boundaries, part headers).
+_IMPORT_MAX_BODY = pimport.MAX_FILE_BYTES + 64 * 1024
+_TOO_BIG = "That file is too large (1 MB max)."
+
+
+def _byte_capped(receive, limit: int):
+    """Wrap the ASGI receive channel so reading stops with a 413 the moment the
+    body passes `limit` — covers chunked uploads that send no Content-Length."""
+    seen = 0
+
+    async def capped():
+        nonlocal seen
+        message = await receive()
+        if message["type"] == "http.request":
+            seen += len(message.get("body", b""))
+            if seen > limit:
+                raise HTTPException(status_code=413, detail=_TOO_BIG)
+        return message
+
+    return capped
+
+
+# The handler takes the raw Request rather than an `UploadFile = File(...)`
+# parameter on purpose: with a File parameter FastAPI reads and spools the
+# entire upload BEFORE running dependencies, so an anonymous caller could push
+# gigabytes at the server before the 401 or the rate limit ever ran. Here the
+# session check and both limiters run first, and the body is then read with a
+# hard byte cap.
 @api_router.post(
     "/portfolio/import",
-    dependencies=[
-        Depends(limit_portfolio_import),
-        Depends(limit_portfolio_import_global),
-        Depends(require_user),
-    ],
+    dependencies=[Depends(limit_portfolio_import), Depends(limit_portfolio_import_global)],
 )
-async def portfolio_import_file(file: UploadFile = File(...)):
-    # Read and size-gate the stream before we hand it to the parser; a 1 MB
-    # gate here stops a multi-MB upload from ever reaching openpyxl.
-    raw = await file.read(pi.MAX_FILE_BYTES + 1)
-    if len(raw) > pi.MAX_FILE_BYTES:
-        raise HTTPException(status_code=413, detail="That file is too large (1 MB max).")
+async def portfolio_import_file(request: Request):
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > _IMPORT_MAX_BODY:
+        raise HTTPException(status_code=413, detail=_TOO_BIG)
+    capped = Request(request.scope, _byte_capped(request.receive, _IMPORT_MAX_BODY))
+    try:
+        form = await capped.form(max_files=1, max_fields=1)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Couldn't read that upload. Try again.")
+    try:
+        upload = form.get("file")
+        if not isinstance(upload, UploadFile):
+            raise HTTPException(status_code=400, detail="No file was uploaded.")
+        filename = upload.filename or ""
+        data = await upload.read(pimport.MAX_FILE_BYTES + 1)
+    finally:
+        await form.close()
 
     try:
-        parsed = pi.parse_holdings_file(file.filename or "", raw)
-    except pi.HoldingsFileError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        # Parsing is CPU-bound and synchronous; off the event loop so one
+        # upload can't stall every other request.
+        rows = await asyncio.to_thread(pimport.parse_holdings_file, filename, data)
+    except pimport.HoldingsFileError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        logger.exception("portfolio import: unreadable file")
+        raise HTTPException(status_code=400, detail="Couldn't read that file. Try saving it again as .xlsx or CSV.")
 
-    # Resolve every valid (non-error) row's label to a tradeable ticker via
-    # Yahoo search. Fan them out concurrently; errors per search are silent
-    # (the row gets status "not_found"), so one bad query can't fail the batch.
+    sem = asyncio.Semaphore(_IMPORT_SEARCH_CONCURRENCY)
+
     async def resolve(entry: dict) -> dict:
         if entry["error"]:
             return {**entry, "status": "invalid", "symbol": None, "candidates": []}
-        try:
-            candidates = await asyncio.to_thread(search_sync, entry["input"])
-        except Exception:
-            candidates = []
-        status, symbol, cands = pi.choose_symbol(entry["input"], candidates)
+        async with sem:
+            try:
+                found = await asyncio.to_thread(search_sync, entry["input"])
+            except Exception as e:
+                logger.warning(f"portfolio import: search failed: {e}")
+                return {**entry, "status": "not_found", "symbol": None, "candidates": [],
+                        "error": "Couldn't look this up right now — try the exact symbol, e.g. RELIANCE.NS"}
+        status, symbol, cands = pimport.choose_symbol(entry["input"], found)
         return {
-            "row": entry["row"],
-            "input": entry["input"],
-            "quantity": entry["quantity"],
-            "avg_price": entry["avg_price"],
-            "error": entry["error"],
+            **entry,
             "status": status,
             "symbol": symbol,
-            "candidates": cands,
+            "candidates": [{"symbol": c["symbol"], "name": c.get("name"), "exchange": c.get("exchange")} for c in cands],
+            "error": "No matching stock found" if status == "not_found" else None,
         }
 
-    rows = await asyncio.gather(*[resolve(e) for e in parsed])
-    counts = {
-        "ok": sum(1 for r in rows if r["status"] == "ok"),
-        "check": sum(1 for r in rows if r["status"] == "check"),
-        "not_found": sum(1 for r in rows if r["status"] == "not_found"),
-        "invalid": sum(1 for r in rows if r["status"] == "invalid"),
-    }
-    return {"rows": list(rows), "counts": counts}
-
+    resolved = await asyncio.gather(*(resolve(e) for e in rows))
+    counts = {k: sum(1 for r in resolved if r["status"] == k) for k in ("ok", "check", "not_found", "invalid")}
+    return {"rows": resolved, "counts": counts}
