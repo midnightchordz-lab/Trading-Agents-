@@ -42,6 +42,12 @@ NEWS_LLM_PER_MIN = rl.env_int("RL_NEWS_LLM_PER_MIN", 10)
 NEWS_LLM_GLOBAL_PER_MIN = rl.env_int("RL_NEWS_LLM_GLOBAL_PER_MIN", 60)
 MARKET_PER_MIN = rl.env_int("RL_MARKET_PER_MIN", 120)
 PORTFOLIO_PER_MIN = rl.env_int("RL_PORTFOLIO_PER_MIN", 10)
+# One import fans out to up to 50 Yahoo symbol searches, so it gets its own,
+# much tighter, per-account bucket.
+PORTFOLIO_IMPORT_PER_MIN = rl.env_int("RL_PORTFOLIO_IMPORT_PER_MIN", 3)
+# Whole-deployment ceiling on imports, so many accounts together can't turn
+# the endpoint into a Yahoo amplifier either.
+PORTFOLIO_IMPORT_GLOBAL_PER_MIN = rl.env_int("RL_PORTFOLIO_IMPORT_GLOBAL_PER_MIN", 30)
 
 
 class PerIp:
@@ -101,3 +107,8 @@ limit_pay_config = PerIp("pay_config", PAY_CONFIG_PER_MIN)
 # same upstream (Yahoo) and the point is to protect that quota.
 limit_market = PerIp("market", MARKET_PER_MIN)
 limit_portfolio = PerIp("portfolio", PORTFOLIO_PER_MIN)
+limit_portfolio_import = PerUser("portfolio_import", PORTFOLIO_IMPORT_PER_MIN)
+
+
+async def limit_portfolio_import_global() -> None:
+    await rl.global_enforce("portfolio_import_global", PORTFOLIO_IMPORT_GLOBAL_PER_MIN, 60)

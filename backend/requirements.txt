@@ -20,10 +20,12 @@ cloudpickle==3.1.2
 cryptography==50.0.0
 cvxpy==1.9.2
 distro==1.9.0
+defusedxml==0.7.1
 dnspython==2.8.0
 ecdsa==0.19.2
 email-validator==2.3.0
 emergentintegrations==0.2.0
+et-xmlfile==2.0.0
 execnet==2.1.2
 fastapi==0.141.1
 fastuuid==0.14.0
@@ -94,6 +96,7 @@ pyflakes==3.4.0
 Pygments==2.20.0
 PyJWT==2.13.0
 pymongo==4.6.3
+openpyxl==3.1.5
 pyparsing==3.3.2
 pyportfolioopt==1.6.0
 pytest==9.1.1

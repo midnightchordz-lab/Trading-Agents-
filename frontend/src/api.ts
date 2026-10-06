@@ -122,6 +122,24 @@ export type OhlcData = {
 
 export type PortfolioHoldingInput = { symbol: string; quantity: number; avg_price: number };
 
+export type ImportCandidate = { symbol: string; name?: string | null; type?: string | null; exchange?: string | null };
+export type ImportRow = {
+  row: number;
+  input: string;
+  quantity: number | null;
+  avg_price: number | null;
+  error: string | null;
+  /** "ok" — unambiguous; "check" — plausible but needs confirmation;
+   *  "not_found" — no tradeable listing; "invalid" — parse-time error. */
+  status: "ok" | "check" | "not_found" | "invalid";
+  symbol: string | null;
+  candidates: ImportCandidate[];
+};
+export type ImportResult = {
+  rows: ImportRow[];
+  counts: { ok: number; check: number; not_found: number; invalid: number };
+};
+
 export type PortfolioAction = {
   symbol: string;
   current_weight: number;
@@ -282,7 +300,10 @@ async function j<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, {
     ...opts,
     headers: {
-      "Content-Type": "application/json",
+      // Do not set Content-Type for multipart/form-data: the browser must set
+      // the boundary itself, and a manually set header without a boundary
+      // produces an unparseable stream.
+      ...(opts?.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(opts?.headers || {}),
     },
@@ -323,6 +344,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  /** Upload a .xlsx or .csv file; returns parsed rows with resolved tickers.
+   *  On web, `asset.file` is the native File object; on native it is a URI. */
+  portfolioImport: (asset: { uri: string; name: string; mimeType?: string | null; file: Blob | null }) => {
+    const form = new FormData();
+    if (asset.file) {
+      form.append("file", asset.file, asset.name);
+    } else {
+      // React Native: FormData accepts a { uri, name, type } blob literal.
+      form.append("file", { uri: asset.uri, name: asset.name, type: asset.mimeType ?? "application/octet-stream" } as unknown as Blob);
+    }
+    return j<ImportResult>(`/portfolio/import`, { method: "POST", body: form });
+  },
   trending: () => j<{ results: Quote[] }>(`/trending`),
   markets: (category: string) => j<{ results: Quote[] }>(`/markets/${category}`),
   analyze: (symbol: string, name?: string, language?: string, deviceId?: string) =>

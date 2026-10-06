@@ -6,6 +6,6 @@ export function setTelemetryUser(_userId: string | null, _consented: boolean): v
 
 export function trackScreen(_pathname: string): void {}
 
-type EventName = "analysis_started" | "compare_started" | "portfolio_optimized" | "wallet_topup";
+type EventName = "analysis_started" | "compare_started" | "portfolio_optimized" | "portfolio_imported" | "wallet_topup";
 
 export function trackEvent(_name: EventName, _params?: Record<string, string | number>): void {}

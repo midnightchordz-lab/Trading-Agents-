@@ -17,6 +17,7 @@ import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 import { useWatchlist } from "@/src/watchlist";
 import { api, Quote, SearchResult } from "@/src/api";
+import { ImportHoldings, ImportedHolding } from "@/src/components/ImportHoldings";
 import { trackEvent } from "@/src/firebase";
 
 // Portfolio tab: manual holdings + watchlist quick-add, then optimize against
@@ -29,6 +30,8 @@ type Objective = "hrp" | "max_sharpe" | "min_volatility";
 
 const KEY_HOLDINGS = "portfolio:holdings";
 const KEY_CASH = "portfolio:cash";
+// Same cap as POST /api/portfolio/optimize, which rejects longer lists.
+const MAX_HOLDINGS = 50;
 
 const OBJECTIVES: { id: Objective; label: string; blurb: string }[] = [
   { id: "hrp", label: "HRP", blurb: "Hierarchical Risk Parity — no return forecast, more robust." },
@@ -135,6 +138,12 @@ export default function PortfolioScreen() {
     persist([...holdings, { symbol, quantity: String(quantity), avgPrice: String(avgPrice) }]);
     setForm({ symbol: "", quantity: "", avgPrice: "" });
     setSearchResults([]);
+  };
+
+  // Rows confirmed in the import preview; ImportHoldings has already dropped
+  // duplicates and anything over MAX_HOLDINGS.
+  const addImported = (list: ImportedHolding[]) => {
+    if (list.length) persist([...holdings, ...list]);
   };
 
   // Runs the existing /api/analyze -> poll /api/analysis/{id} flow for symbols
@@ -381,6 +390,11 @@ export default function PortfolioScreen() {
               </View>
             </View>
           ) : null}
+          <ImportHoldings
+            existingSymbols={holdings.map((h) => h.symbol)}
+            maxHoldings={MAX_HOLDINGS}
+            onAdd={addImported}
+          />
         </View>
 
         {/* Current holdings */}

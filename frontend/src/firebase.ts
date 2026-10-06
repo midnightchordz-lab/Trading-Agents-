@@ -72,7 +72,7 @@ export function trackScreen(pathname: string): void {
   );
 }
 
-type EventName = "analysis_started" | "compare_started" | "portfolio_optimized" | "wallet_topup";
+type EventName = "analysis_started" | "compare_started" | "portfolio_optimized" | "portfolio_imported" | "wallet_topup";
 
 export function trackEvent(name: EventName, params?: Record<string, string | number>): void {
   safely(({ analytics }) => analytics.logEvent(analytics.getAnalytics(), name, params));

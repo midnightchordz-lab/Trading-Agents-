@@ -6,13 +6,15 @@ calculation over what has already been produced.
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
 
+import portfolio_import as pi
 import portfolio_optimizer as pfopt
-from limits import limit_portfolio
+from limits import limit_portfolio, limit_portfolio_import, limit_portfolio_import_global
 from core import db, logger
-from market_data import TICKER_RE, _yf_get, fetch_quote_sync
+from market_data import TICKER_RE, _yf_get, fetch_quote_sync, search_sync
+from deps import require_user
 
 api_router = APIRouter(prefix="/api")
 
@@ -149,4 +151,56 @@ async def portfolio_optimize(body: PortfolioOptimizeRequest):
         "sharpe": result["sharpe"],
         "current_prices": current_prices,
     }
+
+
+@api_router.post(
+    "/portfolio/import",
+    dependencies=[
+        Depends(limit_portfolio_import),
+        Depends(limit_portfolio_import_global),
+        Depends(require_user),
+    ],
+)
+async def portfolio_import_file(file: UploadFile = File(...)):
+    # Read and size-gate the stream before we hand it to the parser; a 1 MB
+    # gate here stops a multi-MB upload from ever reaching openpyxl.
+    raw = await file.read(pi.MAX_FILE_BYTES + 1)
+    if len(raw) > pi.MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="That file is too large (1 MB max).")
+
+    try:
+        parsed = pi.parse_holdings_file(file.filename or "", raw)
+    except pi.HoldingsFileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Resolve every valid (non-error) row's label to a tradeable ticker via
+    # Yahoo search. Fan them out concurrently; errors per search are silent
+    # (the row gets status "not_found"), so one bad query can't fail the batch.
+    async def resolve(entry: dict) -> dict:
+        if entry["error"]:
+            return {**entry, "status": "invalid", "symbol": None, "candidates": []}
+        try:
+            candidates = await asyncio.to_thread(search_sync, entry["input"])
+        except Exception:
+            candidates = []
+        status, symbol, cands = pi.choose_symbol(entry["input"], candidates)
+        return {
+            "row": entry["row"],
+            "input": entry["input"],
+            "quantity": entry["quantity"],
+            "avg_price": entry["avg_price"],
+            "error": entry["error"],
+            "status": status,
+            "symbol": symbol,
+            "candidates": cands,
+        }
+
+    rows = await asyncio.gather(*[resolve(e) for e in parsed])
+    counts = {
+        "ok": sum(1 for r in rows if r["status"] == "ok"),
+        "check": sum(1 for r in rows if r["status"] == "check"),
+        "not_found": sum(1 for r in rows if r["status"] == "not_found"),
+        "invalid": sum(1 for r in rows if r["status"] == "invalid"),
+    }
+    return {"rows": list(rows), "counts": counts}
 
