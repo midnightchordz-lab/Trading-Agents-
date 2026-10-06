@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "911820289849",
+    "project_id": "tradingagents-c5d4a",
+    "storage_bucket": "tradingagents-c5d4a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:911820289849:android:8686738a8ee110c7f51ae8",
+        "android_client_info": {
+          "package_name": "com.emergent.tradeagentapp.kht259"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBKd5e6U_Rr-9zGCHCNjFP7kJbDmdlzMTI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,9 +1,9 @@
-// Extends app.json. Firebase (Crashlytics + Analytics) is switched on only
-// when BOTH platform config files from the Firebase console are present:
-//   frontend/google-services.json        (Android app com.emergent.tradeagentapp.kht259)
-//   frontend/GoogleService-Info.plist    (iOS app, same bundle id)
-// Until then this returns app.json unchanged, so builds keep working — the
-// Firebase config plugins throw if their file is missing.
+// Extends app.json. Firebase (Crashlytics + Analytics) is switched on per
+// platform, by the config file from the Firebase console being present:
+//   frontend/google-services.json        -> Android (com.emergent.tradeagentapp.kht259)
+//   frontend/GoogleService-Info.plist    -> iOS (same bundle id)
+// Without a platform's file that platform builds exactly as before — the
+// Firebase iOS config plugin throws if its file is missing.
 const fs = require("fs");
 const path = require("path");
 
@@ -12,17 +12,29 @@ const IOS_FILE = "./GoogleService-Info.plist";
 
 module.exports = ({ config, projectRoot }) => {
   const has = (f) => fs.existsSync(path.join(projectRoot, f));
-  if (!has(ANDROID_FILE) || !has(IOS_FILE)) return config;
+  const android = has(ANDROID_FILE);
+  const ios = has(IOS_FILE);
+  if (!android && !ios) return config;
+
+  const plugins = [...(config.plugins || [])];
+  if (ios) {
+    // Its iOS half adds FirebaseApp.configure() and the plist; its Android half
+    // duplicates what Expo already does for android.googleServicesFile.
+    plugins.push("@react-native-firebase/app");
+    plugins.push(["@react-native-firebase/analytics", { ios: { withoutAdIdSupport: true } }]);
+  }
+  if (android) {
+    // Expo itself copies google-services.json and applies the Google Services
+    // Gradle plugin when android.googleServicesFile is set; this adds the
+    // Crashlytics Gradle plugin (Android-only).
+    plugins.push("@react-native-firebase/crashlytics");
+  }
 
   return {
     ...config,
-    android: { ...config.android, googleServicesFile: ANDROID_FILE },
-    ios: { ...config.ios, googleServicesFile: IOS_FILE },
-    plugins: [
-      ...(config.plugins || []),
-      "@react-native-firebase/app",
-      "@react-native-firebase/crashlytics",
-      ["@react-native-firebase/analytics", { ios: { withoutAdIdSupport: true } }],
-    ],
+    android: android ? { ...config.android, googleServicesFile: ANDROID_FILE } : config.android,
+    ios: ios ? { ...config.ios, googleServicesFile: IOS_FILE } : config.ios,
+    plugins,
   };
 };
+

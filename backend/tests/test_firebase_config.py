@@ -46,13 +46,18 @@ def test_ios_uses_dynamic_frameworks_for_firebase_spm():
     assert props and props[0]["ios"]["useFrameworks"] == "dynamic"
 
 
-def test_firebase_plugins_are_gated_on_both_config_files():
-    """The Firebase config plugins throw when google-services.json or
-    GoogleService-Info.plist is missing, so app.config.js must only add them
-    when both exist — and app.json must never list them directly."""
+def test_firebase_is_gated_per_platform_on_its_config_file():
+    """Each platform turns Firebase on only when its own config file exists:
+    the @react-native-firebase/app plugin's iOS half throws without
+    GoogleService-Info.plist (and would add FirebaseApp.configure()), so it is
+    added only with the plist. Android needs only google-services.json, which
+    Expo itself wires up via android.googleServicesFile, plus the Android-only
+    Crashlytics plugin. app.json must never list the Firebase plugins."""
     src = _read("app.config.js")
-    assert "google-services.json" in src and "GoogleService-Info.plist" in src
-    assert re.search(r"if \(!has\(ANDROID_FILE\) \|\| !has\(IOS_FILE\)\) return config;", src)
+    assert 'const android = has(ANDROID_FILE);' in src and 'const ios = has(IOS_FILE);' in src
+    assert re.search(r'if \(ios\) \{\s*(//[^\n]*\n\s*)*plugins\.push\("@react-native-firebase/app"\)', src)
+    assert re.search(r'if \(android\) \{\s*(//[^\n]*\n\s*)*plugins\.push\("@react-native-firebase/crashlytics"\)', src)
+    assert "googleServicesFile: ANDROID_FILE" in src and "googleServicesFile: IOS_FILE" in src
     plugins = json.loads(_read("app.json"))["expo"]["plugins"]
     names = [p[0] if isinstance(p, list) else p for p in plugins]
     assert not [n for n in names if n.startswith("@react-native-firebase/")]
