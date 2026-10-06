@@ -58,7 +58,7 @@ def _mk_user(phone=None, email=None, include_free_credits=True):
         "created_at": datetime.now(timezone.utc).isoformat(),
         # /analyze is gated on recorded consent for signed-in non-admin
         # accounts (DPDP), so a usable test account has to have given it.
-        "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.0"},
+        "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.1"},
     }
     if include_free_credits:
         doc["free_credits_remaining"] = wal.FREE_CREDITS_ON_SIGNUP

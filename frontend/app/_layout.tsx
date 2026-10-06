@@ -1,4 +1,4 @@
-import { Stack } from "expo-router";
+import { Stack, usePathname } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect, useState } from "react";
 import { LogBox } from "react-native";
@@ -15,6 +15,7 @@ import { initLanguage } from "@/src/i18n";
 import { useAuthGate, AuthContext } from "@/src/auth";
 import { LoginScreen } from "@/src/components/LoginScreen";
 import { ConsentScreen } from "@/src/components/ConsentScreen";
+import { setTelemetryUser, trackScreen } from "@/src/firebase";
 
 // Login is required before any screen renders — set to false to make it
 // optional again without removing the mechanism.
@@ -44,6 +45,17 @@ export default function RootLayout() {
 
   const ready = (iconsLoaded || iconsError) && (fontsLoaded || fontsError) && langReady;
   const { checking: authChecking, user, refresh: refreshAuth, signOut } = useAuthGate();
+  const pathname = usePathname();
+  const consented = user?.consent_given === true;
+
+  // Analytics, and the account id on crash reports, only after consent.
+  useEffect(() => {
+    if (!authChecking) setTelemetryUser(user?.id ?? null, consented);
+  }, [authChecking, user?.id, consented]);
+
+  useEffect(() => {
+    if (consented) trackScreen(pathname);
+  }, [consented, pathname]);
 
   useEffect(() => {
     initLanguage().finally(() => setLangReady(true));

@@ -59,7 +59,7 @@ def mk_user(balance=0.0, currency="USD", free_credits=0):
         "id": uid,
         "email": f"{uid}@example.com",
         "free_credits_remaining": free_credits,
-        "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.0"},
+        "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.1"},
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     _db.wallets.insert_one({"device_id": f"user:{uid}", "balance": balance, "currency": currency})

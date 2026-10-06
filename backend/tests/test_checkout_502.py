@@ -44,7 +44,7 @@ def seed_account(phone=None, email=None, name=None, currency=None):
     doc = {"id": uid, "phone": phone, "email": email or (None if phone else f"{uid}@example.com"),
            "identity_type": "phone" if phone else "email",
            "google_sub": None, "apple_sub": None, "free_credits_remaining": 0,
-           "consent": {"agreed": True, "agreed_at": datetime.now(timezone.utc).isoformat(), "version": "1.0"},
+           "consent": {"agreed": True, "agreed_at": datetime.now(timezone.utc).isoformat(), "version": "1.1"},
            "created_at": datetime.now(timezone.utc).isoformat()}
     if name:
         doc["name"] = name

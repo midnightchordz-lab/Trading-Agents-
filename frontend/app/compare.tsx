@@ -9,6 +9,7 @@ import { MagnifyingGlass, X, ArrowsLeftRight } from "phosphor-react-native";
 
 import { colors, fonts, spacing, BORDER, verdictColors, changeColor, CTA_GRADIENT } from "@/src/theme";
 import { api, Analysis, SearchResult } from "@/src/api";
+import { trackEvent } from "@/src/firebase";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
 
 type Sel = { symbol: string; name: string };
@@ -232,6 +233,7 @@ export default function CompareScreen() {
       ]);
       setIdA(ra.id);
       setIdB(rb.id);
+      trackEvent("compare_started");
     } catch {
       setComparing(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);

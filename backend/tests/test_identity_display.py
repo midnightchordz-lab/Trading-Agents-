@@ -38,7 +38,7 @@ def seed(**fields):
         "email": None,
         "google_sub": None,
         "apple_sub": None,
-        "consent": {"agreed": True, "agreed_at": datetime.now(timezone.utc).isoformat(), "version": "1.0"},
+        "consent": {"agreed": True, "agreed_at": datetime.now(timezone.utc).isoformat(), "version": "1.1"},
         "created_at": datetime.now(timezone.utc).isoformat(),
         **fields,
     })

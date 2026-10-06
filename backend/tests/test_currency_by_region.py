@@ -36,7 +36,7 @@ def make_user(phone=None, email=None):
         "id": uid,
         "phone": phone,
         "email": email or f"{uid}@example.com",
-        "consent": {"agreed": True, "agreed_at": datetime.now(timezone.utc).isoformat(), "version": "1.0"},
+        "consent": {"agreed": True, "agreed_at": datetime.now(timezone.utc).isoformat(), "version": "1.1"},
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     _CREATED.append(uid)

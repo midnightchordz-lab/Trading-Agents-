@@ -66,6 +66,7 @@ export function ConsentScreen({ onAgreed }: Props) {
             "Your phone number or email address, so you can sign in.",
             "If you use Google sign-in: your name, email, and profile picture.",
             "Your wallet balance and free-credit count, so we know what you've paid for and what's still free.",
+            "Crash reports and app-usage statistics (which screens and features are used), to find bugs and improve the app. These never include the tickers you search.",
           ]}
         />
         <Section
@@ -92,6 +93,7 @@ export function ConsentScreen({ onAgreed }: Props) {
             "Our email provider, to deliver email sign-in codes and account emails.",
             "Razorpay, to process payments if you top up your wallet — they handle your actual card or bank details directly; we never see that information ourselves.",
             "Google, only if you choose to sign in with Google.",
+            "Google Firebase, to receive crash reports and app-usage statistics.",
           ]}
         />
         <Section

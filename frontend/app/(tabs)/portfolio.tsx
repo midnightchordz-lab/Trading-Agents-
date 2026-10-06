@@ -17,6 +17,7 @@ import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 import { useWatchlist } from "@/src/watchlist";
 import { api, Quote, SearchResult } from "@/src/api";
+import { trackEvent } from "@/src/firebase";
 
 // Portfolio tab: manual holdings + watchlist quick-add, then optimize against
 // PyPortfolioOpt via POST /api/portfolio/optimize. Holdings persist locally;
@@ -202,6 +203,7 @@ export default function PortfolioScreen() {
       };
       const res = await api.portfolioOptimize(body);
       setResult(res);
+      trackEvent("portfolio_optimized", { objective, holdings: body.holdings.length });
     } catch (e: any) {
       setError(e?.message || "Optimization failed. Try a different objective or fewer symbols.");
     } finally {

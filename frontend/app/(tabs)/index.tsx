@@ -19,6 +19,7 @@ import { MagnifyingGlass, X, ArrowRight, CaretRight, Star, ArrowsLeftRight } fro
 
 import { colors, fonts, spacing, BORDER, changeColor, accentAt, CATEGORY_COLORS, accents, CTA_GRADIENT } from "@/src/theme";
 import { api, Quote, SearchResult, WalletBalance } from "@/src/api";
+import { trackEvent } from "@/src/firebase";
 import { getWalletDeviceId } from "@/src/wallet";
 import { useTranslation } from "react-i18next";
 import { getCurrentLanguage } from "@/src/i18n";
@@ -154,6 +155,7 @@ export default function AnalyzeScreen() {
       setSubmitting(true);
       try {
         const res = await api.analyze(sym, nm, getCurrentLanguage(), await getWalletDeviceId());
+        trackEvent("analysis_started", { source: "analyze" });
         router.push(`/analysis/${res.id}`);
       } catch (e: any) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);

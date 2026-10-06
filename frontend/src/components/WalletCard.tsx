@@ -17,6 +17,7 @@ import { openExternalUrl } from "@/src/utils/openExternalUrl";
 import { useFocusEffect } from "expo-router";
 import { colors, fonts, spacing, BORDER, TERMINAL } from "@/src/theme";
 import { api, IapPack, WalletBalance } from "@/src/api";
+import { trackEvent } from "@/src/firebase";
 import { getWalletDeviceId } from "@/src/wallet";
 import { useAuth } from "@/src/auth";
 import { buyIapPack, IapState, isUserCancelled, prepareIap } from "@/src/iap";
@@ -87,6 +88,7 @@ export function WalletCard() {
         for (let i = 0; i < 12; i++) {
           const res = await api.getPaymentStatus(orderId);
           if (res.status === "captured") {
+            trackEvent("wallet_topup", { method: "razorpay" });
             if (deviceId) await refresh(deviceId);
             Alert.alert("Wallet topped up", `Your balance is now ${wallet?.symbol || "$"}${res.balance.toFixed(2)}.`);
             return;
@@ -248,6 +250,7 @@ export function WalletCard() {
         const fresh = await api.getWalletBalance(deviceId);
         setWallet(fresh);
         if (fresh.balance > before + 0.001) {
+          trackEvent("wallet_topup", { method: "app_store", value: pack.amount, currency: "USD" });
           Alert.alert("Wallet topped up", `Your balance is now ${fresh.symbol}${fresh.balance.toFixed(2)}.`);
           return;
         }

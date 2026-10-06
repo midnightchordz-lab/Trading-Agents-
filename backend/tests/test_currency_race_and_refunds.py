@@ -44,7 +44,7 @@ def seed_account(balance=0.0, currency=None):
     db.users.insert_one({
         "id": uid, "phone": None, "email": f"{uid}@example.com", "identity_type": "email",
         "google_sub": None, "apple_sub": None, "free_credits_remaining": 0,
-        "consent": {"agreed": True, "agreed_at": datetime.now(timezone.utc).isoformat(), "version": "1.0"},
+        "consent": {"agreed": True, "agreed_at": datetime.now(timezone.utc).isoformat(), "version": "1.1"},
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     _USERS.append(uid)

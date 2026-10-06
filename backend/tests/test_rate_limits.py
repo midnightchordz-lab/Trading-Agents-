@@ -59,7 +59,7 @@ def fresh_account():
     db.users.insert_one({
         "id": uid, "phone": None, "email": f"{uid}@example.com", "identity_type": "email",
         "free_credits_remaining": 0,
-        "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.0"},
+        "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.1"},
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     db.wallets.update_one({"device_id": f"user:{uid}"},

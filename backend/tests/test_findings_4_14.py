@@ -45,7 +45,7 @@ def seed_user(**fields):
     db.users.insert_one({
         "id": uid, "phone": None, "email": None, "google_sub": None, "apple_sub": None,
         "free_credits_remaining": 10,
-        "consent": {"agreed": True, "agreed_at": datetime.now(timezone.utc).isoformat(), "version": "1.0"},
+        "consent": {"agreed": True, "agreed_at": datetime.now(timezone.utc).isoformat(), "version": "1.1"},
         "created_at": datetime.now(timezone.utc).isoformat(), **fields,
     })
     _USERS.append(uid)
