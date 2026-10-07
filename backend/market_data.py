@@ -326,12 +326,7 @@ async def tag_news_sentiment(symbol: str, items: list) -> list:
     return items
 
 # --- OHLC candles (additive; used by the in-app fallback chart for NSE/BSE) ---
-def fetch_ohlc_sync(symbol: str, rng: str) -> dict:
-    range_, interval = RANGE_MAP.get(rng, ("1mo", "1d"))
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-    r = _yf_get(url, {"range": range_, "interval": interval})
-    r.raise_for_status()
-    result = r.json()["chart"]["result"][0]
+def _bars_from_chart(result: dict) -> list:
     ts = result.get("timestamp") or []
     q = (result.get("indicators", {}).get("quote") or [{}])[0]
     o, h, l, c, v = (q.get(k) or [] for k in ("open", "high", "low", "close", "volume"))
@@ -350,6 +345,16 @@ def fetch_ohlc_sync(symbol: str, rng: str) -> dict:
             })
         except (IndexError, TypeError, ValueError):
             continue
+    return bars
+
+
+def fetch_ohlc_sync(symbol: str, rng: str) -> dict:
+    range_, interval = RANGE_MAP.get(rng, ("1mo", "1d"))
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    r = _yf_get(url, {"range": range_, "interval": interval})
+    r.raise_for_status()
+    result = r.json()["chart"]["result"][0]
+    bars = _bars_from_chart(result)
     meta = result.get("meta", {})
     return {
         "symbol": meta.get("symbol", symbol),
@@ -358,6 +363,15 @@ def fetch_ohlc_sync(symbol: str, rng: str) -> dict:
         "currency": meta.get("currency"),
         "bars": bars[-500:],
     }
+
+
+def fetch_daily_bars_sync(symbol: str) -> list:
+    """One year of DAILY bars for the computed technicals (indicators.py). The
+    chart's "1Y" range is weekly, which is too coarse for RSI/ATR/volatility."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    r = _yf_get(url, {"range": "1y", "interval": "1d"})
+    r.raise_for_status()
+    return _bars_from_chart(r.json()["chart"]["result"][0])
 
 
 

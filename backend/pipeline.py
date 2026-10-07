@@ -15,8 +15,9 @@ from typing import Optional
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 import fundamentals as fund
+import indicators as ind
 from core import EMERGENT_LLM_KEY, MODEL_NAME, MODEL_PROVIDER, db, logger, now_iso
-from market_data import fetch_fundamentals_sync, fetch_quote_sync
+from market_data import fetch_daily_bars_sync, fetch_fundamentals_sync, fetch_quote_sync
 
 
 # ----------------------------------------------------------------------------
@@ -28,15 +29,34 @@ STYLE = (
     "End with a final line formatted exactly as 'SIGNAL: BULLISH' or 'SIGNAL: BEARISH' or 'SIGNAL: NEUTRAL'."
 )
 
-TECH_SYS = "You are a veteran Technical Analyst at a hedge fund. You read price action, trend, momentum (MACD/RSI), support/resistance and volume." + STYLE
+# The technical and risk agents used to be asked for indicators they were
+# never given, and wrote invented readings. Now they get real ones — and are
+# told plainly not to make up any that are missing.
+NO_INVENTED_NUMBERS = (
+    "Quote indicator values ONLY from the COMPUTED TECHNICALS block; if a figure is missing or n/a, say it is "
+    "unavailable — never estimate or invent an indicator value."
+)
+
+TECH_SYS = (
+    "You are a veteran Technical Analyst at a hedge fund. You read price action, trend, momentum (MACD/RSI), support/resistance and volume. "
+    + NO_INVENTED_NUMBERS
+) + STYLE
 FUND_SYS = "You are a Fundamentals Analyst. You judge valuation, growth, margins, balance sheet strength and competitive moat." + STYLE
 SENT_SYS = "You are a Sentiment Analyst. You gauge crowd mood from social chatter, retail flow and options positioning for short-term bias." + STYLE
 NEWS_SYS = "You are a Macro & News Analyst. You weigh recent headlines, catalysts, sector rotation and macro conditions." + STYLE
 BULL_SYS = "You are the Bull Researcher. You build the strongest possible case to BUY, using the analyst reports. Be persuasive but grounded; rebut the bear directly when given." + STYLE
 BEAR_SYS = "You are the Bear Researcher. You build the strongest possible case to SELL/AVOID, using the analyst reports. Be persuasive but grounded; rebut the bull directly when given." + STYLE
 RM_SYS = "You are the Research Manager judging the bull vs bear debate. Declare which side won and the recommended stance. Be decisive." + STYLE
-TRADER_SYS = "You are the Trader. Turn the research into a concrete plan: action (buy/sell/hold), entry zone, target, stop-loss and position sizing rationale." + STYLE
-RISK_SYS = "You are the Risk Manager. Stress-test the trade for volatility, liquidity, downside and sizing. Approve, adjust or reject with reasoning." + STYLE
+TRADER_SYS = (
+    "You are the Trader. Turn the research into a concrete plan: action (buy/sell/hold), entry zone, target, stop-loss and position sizing rationale. "
+    "Size the stop-loss from the measured volatility (ATR) and the support/resistance levels in COMPUTED TECHNICALS when they are given. "
+    + NO_INVENTED_NUMBERS
+) + STYLE
+RISK_SYS = (
+    "You are the Risk Manager. Stress-test the trade for volatility, liquidity, downside and sizing. Approve, adjust or reject with reasoning. "
+    "Use the volatility, ATR, drawdown and VaR figures in COMPUTED TECHNICALS when they are given. "
+    + NO_INVENTED_NUMBERS
+) + STYLE
 PM_SYS = (
     "You are the Portfolio Manager making the FINAL call after reviewing the entire desk. "
     "Output ONLY a raw JSON object (no markdown fences, no prose) with EXACTLY these keys: "
@@ -351,7 +371,8 @@ def fallback_timeframes(verdict: dict) -> dict:
     }
 
 
-def build_context(symbol: str, quote: Optional[dict], fundamentals_summary: Optional[str] = None) -> str:
+def build_context(symbol: str, quote: Optional[dict], fundamentals_summary: Optional[str] = None,
+                  technicals_summary: Optional[str] = None) -> str:
     if symbol.endswith("=F"):
         asset_class = "Commodity / futures contract"
     elif symbol.endswith("-USD") or symbol.endswith("=X"):
@@ -378,6 +399,12 @@ def build_context(symbol: str, quote: Optional[dict], fundamentals_summary: Opti
         lines.append("")
         lines.append("FUNDAMENTALS (source: latest available data, may lag real-time filings):")
         lines.append(fundamentals_summary)
+    lines.append("")
+    if technicals_summary:
+        lines.append("COMPUTED TECHNICALS (calculated from the last year of daily prices; these are exact, quote them as given):")
+        lines.append(technicals_summary)
+    else:
+        lines.append("COMPUTED TECHNICALS: unavailable for this asset — do not estimate indicator values.")
     return "\n".join(lines)
 
 
@@ -425,7 +452,20 @@ async def run_analysis(analysis_id: str, symbol: str, language: str = "en"):
         except Exception as e:
             logger.warning(f"fundamentals unavailable for {symbol}: {e}")
 
-        ctx = build_context(symbol, quote, fundamentals_summary)
+        technicals_summary = None
+        try:
+            bars = await asyncio.to_thread(fetch_daily_bars_sync, symbol)
+            technicals = ind.compute(bars, crypto=symbol.endswith("-USD"))
+            technicals_summary = ind.summarize(technicals)
+            if technicals:
+                await db.analyses.update_one(
+                    {"id": analysis_id},
+                    {"$set": {"technicals": technicals, "updated_at": now_iso()}},
+                )
+        except Exception as e:
+            logger.warning(f"computed technicals unavailable for {symbol}: {e}")
+
+        ctx = build_context(symbol, quote, fundamentals_summary, technicals_summary)
         step = 0
         lang_directive = language_directive(language if language in SUPPORTED_LANGUAGES else "en")
 
