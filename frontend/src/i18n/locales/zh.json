@@ -37,14 +37,14 @@
   },
   "verdict": {
     "confidence": "置信度",
-    "target": "目标价",
-    "stop_loss": "止损价",
+    "target": "展望价位",
+    "stop_loss": "失效价位",
     "time_horizon": "时间周期",
     "key_risks": "主要风险",
     "summary": "摘要",
-    "buy": "BUY",
-    "sell": "SELL",
-    "hold": "HOLD"
+    "buy": "看涨",
+    "sell": "看跌",
+    "hold": "中性"
   },
   "grounding": {
     "verified": "点位已核实",

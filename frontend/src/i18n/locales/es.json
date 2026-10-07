@@ -37,14 +37,14 @@
   },
   "verdict": {
     "confidence": "Confianza",
-    "target": "Objetivo",
-    "stop_loss": "Stop loss",
+    "target": "Nivel de perspectiva",
+    "stop_loss": "Nivel de invalidación",
     "time_horizon": "Horizonte temporal",
     "key_risks": "Riesgos clave",
     "summary": "Resumen",
-    "buy": "BUY",
-    "sell": "SELL",
-    "hold": "HOLD"
+    "buy": "ALCISTA",
+    "sell": "BAJISTA",
+    "hold": "NEUTRAL"
   },
   "grounding": {
     "verified": "Niveles verificados",

@@ -37,14 +37,14 @@
   },
   "verdict": {
     "confidence": "الثقة",
-    "target": "الهدف",
-    "stop_loss": "وقف الخسارة",
+    "target": "مستوى التوقع",
+    "stop_loss": "مستوى الإبطال",
     "time_horizon": "الأفق الزمني",
     "key_risks": "المخاطر الرئيسية",
     "summary": "الملخص",
-    "buy": "BUY",
-    "sell": "SELL",
-    "hold": "HOLD"
+    "buy": "صعودي",
+    "sell": "هبوطي",
+    "hold": "محايد"
   },
   "grounding": {
     "verified": "تم التحقق من المستويات",

@@ -37,14 +37,14 @@
   },
   "verdict": {
     "confidence": "Confidence",
-    "target": "Target",
-    "stop_loss": "Stop loss",
+    "target": "Outlook level",
+    "stop_loss": "Invalidation level",
     "time_horizon": "Time horizon",
     "key_risks": "Key risks",
     "summary": "Summary",
-    "buy": "BUY",
-    "sell": "SELL",
-    "hold": "HOLD"
+    "buy": "BULLISH",
+    "sell": "BEARISH",
+    "hold": "NEUTRAL"
   },
   "grounding": {
     "verified": "Levels verified",

@@ -37,14 +37,14 @@
   },
   "verdict": {
     "confidence": "विश्वास स्तर",
-    "target": "लक्ष्य",
-    "stop_loss": "स्टॉप लॉस",
+    "target": "आउटलुक स्तर",
+    "stop_loss": "अमान्यता स्तर",
     "time_horizon": "समय सीमा",
     "key_risks": "प्रमुख जोखिम",
     "summary": "सारांश",
-    "buy": "BUY",
-    "sell": "SELL",
-    "hold": "HOLD"
+    "buy": "तेजी",
+    "sell": "मंदी",
+    "hold": "तटस्थ"
   },
   "grounding": {
     "verified": "स्तर सत्यापित",

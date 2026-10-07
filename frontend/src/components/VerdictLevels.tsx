@@ -2,7 +2,7 @@ import React from "react";
 import { View, Text, Pressable, StyleSheet } from "react-native";
 import * as Haptics from "expo-haptics";
 import { Bell, BellRinging } from "phosphor-react-native";
-import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
+import { colors, fonts, spacing, BORDER, outlookLabel, verdictColors } from "@/src/theme";
 import type { Verdict, Quote } from "@/src/api";
 import { useAlerts } from "@/src/alerts";
 
@@ -26,8 +26,8 @@ function pct(from?: number | null, to?: number | null): string {
 }
 
 /**
- * Renders the agents' verdict as price levels: the BUY / SELL entry at the
- * live price, the target, and the stop loss. Sits directly under the
+ * Renders the desk's outlook as price levels: the live reference price, the
+ * level the outlook points toward, and the level that would invalidate it. Sits directly under the
  * TradingView chart so the levels read against the live candles.
  */
 export function VerdictLevels({ verdict, quote, symbol, name }: Props) {
@@ -44,6 +44,7 @@ export function VerdictLevels({ verdict, quote, symbol, name }: Props) {
   }, [symbol, price, evaluate]);
 
   type Row = {
+    id: string; // stable testID, independent of the wording
     label: string;
     value: string;
     delta: string;
@@ -54,32 +55,35 @@ export function VerdictLevels({ verdict, quote, symbol, name }: Props) {
 
   const rows: Row[] = [
     {
-      label: isHold ? "HOLD · NO ENTRY" : `${decision} ENTRY`,
+      id: "entry",
+      label: isHold ? "NEUTRAL · REFERENCE" : `${outlookLabel(decision)} · REFERENCE`,
       value: fmt(price, currency),
       delta: "LIVE",
       color: bg,
       fg,
     },
     {
-      label: "TARGET",
+      id: "target",
+      label: "OUTLOOK LEVEL",
       value: fmt(verdict.target_price, currency),
       delta: pct(price, verdict.target_price),
       color: colors.success,
       fg: colors.onSuccess,
       alert:
         verdict.target_price != null && price != null
-          ? { price: verdict.target_price, direction: verdict.target_price >= price ? "above" : "below", label: "TARGET" }
+          ? { price: verdict.target_price, direction: verdict.target_price >= price ? "above" : "below", label: "OUTLOOK LEVEL" }
           : undefined,
     },
     {
-      label: "STOP LOSS",
+      id: "stop-loss",
+      label: "INVALIDATION",
       value: fmt(verdict.stop_loss, currency),
       delta: pct(price, verdict.stop_loss),
       color: colors.error,
       fg: colors.onError,
       alert:
         verdict.stop_loss != null && price != null
-          ? { price: verdict.stop_loss, direction: verdict.stop_loss <= price ? "below" : "above", label: "STOP LOSS" }
+          ? { price: verdict.stop_loss, direction: verdict.stop_loss <= price ? "below" : "above", label: "INVALIDATION" }
           : undefined,
     },
   ];
@@ -108,7 +112,7 @@ export function VerdictLevels({ verdict, quote, symbol, name }: Props) {
             </View>
             {r.alert ? (
               <Pressable
-                testID={`alert-toggle-${r.label.replace(/\s+/g, "-").toLowerCase()}`}
+                testID={`alert-toggle-${r.id}`}
                 onPress={() => onToggleAlert(r.alert!)}
                 hitSlop={8}
                 style={[styles.bell, set && styles.bellActive]}
@@ -126,7 +130,7 @@ export function VerdictLevels({ verdict, quote, symbol, name }: Props) {
         );
       })}
       <Text style={styles.note}>
-        Tap the bell to set a price alert · {verdict.time_horizon} horizon · not financial advice
+        Tap the bell to set a price alert · {verdict.time_horizon} horizon · analysis, not investment advice
       </Text>
     </View>
   );

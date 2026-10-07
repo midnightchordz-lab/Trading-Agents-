@@ -1,6 +1,6 @@
 import React from "react";
 import { View, Text, Pressable, StyleSheet } from "react-native";
-import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
+import { colors, fonts, spacing, BORDER, outlookLabel, verdictColors } from "@/src/theme";
 import type { Timeframes, TimeframeCall } from "@/src/api";
 
 // Shows the desk's short/medium/long-term calls side by side — a stock can
@@ -54,7 +54,7 @@ export function TimeframesCard({
               style={[styles.tab, isActive && { backgroundColor: tabColors.bg }]}
             >
               <Text style={[styles.tabLabel, isActive && { color: tabColors.fg }]}>{SHORT_LABEL[key]}</Text>
-              <Text style={[styles.tabDecision, isActive && { color: tabColors.fg }]}>{timeframes[key].decision}</Text>
+              <Text style={[styles.tabDecision, isActive && { color: tabColors.fg }]}>{outlookLabel(timeframes[key].decision)}</Text>
             </Pressable>
           );
         })}
@@ -63,7 +63,7 @@ export function TimeframesCard({
       <View style={styles.body}>
         <View style={styles.decisionRow}>
           <View style={[styles.decisionBadge, { backgroundColor: bg }]}>
-            <Text style={[styles.decisionText, { color: fg }]}>{call.decision}</Text>
+            <Text style={[styles.decisionText, { color: fg }]}>{outlookLabel(call.decision)}</Text>
           </View>
           <Text style={styles.confidence}>{call.confidence}% CONFIDENCE</Text>
         </View>
@@ -73,11 +73,11 @@ export function TimeframesCard({
         {call.target_price != null || call.stop_loss != null ? (
           <View style={styles.levelsRow}>
             <View style={styles.levelBox}>
-              <Text style={styles.levelLabel}>TARGET</Text>
+              <Text style={styles.levelLabel}>OUTLOOK LEVEL</Text>
               <Text style={[styles.levelValue, { color: colors.success }]}>{fmt(call.target_price, currency)}</Text>
             </View>
             <View style={styles.levelBox}>
-              <Text style={styles.levelLabel}>STOP LOSS</Text>
+              <Text style={styles.levelLabel}>INVALIDATION</Text>
               <Text style={[styles.levelValue, { color: colors.error }]}>{fmt(call.stop_loss, currency)}</Text>
             </View>
           </View>
@@ -88,7 +88,7 @@ export function TimeframesCard({
         ) : null}
 
         {isFallback ? (
-          <Text style={styles.fallbackNote}>Horizon-specific levels weren't available for this run — showing the primary verdict.</Text>
+          <Text style={styles.fallbackNote}>Horizon-specific levels weren't available for this run — showing the primary outlook.</Text>
         ) : null}
       </View>
     </View>

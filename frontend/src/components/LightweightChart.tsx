@@ -120,9 +120,9 @@ function buildHtml(
     var L = P.levels, isHold = L.decision === 'HOLD';
     var pfx = P.levelsLabel ? P.levelsLabel + ' ' : '';
     var entryColor = L.decision === 'BUY' ? C.buy : (L.decision === 'SELL' ? C.sell : C.hold);
-    if (L.entry != null) candles.createPriceLine({price:L.entry, color:entryColor, lineWidth:2, lineStyle:0, axisLabelVisible:true, title: isHold ? 'HOLD' : L.decision + ' ENTRY'});
-    if (L.target != null) candles.createPriceLine({price:L.target, color:C.buy, lineWidth:2, lineStyle:2, axisLabelVisible:true, title:pfx + 'TARGET'});
-    if (L.stop != null) candles.createPriceLine({price:L.stop, color:C.sell, lineWidth:2, lineStyle:2, axisLabelVisible:true, title:pfx + 'STOP LOSS'});
+    if (L.entry != null) candles.createPriceLine({price:L.entry, color:entryColor, lineWidth:2, lineStyle:0, axisLabelVisible:true, title: isHold ? 'NEUTRAL' : (L.decision === 'BUY' ? 'BULLISH' : 'BEARISH') + ' · REF'});
+    if (L.target != null) candles.createPriceLine({price:L.target, color:C.buy, lineWidth:2, lineStyle:2, axisLabelVisible:true, title:pfx + 'OUTLOOK'});
+    if (L.stop != null) candles.createPriceLine({price:L.stop, color:C.sell, lineWidth:2, lineStyle:2, axisLabelVisible:true, title:pfx + 'INVALIDATION'});
   }
 
   var rsiChart = LightweightCharts.createChart(document.getElementById('rsi'), Object.assign({height:subH}, common));
