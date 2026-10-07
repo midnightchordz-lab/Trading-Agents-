@@ -29,6 +29,10 @@ function whenText(iso: string): string {
 
 type AlertsView = "active" | "history";
 
+// Alerts saved before the outlook wording still carry "TARGET" / "STOP LOSS".
+const isInvalidation = (label: string) => label === "INVALIDATION" || label === "STOP LOSS";
+const isOutlookLevel = (label: string) => label === "OUTLOOK LEVEL" || label === "TARGET";
+
 export default function AlertsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -72,7 +76,7 @@ export default function AlertsScreen() {
   const renderItem = useCallback(
     ({ item }: { item: PriceAlert }) => {
       const now = prices[item.symbol];
-      const barColor = item.triggered ? colors.brand : item.label === "STOP LOSS" ? colors.error : colors.success;
+      const barColor = item.triggered ? colors.brand : isInvalidation(item.label) ? colors.error : colors.success;
       return (
         <Pressable
           testID={`alert-row-${item.symbol}`}
@@ -127,9 +131,9 @@ export default function AlertsScreen() {
   );
 
   const renderHistoryItem = useCallback(({ item }: { item: FiredAlert }) => {
-    const isStop = item.label === "STOP LOSS";
+    const isStop = isInvalidation(item.label);
     const barColor = isStop ? colors.error : colors.success;
-    const outcome = isStop ? "STOP HIT" : item.label === "TARGET" ? "TARGET HIT" : "LEVEL HIT";
+    const outcome = isStop ? "INVALIDATED" : isOutlookLevel(item.label) ? "OUTLOOK LEVEL HIT" : "LEVEL HIT";
     return (
       <View testID={`alert-history-${item.symbol}`} style={[styles.row, { borderStartWidth: 5, borderStartColor: barColor }]}>
         <View style={styles.rowMain}>

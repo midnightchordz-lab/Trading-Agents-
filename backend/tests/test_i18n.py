@@ -55,7 +55,7 @@ def test_directive_protects_json_keys_and_enums():
     for lang in ("hi", "es", "zh"):
         d = language_directive(lang)
         assert "English" in d  # instructs keys/enums to stay English
-        assert "BUY" in d and "SELL" in d and "HOLD" in d
+        assert "BULLISH" in d and "NEUTRAL" in d and "BEARISH" in d
 
 
 def test_supported_languages_set():

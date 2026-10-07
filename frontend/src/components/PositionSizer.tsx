@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, TextInput, Pressable, StyleSheet } from "react-native";
-import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
+import { colors, fonts, spacing, BORDER, outlookLabel, verdictColors } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 import type { Verdict, Quote, Grounding } from "@/src/api";
 
@@ -95,10 +95,10 @@ export function PositionSizer({ verdict, quote, grounding }: Props) {
   }, [capital, riskPct, maxPosPct, price, verdict, isHold, rejected]);
 
   let blocker: string | null = null;
-  if (isHold) blocker = "HOLD verdict — no position to size.";
+  if (isHold) blocker = "Neutral outlook — no levels to size against.";
   else if (rejected) blocker = "Levels were rejected by the grounding check — sizing disabled.";
   else if (price == null) blocker = "No live price available.";
-  else if (verdict.stop_loss == null) blocker = "No stop loss in the verdict — cannot size risk.";
+  else if (verdict.stop_loss == null) blocker = "No invalidation level in the outlook — cannot size risk.";
 
   return (
     <View testID="position-sizer" style={styles.card}>
@@ -118,13 +118,13 @@ export function PositionSizer({ verdict, quote, grounding }: Props) {
       ) : result ? (
         <View>
           <View style={[styles.qtyRow, { backgroundColor: bg }]}>
-            <Text style={[styles.qtyLabel, { color: fg }]}>{verdict.decision}</Text>
+            <Text style={[styles.qtyLabel, { color: fg }]}>{outlookLabel(verdict.decision)}</Text>
             <Text style={[styles.qty, { color: fg }]}>{fmt(result.qty)} shares</Text>
           </View>
           <View style={styles.grid}>
             <Stat label="NOTIONAL" value={`${currency === "$" ? "$" : ""}${fmt(result.notional)}${currency !== "$" ? ` ${currency}` : ""}`} />
             <Stat label="AT RISK" value={`${fmt(result.atRisk)} (${((result.atRisk / (Number(capital) || 1)) * 100).toFixed(2)}%)`} tone={colors.error} />
-            <Stat label="TO TARGET" value={result.reward != null ? fmt(result.reward) : "—"} tone={colors.success} />
+            <Stat label="TO OUTLOOK LEVEL" value={result.reward != null ? fmt(result.reward) : "—"} tone={colors.success} />
             <Stat label="R : R" value={result.rr != null ? `1 : ${result.rr.toFixed(2)}` : "—"} />
           </View>
           <Text style={styles.note}>

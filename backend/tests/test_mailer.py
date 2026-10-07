@@ -52,7 +52,8 @@ def test_email_configured_reflects_key():
 def test_welcome_template_explains_the_desk_and_free_recheck():
     html = m.welcome_email_html()
     assert m.EMAIL_FROM_NAME in html
-    assert "BUY, SELL or HOLD" in html
+    assert "Bullish, Neutral or Bearish" in html
+    assert "BUY, SELL or HOLD" not in html
     assert "free when nothing has changed" in html
     assert "1.5%" in html
     assert "NOT financial, investment or trading advice" in html

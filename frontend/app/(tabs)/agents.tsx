@@ -47,7 +47,7 @@ export default function AgentsScreen() {
 
   return (
     <View style={styles.root}>
-      <ScreenHeader title="THE DESK" subtitle="// 10 AI AGENTS · 1 VERDICT" insetsTop={insets.top} />
+      <ScreenHeader title="THE DESK" subtitle="// 10 AI AGENTS · 1 OUTLOOK" insetsTop={insets.top} />
 
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing.xxl }}

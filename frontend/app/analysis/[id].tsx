@@ -280,7 +280,7 @@ export default function AnalysisScreen() {
               style={[styles.segBtn, i === 0 && styles.segDivider, active && styles.segActive]}
             >
               <Text style={[styles.segText, { color: active ? colors.onSurfaceInverse : colors.onSurface }]}>
-                {t === "debate" ? "LIVE DEBATE" : "VERDICT"}
+                {t === "debate" ? "LIVE DEBATE" : "OUTLOOK"}
               </Text>
             </Pressable>
           );
@@ -486,11 +486,11 @@ function VerdictView({
 
       <View style={styles.statsGrid}>
         <View style={styles.statCell}>
-          <Text style={styles.statLabel}>TARGET</Text>
+          <Text style={styles.statLabel}>OUTLOOK LEVEL</Text>
           <Text style={styles.statValue}>{money(verdict.target_price, currency)}</Text>
         </View>
         <View style={[styles.statCell, styles.statCellMid]}>
-          <Text style={styles.statLabel}>STOP-LOSS</Text>
+          <Text style={styles.statLabel}>INVALIDATION</Text>
           <Text style={styles.statValue}>{money(verdict.stop_loss, currency)}</Text>
         </View>
         <View style={styles.statCell}>
@@ -520,7 +520,7 @@ function VerdictView({
 
       <Pressable testID="open-share-button" onPress={onShare} style={styles.shareVerdictBtn}>
         <ShareNetwork size={18} color={colors.onSurfaceInverse} weight="bold" />
-        <Text style={styles.shareVerdictText}>SHARE THIS VERDICT</Text>
+        <Text style={styles.shareVerdictText}>SHARE THIS OUTLOOK</Text>
       </Pressable>
 
       {analysis.debate ? (

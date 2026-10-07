@@ -37,6 +37,30 @@ NO_INVENTED_NUMBERS = (
     "unavailable — never estimate or invent an indicator value."
 )
 
+# Outlook, not advice. In India, telling the public to buy or sell a security
+# is Research Analyst activity that needs SEBI registration, and an
+# "educational only" disclaimer doesn't change that. So the desk describes a
+# market outlook — the bullish and bearish case, where the outlook points and
+# what would invalidate it — and never instructs the reader. Internally the
+# verdict keeps the BUY/SELL/HOLD enum (stored analyses, the cache, alerts and
+# older app builds all depend on it); OUTLOOK_FOR is how it is shown.
+OUTLOOK_FOR = {"BUY": "BULLISH", "SELL": "BEARISH", "HOLD": "NEUTRAL"}
+DECISION_FOR = {"BULLISH": "BUY", "BEARISH": "SELL", "NEUTRAL": "HOLD",
+                "BUY": "BUY", "SELL": "SELL", "HOLD": "HOLD"}
+
+OUTLOOK_NOT_ADVICE = (
+    " Express a market outlook, not advice: never tell the reader to buy, sell, hold, enter, exit, add, trim "
+    "or short, never say 'we recommend', and never size a position for them. Describe the bullish and bearish "
+    "case, the level the outlook points toward and the level that would invalidate it."
+)
+
+
+def normalize_decision(raw) -> Optional[str]:
+    """BULLISH/NEUTRAL/BEARISH (what the desk is asked for) or the older
+    BUY/HOLD/SELL, to the internal enum. None if it is neither."""
+    return DECISION_FOR.get(str(raw or "").upper().strip())
+
+
 TECH_SYS = (
     "You are a veteran Technical Analyst at a hedge fund. You read price action, trend, momentum (MACD/RSI), support/resistance and volume. "
     + NO_INVENTED_NUMBERS
@@ -44,26 +68,32 @@ TECH_SYS = (
 FUND_SYS = "You are a Fundamentals Analyst. You judge valuation, growth, margins, balance sheet strength and competitive moat." + STYLE
 SENT_SYS = "You are a Sentiment Analyst. You gauge crowd mood from social chatter, retail flow and options positioning for short-term bias." + STYLE
 NEWS_SYS = "You are a Macro & News Analyst. You weigh recent headlines, catalysts, sector rotation and macro conditions." + STYLE
-BULL_SYS = "You are the Bull Researcher. You build the strongest possible case to BUY, using the analyst reports. Be persuasive but grounded; rebut the bear directly when given." + STYLE
-BEAR_SYS = "You are the Bear Researcher. You build the strongest possible case to SELL/AVOID, using the analyst reports. Be persuasive but grounded; rebut the bull directly when given." + STYLE
-RM_SYS = "You are the Research Manager judging the bull vs bear debate. Declare which side won and the recommended stance. Be decisive." + STYLE
+BULL_SYS = ("You are the Bull Researcher. You build the strongest possible bullish case, using the analyst reports. "
+            "Be persuasive but grounded; rebut the bear directly when given." + OUTLOOK_NOT_ADVICE + STYLE)
+BEAR_SYS = ("You are the Bear Researcher. You build the strongest possible bearish case, using the analyst reports. "
+            "Be persuasive but grounded; rebut the bull directly when given." + OUTLOOK_NOT_ADVICE + STYLE)
+RM_SYS = ("You are the Research Manager judging the bull vs bear debate. Declare which side won and the resulting "
+          "outlook (bullish, neutral or bearish). Be decisive." + OUTLOOK_NOT_ADVICE + STYLE)
 TRADER_SYS = (
-    "You are the Trader. Turn the research into a concrete plan: action (buy/sell/hold), entry zone, target, stop-loss and position sizing rationale. "
-    "Size the stop-loss from the measured volatility (ATR) and the support/resistance levels in COMPUTED TECHNICALS when they are given. "
-    + NO_INVENTED_NUMBERS
+    "You are the Trader. Turn the research into a concrete outlook scenario: direction (bullish, neutral or bearish), "
+    "the reference price zone, the level the outlook points toward, and the level that would invalidate it. "
+    "Set the invalidation level from the measured volatility (ATR) and the support/resistance levels in COMPUTED TECHNICALS when they are given. "
+    + NO_INVENTED_NUMBERS + OUTLOOK_NOT_ADVICE
 ) + STYLE
 RISK_SYS = (
-    "You are the Risk Manager. Stress-test the trade for volatility, liquidity, downside and sizing. Approve, adjust or reject with reasoning. "
+    "You are the Risk Manager. Stress-test the outlook for volatility, liquidity and downside. Confirm, adjust or reject it with reasoning. "
     "Use the volatility, ATR, drawdown and VaR figures in COMPUTED TECHNICALS when they are given. "
-    + NO_INVENTED_NUMBERS
+    + NO_INVENTED_NUMBERS + OUTLOOK_NOT_ADVICE
 ) + STYLE
 PM_SYS = (
-    "You are the Portfolio Manager making the FINAL call after reviewing the entire desk. "
+    "You are the Portfolio Manager setting the desk's FINAL outlook after reviewing the entire desk. "
     "Output ONLY a raw JSON object (no markdown fences, no prose) with EXACTLY these keys: "
-    '{"decision": "BUY|SELL|HOLD", "confidence": <integer 0-100>, '
-    '"target_price": <number or null>, "stop_loss": <number or null>, '
+    '{"decision": "BULLISH|NEUTRAL|BEARISH", "confidence": <integer 0-100>, '
+    '"target_price": <the level the outlook points toward: number or null>, '
+    '"stop_loss": <the level that would invalidate the outlook: number or null>, '
     '"time_horizon": "<short string e.g. 3-6 months>", '
-    '"summary": "<2-3 sentence rationale>", "key_risks": ["<risk>", "<risk>", "<risk>"]}'
+    '"summary": "<2-3 sentence rationale>", "key_risks": ["<risk>", "<risk>", "<risk>"]}.'
+    + OUTLOOK_NOT_ADVICE + " This applies to the summary and every risk too."
 )
 
 DEBATE_SYS = (
@@ -73,20 +103,23 @@ DEBATE_SYS = (
     '"fundamentals": "<=45 word valuation/financials argument>", '
     '"agreements": ["<short point>", "<short point>"], '
     '"disagreements": ["<short point>", "<short point>"], '
-    '"recommendation": "<=40 word final call consistent with the verdict>"}'
+    '"recommendation": "<=40 word final outlook consistent with the verdict>"}.'
+    + OUTLOOK_NOT_ADVICE
 )
 
 TIMEFRAME_SYS = (
     "You are the Multi-Horizon Desk. Using the full desk transcript and the Portfolio Manager's final verdict, "
-    "produce a SEPARATE call for three distinct time horizons, because a stock can be attractive on one horizon "
-    "and unattractive on another. Output ONLY a raw JSON object (no markdown fences, no prose) with EXACTLY "
+    "produce a SEPARATE outlook for three distinct time horizons, because an asset can look bullish on one horizon "
+    "and bearish on another. Output ONLY a raw JSON object (no markdown fences, no prose) with EXACTLY "
     "these keys, each holding an object with EXACTLY these sub-keys: "
-    '{"short_term": {"decision": "BUY|SELL|HOLD", "confidence": <integer 0-100>, '
+    '{"short_term": {"decision": "BULLISH|NEUTRAL|BEARISH", "confidence": <integer 0-100>, '
     '"target_price": <number or null>, "stop_loss": <number or null>, "thesis": "<=30 word horizon-specific rationale>"}, '
     '"medium_term": {<same shape>}, "long_term": {<same shape>}}. '
     "short_term = next 1-2 weeks, medium_term = next 1-3 months, long_term = next 6-12 months. "
-    "Each horizon's call may genuinely differ from the others and from the primary verdict — do not repeat the "
-    "same numbers three times unless the case truly holds across all three horizons."
+    "Each horizon's outlook may genuinely differ from the others and from the primary verdict — do not repeat the "
+    "same numbers three times unless the case truly holds across all three horizons. target_price is the level "
+    "the outlook points toward and stop_loss the level that would invalidate it."
+    + OUTLOOK_NOT_ADVICE
 )
 
 TOTAL_STEPS = 13
@@ -135,12 +168,12 @@ def extract_json(text: str):
 
 def parse_verdict(text: str) -> dict:
     data = extract_json(text) or {}
-    decision = str(data.get("decision", "")).upper().strip()
-    if decision not in ("BUY", "SELL", "HOLD"):
+    decision = normalize_decision(data.get("decision"))
+    if decision is None:
         t = (text or "").upper()
-        if "SELL" in t:
+        if "BEARISH" in t or "SELL" in t:
             decision = "SELL"
-        elif "BUY" in t:
+        elif "BULLISH" in t or "BUY" in t:
             decision = "BUY"
         else:
             decision = "HOLD"
@@ -161,6 +194,7 @@ def parse_verdict(text: str) -> dict:
         risks = [str(risks)]
     return {
         "decision": decision,
+        "outlook": OUTLOOK_FOR[decision],
         "confidence": confidence,
         "target_price": num(data.get("target_price")),
         "stop_loss": num(data.get("stop_loss")),
@@ -218,23 +252,23 @@ def ground_verdict(verdict: dict, quote: Optional[dict]) -> dict:
 
     # 1. Levels present and positive (a HOLD may legitimately carry no levels -> warn only)
     missing_sev = "warn" if decision == "HOLD" else "fail"
-    add("target_present", t is not None, "Target price is missing or not a positive number." if t is None else "Target price present.", severity=missing_sev)
-    add("stop_present", sl is not None, "Stop loss is missing or not a positive number." if sl is None else "Stop loss present.", severity=missing_sev)
+    add("target_present", t is not None, "Outlook level is missing or not a positive number." if t is None else "Outlook level present.", severity=missing_sev)
+    add("stop_present", sl is not None, "Invalidation level is missing or not a positive number." if sl is None else "Invalidation level present.", severity=missing_sev)
 
     # 2. Direction consistency with the decision
     if decision == "BUY":
         if t is not None:
-            add("target_direction", t > price, f"BUY target {t:g} is not above the live price {price:g}." if t <= price else "Target sits above the live price.")
+            add("target_direction", t > price, f"Bullish outlook level {t:g} is not above the live price {price:g}." if t <= price else "Outlook level sits above the live price.")
         if sl is not None:
-            add("stop_direction", sl < price, f"BUY stop {sl:g} is not below the live price {price:g}." if sl >= price else "Stop sits below the live price.")
+            add("stop_direction", sl < price, f"Bullish invalidation level {sl:g} is not below the live price {price:g}." if sl >= price else "Invalidation level sits below the live price.")
     elif decision == "SELL":
         if t is not None:
-            add("target_direction", t < price, f"SELL target {t:g} is not below the live price {price:g}." if t >= price else "Target sits below the live price.")
+            add("target_direction", t < price, f"Bearish outlook level {t:g} is not below the live price {price:g}." if t >= price else "Outlook level sits below the live price.")
         if sl is not None:
-            add("stop_direction", sl > price, f"SELL stop {sl:g} is not above the live price {price:g}." if sl <= price else "Stop sits above the live price.")
+            add("stop_direction", sl > price, f"Bearish invalidation level {sl:g} is not above the live price {price:g}." if sl <= price else "Invalidation level sits above the live price.")
 
     # 3. Magnitude plausibility vs live price (warn, not fail)
-    for cid, lvl, name in (("target_magnitude", t, "Target"), ("stop_magnitude", sl, "Stop")):
+    for cid, lvl, name in (("target_magnitude", t, "Outlook level"), ("stop_magnitude", sl, "Invalidation level")):
         if lvl is None:
             continue
         ratio = lvl / price
@@ -246,7 +280,7 @@ def ground_verdict(verdict: dict, quote: Optional[dict]) -> dict:
         try:
             lo, hi = float(lo52), float(hi52)
             band_lo, band_hi = lo * 0.75, hi * 1.25
-            for cid, lvl, name in (("target_52w", t, "Target"), ("stop_52w", sl, "Stop")):
+            for cid, lvl, name in (("target_52w", t, "Outlook level"), ("stop_52w", sl, "Invalidation level")):
                 if lvl is None:
                     continue
                 ok = band_lo <= lvl <= band_hi
@@ -260,7 +294,7 @@ def ground_verdict(verdict: dict, quote: Optional[dict]) -> dict:
         risk = abs(price - sl)
         if risk > 0:
             rr = reward / risk
-            add("risk_reward", rr >= 1.0, f"Risk/reward is {rr:.2f} — less reward than risk." if rr < 1.0 else f"Risk/reward is {rr:.2f}.", severity="warn")
+            add("risk_reward", rr >= 1.0, f"Upside/downside is {rr:.2f} — less upside than downside." if rr < 1.0 else f"Upside/downside is {rr:.2f}.", severity="warn")
 
     if any((not c["ok"]) and c["severity"] == "fail" for c in checks):
         status = "failed"
@@ -308,9 +342,7 @@ def parse_timeframes(text: str) -> Optional[dict]:
     def parse_one(d):
         if not isinstance(d, dict):
             return None
-        decision = str(d.get("decision", "")).upper().strip()
-        if decision not in ("BUY", "SELL", "HOLD"):
-            decision = "HOLD"
+        decision = normalize_decision(d.get("decision")) or "HOLD"
         try:
             confidence = int(round(float(d.get("confidence", 50))))
         except Exception:
@@ -326,6 +358,7 @@ def parse_timeframes(text: str) -> Optional[dict]:
         thesis = str(d.get("thesis") or "").strip()[:280] or None
         return {
             "decision": decision,
+            "outlook": OUTLOOK_FOR[decision],
             "confidence": confidence,
             "target_price": num(d.get("target_price")),
             "stop_loss": num(d.get("stop_loss")),
@@ -362,6 +395,7 @@ def fallback_timeframes(verdict: dict) -> dict:
             "horizon": key,
             "label": label,
             "decision": verdict.get("decision", "HOLD"),
+            "outlook": OUTLOOK_FOR.get(verdict.get("decision", "HOLD"), "NEUTRAL"),
             "confidence": verdict.get("confidence", 50),
             "target_price": None,
             "stop_loss": None,
@@ -524,7 +558,7 @@ async def run_analysis(analysis_id: str, symbol: str, language: str = "en"):
         # PHASE 3 — Research Manager
         rm_raw = await safe_agent(
             RM_SYS + lang_directive,
-            f"{ctx}\n\nANALYST REPORTS:\n{analyst_summary}\n\nDEBATE:\n{debate_text}\n\nJudge the debate and give the recommended stance for {symbol}.",
+            f"{ctx}\n\nANALYST REPORTS:\n{analyst_summary}\n\nDEBATE:\n{debate_text}\n\nJudge the debate and give the resulting outlook for {symbol}.",
         )
         rm_content, rm_sig = split_signal(rm_raw)
         step += 1
@@ -533,7 +567,7 @@ async def run_analysis(analysis_id: str, symbol: str, language: str = "en"):
         # PHASE 4 — Trader
         tr_raw = await safe_agent(
             TRADER_SYS + lang_directive,
-            f"{ctx}\n\nANALYST REPORTS:\n{analyst_summary}\n\nDEBATE VERDICT:\n{rm_content}\n\nPropose a concrete trade plan for {symbol}.",
+            f"{ctx}\n\nANALYST REPORTS:\n{analyst_summary}\n\nDEBATE VERDICT:\n{rm_content}\n\nLay out the outlook scenario for {symbol}.",
         )
         tr_content, tr_sig = split_signal(tr_raw)
         step += 1
@@ -542,7 +576,7 @@ async def run_analysis(analysis_id: str, symbol: str, language: str = "en"):
         # PHASE 5 — Risk Manager
         rk_raw = await safe_agent(
             RISK_SYS + lang_directive,
-            f"{ctx}\n\nTRADE PLAN:\n{tr_content}\n\nDEBATE VERDICT:\n{rm_content}\n\nStress-test the trade and give your risk ruling for {symbol}.",
+            f"{ctx}\n\nOUTLOOK SCENARIO:\n{tr_content}\n\nDEBATE VERDICT:\n{rm_content}\n\nStress-test the outlook and give your risk ruling for {symbol}.",
         )
         rk_content, rk_sig = split_signal(rk_raw)
         step += 1
@@ -555,13 +589,13 @@ async def run_analysis(analysis_id: str, symbol: str, language: str = "en"):
         )
         pm_raw = await safe_agent(
             PM_SYS + lang_directive,
-            f"{ctx}\n\nFULL DESK TRANSCRIPT:\n{full_transcript}\n\nMake the FINAL decision for {symbol}. Output ONLY the JSON object.",
+            f"{ctx}\n\nFULL DESK TRANSCRIPT:\n{full_transcript}\n\nSet the FINAL outlook for {symbol}. Output ONLY the JSON object.",
             fallback="{}",
         )
         verdict = parse_verdict(pm_raw)
         step += 1
         sentiment = {"BUY": "bullish", "SELL": "bearish", "HOLD": "neutral"}.get(verdict["decision"], "neutral")
-        decision_msg = f"FINAL VERDICT: {verdict['decision']} — CONFIDENCE {verdict['confidence']}%\n\n{verdict['summary']}"
+        decision_msg = f"FINAL OUTLOOK: {verdict['outlook']} — CONFIDENCE {verdict['confidence']}%\n\n{verdict['summary']}"
         await append_message(analysis_id, make_message("Portfolio Manager", "PORTFOLIO_MANAGER", "decision", decision_msg, sentiment), step)
 
         # PHASE 7 — Round-table debate (Bull vs Bear vs Fundamentals) + synthesis
@@ -633,7 +667,7 @@ def language_directive(lang: str) -> str:
         f"\n\nRespond in {name}. Write every free-text field's VALUE in {name} "
         "(summaries, arguments, theses, risk descriptions, rationale). "
         "Keep every JSON KEY in English exactly as specified, and keep every "
-        'enum value (e.g. "decision": "BUY", "SELL", or "HOLD") in English '
+        'enum value (e.g. "decision": "BULLISH", "NEUTRAL", or "BEARISH") in English '
         "exactly as specified — never translate a key or an enum value."
     )
 

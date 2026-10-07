@@ -5,7 +5,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { Trash, CaretRight, FolderOpen } from "phosphor-react-native";
 
-import { colors, fonts, spacing, BORDER, verdictColors, accentAt } from "@/src/theme";
+import { colors, fonts, spacing, BORDER, outlookLabel, verdictColors, accentAt } from "@/src/theme";
 import { api, Analysis } from "@/src/api";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
 
@@ -24,7 +24,7 @@ function StatusPill({ item }: { item: Analysis }) {
     const { bg, fg } = verdictColors(item.verdict.decision);
     return (
       <View style={[styles.pill, { backgroundColor: bg }]}>
-        <Text style={[styles.pillText, { color: fg }]}>{item.verdict.decision}</Text>
+        <Text style={[styles.pillText, { color: fg }]}>{outlookLabel(item.verdict.decision)}</Text>
       </View>
     );
   }
