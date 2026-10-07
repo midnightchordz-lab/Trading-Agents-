@@ -99,8 +99,8 @@ def fetch_quote_sync(symbol: str) -> dict:
     result = data["chart"]["result"][0]
     meta = result.get("meta", {})
     price = meta.get("regularMarketPrice")
-    prev = meta.get("chartPreviousClose") or meta.get("previousClose")
 
+    # Build sparkline first so it can also serve as a fallback for prev.
     closes = []
     try:
         closes = result["indicators"]["quote"][0].get("close", []) or []
@@ -108,8 +108,20 @@ def fetch_quote_sync(symbol: str) -> dict:
         closes = []
     spark = [round(float(c), 4) for c in closes if c is not None]
 
-    change = (price - prev) if (price is not None and prev is not None) else None
-    change_pct = (change / prev * 100) if (change is not None and prev) else None
+    # regularMarketChangePercent is Yahoo's authoritative 1-day change %.
+    # chartPreviousClose is the close at the START of the requested range
+    # (here 1-month), which would make the displayed change reflect a whole
+    # month instead of a single day — that was the bug being fixed.
+    chg_pct_raw = meta.get("regularMarketChangePercent")  # e.g. 0.222 means +0.222 %
+    if price is not None and chg_pct_raw is not None:
+        change = price * chg_pct_raw / 100
+        prev = price - change
+        change_pct = chg_pct_raw
+    else:
+        # Fallback: derive from second-to-last daily bar in the chart array
+        prev = spark[-2] if len(spark) >= 2 else None
+        change = (price - prev) if (price is not None and prev is not None) else None
+        change_pct = (change / prev * 100) if (change is not None and prev) else None
 
     return {
         "symbol": meta.get("symbol", symbol),
