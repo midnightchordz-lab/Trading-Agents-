@@ -484,7 +484,11 @@ async def auth_otp_request(body: OtpRequest, request: Request):
     else:
         delivered, err = await sms.send_otp_sms(identifier, otp, ttl_minutes, mailer.EMAIL_FROM_NAME)
         if not delivered and not AUTH_DEBUG_RETURN_OTP:
-            raise HTTPException(status_code=502, detail=err or "Couldn't send the text — try again")
+            # A number problem is the user's to fix (400); a provider failure
+            # is ours (502). Hosting proxies may also swap a 502 body for their
+            # own page, so anything the user must act on stays a 400.
+            status = 400 if err in sms.INPUT_ERRORS else 502
+            raise HTTPException(status_code=status, detail=err or "Couldn't send the text — try again")
 
     response = {"identifier": identifier, "identifier_type": id_type, "sent": True}
     if AUTH_DEBUG_RETURN_OTP:

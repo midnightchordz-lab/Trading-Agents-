@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, TextInput, Pressable, ActivityIndicator, StyleSheet, Alert, Animated, Platform } from "react-native";
+import { View, Text, TextInput, Pressable, ActivityIndicator, StyleSheet, Alert, Animated, Platform, ScrollView } from "react-native";
 import * as AppleAuthentication from "expo-apple-authentication";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GoogleLogo } from "phosphor-react-native";
@@ -8,6 +8,7 @@ import { api } from "@/src/api";
 import { setStoredToken } from "@/src/auth";
 import { startGoogleSignIn } from "@/src/googleAuth";
 import { getWalletDeviceId } from "@/src/wallet";
+import { COUNTRIES, Country, defaultCountry, toE164 } from "@/src/region";
 
 // Futuristic "agent terminal" look — scoped to the login screen only, per
 // product decision. Dark panel, acid-green accent, monospace throughout,
@@ -31,6 +32,7 @@ const TEXT_DIM = "#66755A";
 const TEXT_MID = "#CBD8BC";
 
 type Step = "identifier" | "otp";
+type Mode = "phone" | "email";
 
 function PulseDot() {
   const opacity = useRef(new Animated.Value(1)).current;
@@ -61,6 +63,13 @@ function CornerBracket({ position }: { position: "tl" | "tr" | "bl" | "br" }) {
 export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }) {
   const insets = useSafeAreaInsets();
   const [step, setStep] = useState<Step>("identifier");
+  const [mode, setMode] = useState<Mode>("phone");
+  const [country, setCountry] = useState<Country>(() => defaultCountry());
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  // What the code was actually sent to (full +E.164 number or email); verify
+  // must use exactly this, not whatever is in the field now.
   const [identifier, setIdentifier] = useState("");
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
@@ -82,14 +91,31 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
   }, []);
 
   const requestCode = async () => {
-    if (!identifier.trim()) {
-      Alert.alert("Enter a phone number or email");
-      return;
+    let target: string;
+    if (mode === "phone") {
+      const full = toE164(country, phone);
+      if (!full) {
+        Alert.alert(
+          "Check your number",
+          country.iso === "IN"
+            ? "Enter your 10-digit mobile number, e.g. 98765 43210."
+            : `Enter your number without the country code — ${country.dial} is added for you.`
+        );
+        return;
+      }
+      target = full;
+    } else {
+      target = email.trim();
+      if (!target) {
+        Alert.alert("Enter your email address");
+        return;
+      }
     }
     setLoading(true);
     try {
       const deviceId = await getWalletDeviceId();
-      const res = await api.requestOtp(identifier.trim(), deviceId);
+      const res = await api.requestOtp(target, deviceId);
+      setIdentifier(res.identifier || target);
       setDebugOtp(res.debug_otp || null);
       setStep("otp");
     } catch (e: any) {
@@ -107,7 +133,7 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
     setLoading(true);
     try {
       const deviceId = await getWalletDeviceId();
-      const res = await api.verifyOtp(identifier.trim(), otp.trim(), deviceId);
+      const res = await api.verifyOtp(identifier, otp.trim(), deviceId);
       await setStoredToken(res.token);
       onAuthenticated();
     } catch (e: any) {
@@ -178,18 +204,83 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
 
         {step === "identifier" ? (
           <>
+            <View style={styles.modeRow}>
+              {(["phone", "email"] as Mode[]).map((m) => (
+                <Pressable
+                  key={m}
+                  testID={`login-mode-${m}`}
+                  onPress={() => {
+                    setMode(m);
+                    setPickerOpen(false);
+                  }}
+                  style={[styles.modeBtn, mode === m && styles.modeBtnOn]}
+                >
+                  <Text style={[styles.modeText, mode === m && styles.modeTextOn]}>{m === "phone" ? "PHONE" : "EMAIL"}</Text>
+                </Pressable>
+              ))}
+            </View>
             <View style={styles.fieldBlock}>
-              <Text style={styles.fieldLabel}>&gt; PHONE OR EMAIL</Text>
-              <TextInput
-                testID="login-identifier-input"
-                value={identifier}
-                onChangeText={setIdentifier}
-                placeholder="you@example.com"
-                placeholderTextColor={TEXT_DIM}
-                autoCapitalize="none"
-                keyboardType="email-address"
-                style={styles.input}
-              />
+              <Text style={styles.fieldLabel}>&gt; {mode === "phone" ? "MOBILE NUMBER" : "EMAIL"}</Text>
+              {mode === "phone" ? (
+                <>
+                  <View style={styles.phoneRow}>
+                    <Pressable
+                      testID="login-country"
+                      onPress={() => setPickerOpen((v) => !v)}
+                      style={styles.ccBtn}
+                      accessibilityLabel={`Country code ${country.name} ${country.dial}`}
+                    >
+                      <Text style={styles.ccText}>
+                        {country.flag} {country.dial} ▾
+                      </Text>
+                    </Pressable>
+                    <TextInput
+                      testID="login-phone-input"
+                      value={phone}
+                      onChangeText={setPhone}
+                      placeholder={country.iso === "IN" ? "98765 43210" : "Phone number"}
+                      placeholderTextColor={TEXT_DIM}
+                      keyboardType="phone-pad"
+                      textContentType="telephoneNumber"
+                      autoComplete="tel"
+                      style={[styles.input, { flex: 1 }]}
+                    />
+                  </View>
+                  {pickerOpen ? (
+                    <ScrollView style={styles.ccList} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                      {COUNTRIES.map((c) => (
+                        <Pressable
+                          key={c.iso}
+                          testID={`login-country-${c.iso}`}
+                          onPress={() => {
+                            setCountry(c);
+                            setPickerOpen(false);
+                          }}
+                          style={[styles.ccRow, c.iso === country.iso && styles.ccRowOn]}
+                        >
+                          <Text style={styles.ccRowText}>
+                            {c.flag}  {c.name}
+                          </Text>
+                          <Text style={styles.ccRowDial}>{c.dial}</Text>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  ) : null}
+                </>
+              ) : (
+                <TextInput
+                  testID="login-identifier-input"
+                  value={email}
+                  onChangeText={setEmail}
+                  placeholder="you@example.com"
+                  placeholderTextColor={TEXT_DIM}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  textContentType="emailAddress"
+                  autoComplete="email"
+                  style={styles.input}
+                />
+              )}
             </View>
             <Pressable testID="login-send-code" onPress={requestCode} disabled={loading} style={styles.primaryBtn}>
               {loading ? <ActivityIndicator color={PANEL_BG} /> : <Text style={styles.primaryBtnText}>TRANSMIT CODE →</Text>}
@@ -279,6 +370,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
   },
+  modeRow: { flexDirection: "row", gap: spacing.xs, marginBottom: spacing.sm },
+  modeBtn: { flex: 1, borderWidth: 0.5, borderColor: LINE, borderRadius: 8, paddingVertical: spacing.sm, alignItems: "center" },
+  modeBtnOn: { borderColor: LIME, backgroundColor: FIELD_BG },
+  modeText: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1, color: TEXT_DIM },
+  modeTextOn: { color: LIME },
+  phoneRow: { flexDirection: "row", gap: spacing.xs },
+  ccBtn: {
+    backgroundColor: FIELD_BG,
+    borderWidth: 0.5,
+    borderColor: LIME,
+    borderRadius: 6,
+    paddingHorizontal: spacing.sm,
+    justifyContent: "center",
+  },
+  ccText: { fontFamily: fonts.mono, fontSize: 13, color: TEXT_BRIGHT },
+  ccList: { maxHeight: 200, marginTop: spacing.xs, borderWidth: 0.5, borderColor: LINE, borderRadius: 6, backgroundColor: FIELD_BG },
+  ccRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: spacing.sm, paddingVertical: spacing.sm },
+  ccRowOn: { backgroundColor: LINE },
+  ccRowText: { fontFamily: fonts.mono, fontSize: 12, color: TEXT_BRIGHT },
+  ccRowDial: { fontFamily: fonts.mono, fontSize: 12, color: LIME },
   otpLabel: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1, color: TEXT_DIM, textAlign: "center", marginBottom: spacing.sm },
   otpInput: { textAlign: "center", letterSpacing: 6, fontSize: 18, marginBottom: spacing.sm },
   debugNote: { fontFamily: fonts.mono, fontSize: 10, color: LIME, marginBottom: spacing.md },

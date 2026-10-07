@@ -1,6 +1,6 @@
 // API client for the TradingAgents backend.
 import * as Linking from "expo-linking";
-import * as Localization from "expo-localization";
+import { detectRegion } from "@/src/region";
 import { Platform } from "react-native";
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
@@ -9,14 +9,9 @@ const API = `${BASE}/api`;
 // Device region, sent with wallet calls so the backend can pick the right
 // currency for a wallet that hasn't locked one yet (INR for India, because
 // UPI/GPay only exist on INR payment links). The backend decides; this is
-// only a hint, and an unknown region is simply omitted.
-const REGION = (() => {
-  try {
-    return Localization.getLocales()[0]?.regionCode || "";
-  } catch {
-    return "";
-  }
-})();
+// only a hint, and an unknown region is simply omitted. See region.ts for why
+// this is the time zone first and the language setting second.
+const REGION = detectRegion();
 
 // Deep link back into THIS app, sent with a top-up so the payment page can
 // render a "Return to the app" button. `createURL` knows which runtime we are
@@ -295,6 +290,14 @@ export type Analysis = {
   updated_at: string;
 };
 
+function friendlyStatus(status: number): string {
+  if (status === 401) return "Please sign in again.";
+  if (status === 429) return "Too many attempts — wait a minute and try again.";
+  if (status === 413) return "That file is too large.";
+  if (status >= 500) return "Our server had a problem — try again in a moment.";
+  return "Something went wrong — try again.";
+}
+
 async function j<T>(path: string, opts?: RequestInit): Promise<T> {
   const token = authTokenGetter ? await authTokenGetter() : null;
   const res = await fetch(`${API}${path}`, {
@@ -309,10 +312,13 @@ async function j<T>(path: string, opts?: RequestInit): Promise<T> {
     },
   });
   if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
+    // Our API always answers errors as JSON {detail: "..."}. Anything else —
+    // a hosting proxy's HTML error page, a timeout, a validation array — must
+    // not reach the user as "HTTP 502" or "[object Object]".
+    let detail = friendlyStatus(res.status);
     try {
       const body = await res.json();
-      detail = body?.detail || detail;
+      if (typeof body?.detail === "string" && body.detail) detail = body.detail;
     } catch {}
     const error: Error & { status?: number } = new Error(detail);
     // The status, without touching the message: callers match machine-readable
