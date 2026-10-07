@@ -35,6 +35,7 @@ export function WalletCard() {
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [wallet, setWallet] = useState<WalletBalance | null>(null);
   const [busy, setBusy] = useState(false);
+  const [switching, setSwitching] = useState(false);
   // Razorpay requires both an email and a phone number on every payment link,
   // but an account only has the one it signed in with — so the missing one is
   // asked for here, once.
@@ -216,6 +217,26 @@ export function WalletCard() {
     topUp(needContact.amount, contact);
   };
 
+  // INR / USD, for anyone whose wallet no money has reached yet — whatever
+  // they signed in with. The device's time zone picks the default (INR in
+  // India), but that is a guess: VPNs, a phone set to UTC, or a wallet locked
+  // by a checkout opened on an older build all landed Indian users in USD,
+  // and a USD payment page cannot offer UPI / Google Pay.
+  const changeCurrency = async (code: string) => {
+    if (!deviceId || !wallet || code === wallet.currency) return;
+    setSwitching(true);
+    try {
+      await api.setWalletCurrency(deviceId, code);
+      await refresh(deviceId);
+    } catch (e: any) {
+      Alert.alert("Couldn't switch currency", e?.message || "Try again.");
+    } finally {
+      setSwitching(false);
+    }
+  };
+  const currencyChoices =
+    !IS_IOS && wallet?.currency_changeable && wallet?.payments_live ? wallet.currency_options || [] : [];
+
   const symbol = wallet?.symbol || "$";
   const price = wallet?.prices?.full_analysis;
   const packs = wallet?.packs || [];
@@ -344,19 +365,45 @@ export function WalletCard() {
           </View>
         )
       ) : (
-        <View style={styles.topUpRow}>
-          {packs.map((amt) => (
-            <Pressable
-              key={amt}
-              testID={`topup-${amt}`}
-              disabled={busy || !wallet?.payments_live}
-              onPress={() => topUp(amt)}
-              style={[styles.topUpBtn, (busy || !wallet?.payments_live) && styles.topUpBtnDisabled]}
-            >
-              <Text style={styles.topUpText}>{`+${symbol}${amt.toFixed(0)}`}</Text>
-            </Pressable>
-          ))}
-        </View>
+        <>
+          {currencyChoices.length > 1 ? (
+            <View testID="currency-choice" style={styles.topUpRow}>
+              {currencyChoices.map((opt) => {
+                const active = opt.code === wallet?.currency;
+                return (
+                  <Pressable
+                    key={opt.code}
+                    testID={`currency-${opt.code}`}
+                    disabled={busy || switching}
+                    onPress={() => changeCurrency(opt.code)}
+                    style={[
+                      styles.topUpBtn,
+                      active && styles.currencyActive,
+                      (busy || switching) && styles.topUpBtnDisabled,
+                    ]}
+                  >
+                    <Text style={[styles.topUpText, active && styles.currencyActiveText]}>
+                      {opt.code === "INR" ? `${opt.symbol} INR · UPI / cards` : `${opt.symbol} USD · cards`}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
+          <View style={styles.topUpRow}>
+            {packs.map((amt) => (
+              <Pressable
+                key={amt}
+                testID={`topup-${amt}`}
+                disabled={busy || switching || !wallet?.payments_live}
+                onPress={() => topUp(amt)}
+                style={[styles.topUpBtn, (busy || switching || !wallet?.payments_live) && styles.topUpBtnDisabled]}
+              >
+                <Text style={styles.topUpText}>{`+${symbol}${amt.toFixed(0)}`}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </>
       )}
       {busy ? (
         <View style={styles.busyRow}>
@@ -454,6 +501,8 @@ const styles = StyleSheet.create({
   topUpRow: { flexDirection: "row", gap: spacing.sm, paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
   topUpBtn: { flex: 1, borderWidth: 1, borderColor: colors.border, paddingVertical: spacing.sm, alignItems: "center", minHeight: 44, justifyContent: "center" },
   topUpBtnDisabled: { opacity: 0.45 },
+  currencyActive: { backgroundColor: colors.brand, borderColor: colors.brand },
+  currencyActiveText: { color: colors.onSurfaceInverse },
   topUpText: { fontFamily: fonts.monoBold, fontSize: 12, color: colors.onSurface },
   busyRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
   busyText: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary },

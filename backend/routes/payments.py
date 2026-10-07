@@ -110,6 +110,37 @@ def suggest_currency(user: Optional[dict], region: Optional[str]) -> str:
     return "USD"
 
 
+async def currency_change_blocker(key: str, wallet_doc: Optional[dict], target: Optional[str] = None) -> Optional[str]:
+    """Why this wallet's currency can't be changed right now, or None if it can.
+
+    The lock exists to stop a balance being reinterpreted in another currency
+    (a $12.50 balance must never become ₹12.50), and it used to be claimed the
+    moment a checkout OPENED. So someone who once tapped a pack on a build
+    that guessed USD was stuck in USD forever, without ever paying — an Indian
+    user locked out of UPI over nothing. The lock only has to hold once money
+    is involved, so a change is allowed while all of these are true:
+      - the balance is zero (nothing to reinterpret);
+      - no payment has ever been credited here (a later refund or chargeback
+        is clawed back in the original currency, which must still match);
+      - no payment link is still open in the current currency (if it were paid
+        after the switch, it could not be credited — see credit_wallet_once).
+    """
+    if float((wallet_doc or {}).get("balance") or 0) > 0:
+        return "balance"
+    if await db.wallet_ledger.find_one({"wallet_key": key}, {"_id": 1}):
+        return "history"
+    current = (wallet_doc or {}).get("currency")
+    if current and current != target:
+        open_link = await db.payments.find_one(
+            {"wallet_key": key, "status": "created", "currency": current,
+             "expires_at": {"$gt": now_iso()}},
+            {"_id": 1},
+        )
+        if open_link:
+            return "open_payment"
+    return None
+
+
 
 @api_router.get("/pay/health", dependencies=[Depends(limit_pay_config)])
 async def pay_health():
@@ -173,6 +204,10 @@ async def wallet_balance(
         # to use; `currency_options` is what it renders, so the client needs no
         # currency knowledge of its own (no hardcoded amounts or symbols).
         "currency_locked": bool(stored_currency),
+        # Whether the app may offer INR / USD. True until real money has
+        # touched the wallet (see currency_change_blocker), so a wallet locked
+        # by an abandoned checkout can still move to the other currency.
+        "currency_changeable": (await currency_change_blocker(key, wallet_doc)) is None,
         "currency_options": [
             {
                 "code": code,
@@ -515,6 +550,55 @@ async def resolve_payment_customer(user: Optional[dict], body: "WalletTopup") ->
             await db.users.update_one({"id": user["id"]}, {"$set": updates})
     customer = {"name": sanitize_customer_name((user or {}).get("name")), "email": email, "contact": phone}
     return customer, missing
+
+
+class WalletCurrency(BaseModel):
+    device_id: Optional[str] = None  # ignored for signed-in users (account-keyed wallet)
+    currency: str
+
+
+CURRENCY_BLOCKED = {
+    "balance": "Your wallet already has a balance in {cur}, so it stays in {cur}.",
+    "history": "This wallet has been topped up in {cur} before, so it stays in {cur}.",
+    "open_payment": "You have a {cur} payment page open. Finish it, or switch once it expires (links last an hour).",
+}
+
+
+@api_router.post("/wallet/currency", dependencies=[Depends(limit_pay_order)])
+async def set_wallet_currency(body: WalletCurrency, user: Optional[dict] = Depends(require_user)):
+    """Choose INR or USD for a wallet no money has reached yet. Lets anyone —
+    whatever they signed in with — pick INR to get UPI / Google Pay, and
+    undoes a lock left by an abandoned checkout."""
+    currency = (body.currency or "").strip().upper()
+    if currency not in wal.SUPPORTED_CURRENCIES:
+        raise HTTPException(status_code=400, detail=f"Currency must be one of {', '.join(wal.SUPPORTED_CURRENCIES)}")
+    key = wallet_key_for(user, body.device_id)
+    if not key:
+        raise HTTPException(status_code=400, detail="device_id is required")
+    wallet_doc = await db.wallets.find_one({"device_id": key})
+    current = (wallet_doc or {}).get("currency")
+    if current == currency:
+        return {"currency": currency, "changed": False}
+    blocker = await currency_change_blocker(key, wallet_doc, currency)
+    if blocker:
+        raise HTTPException(status_code=409, detail=CURRENCY_BLOCKED[blocker].format(cur=current or "USD"))
+    await db.wallets.update_one(
+        {"device_id": key},
+        {"$setOnInsert": {"device_id": key, "balance": 0.0}},
+        upsert=True,
+    )
+    # Conditional on the balance still being zero, in the same operation, so a
+    # credit landing between the checks above and this write can't be relabelled.
+    changed = await db.wallets.find_one_and_update(
+        {"device_id": key, "balance": {"$lte": 0},
+         "currency": current if current else {"$in": [None, ""]}},
+        {"$set": {"currency": currency, "updated_at": now_iso()}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not changed:
+        raise HTTPException(status_code=409, detail="Your wallet changed while switching — pull to refresh and try again.")
+    logger.info(f"wallet {key} currency {current or 'unset'} -> {currency}")
+    return {"currency": currency, "changed": True}
 
 
 @api_router.post("/pay/order", dependencies=[Depends(limit_pay_order)])

@@ -249,6 +249,9 @@ export type WalletBalance = {
   /** Everything the app needs to render either choice, so it holds no
    *  currency knowledge of its own (no hardcoded amounts or symbols). */
   currency_options?: CurrencyOption[];
+  /** True while no money has reached the wallet, so INR / USD can still be
+   *  chosen (or a lock left by an abandoned checkout undone). */
+  currency_changeable?: boolean;
 };
 
 export type CurrencyOption = {
@@ -388,6 +391,11 @@ export const api = {
         ...(REGION ? { region: REGION } : {}),
         ...(RETURN_URL ? { return_url: RETURN_URL } : {}),
       }),
+    }),
+  setWalletCurrency: (deviceId: string, currency: string) =>
+    j<{ currency: string; changed: boolean }>(`/wallet/currency`, {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId, currency }),
     }),
   getPaymentStatus: (orderId: string) => j<PaymentStatus>(`/pay/status/${orderId}`),
   getIapConfig: (currency?: string) =>
