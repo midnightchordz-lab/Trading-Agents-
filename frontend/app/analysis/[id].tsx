@@ -18,7 +18,6 @@ import { TradingViewChart } from "@/src/components/TradingViewChart";
 import { VerdictLevels } from "@/src/components/VerdictLevels";
 import { FearGreedGauge } from "@/src/components/FearGreedGauge";
 import { GroundingBadge } from "@/src/components/GroundingBadge";
-import { PositionSizer } from "@/src/components/PositionSizer";
 import { TimeframesCard, HORIZON_LABEL } from "@/src/components/TimeframesCard";
 import { NewsList } from "@/src/components/NewsList";
 import { rangeToInterval, widgetSupports } from "@/src/tv";
@@ -87,7 +86,7 @@ export default function AnalysisScreen() {
   // reasoned and must never move after the fact — only the "current price"
   // reference shown alongside them should keep ticking while someone sits
   // on this screen reading. Scoped to QuoteCard and the chart's live-price
-  // line only; VerdictLevels, PositionSizer, and ShareCard intentionally
+  // line only; VerdictLevels and ShareCard intentionally
   // keep reading the untouched original snapshot (analysis.quote).
   const [liveQuote, setLiveQuote] = useState<Quote | null>(null);
   const liveFailures = useRef(0);
@@ -455,7 +454,10 @@ function VerdictView({
 
       {analysis.grounding ? <GroundingBadge grounding={analysis.grounding} /> : null}
 
-      <PositionSizer verdict={verdict} quote={analysis.quote} grounding={analysis.grounding} />
+      {/* PositionSizer is hidden: computing a share quantity against the
+          desk's levels reads as sizing a trade for the user, which an
+          outlook must not do. The component is kept for a possible return
+          behind a SEBI-registered partner. */}
 
       {analysis.timeframes ? (
         <TimeframesCard
