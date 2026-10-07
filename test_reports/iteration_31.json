@@ -47,6 +47,6 @@
     "history_pill": "BEARISH shown on RELIANCE.NS history row ✅",
     "hindi_locale": "विश्वास स्तर shown for confidence; 52-week labels in Hindi; BEARISH stays in English by design ✅",
     "portfolio_import_api": "/api/portfolio/import returns 3 rows (AAPL ok, RELIANCE.NS ok, BTC-USD ok) ✅",
-    "agents_tab_subtitle": '10 AI AGENTS · 1 OUTLOOK shown ✅'
+    "agents_tab_subtitle": "10 AI AGENTS · 1 OUTLOOK shown ✅"
   }
 }
