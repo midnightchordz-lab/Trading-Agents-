@@ -1,6 +1,7 @@
 // API client for the TradingAgents backend.
 import * as Linking from "expo-linking";
 import { detectRegion } from "@/src/region";
+import { File as FsFile } from "expo-file-system";
 import { Platform } from "react-native";
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
@@ -358,10 +359,16 @@ export const api = {
   portfolioImport: (asset: { uri: string; name: string; mimeType?: string | null; file: Blob | null }) => {
     const form = new FormData();
     if (asset.file) {
+      // Web: the picker hands over a real browser File.
       form.append("file", asset.file, asset.name);
     } else {
-      // React Native: FormData accepts a { uri, name, type } blob literal.
-      form.append("file", { uri: asset.uri, name: asset.name, type: asset.mimeType ?? "application/octet-stream" } as unknown as Blob);
+      // Native: an expo-file-system File over the picked (cached) copy. Expo
+      // replaces the global fetch, and its FormData encoder only reads strings,
+      // Blobs or objects with bytes() — the old React Native
+      // { uri, name, type } literal threw "Unsupported FormDataPart
+      // implementation" on Android. The cached copy keeps the extension
+      // (<id>.xlsx), which is what the backend uses to pick the parser.
+      form.append("file", new FsFile(asset.uri) as unknown as Blob, asset.name);
     }
     return j<ImportResult>(`/portfolio/import`, { method: "POST", body: form });
   },
