@@ -49,8 +49,19 @@ export function QuoteCard({ quote, showRanges = false }: { quote: Quote; showRan
 
   const usingChart = showRanges && range !== "1M" && !!chart && chart.points.length > 1;
   const points = usingChart ? chart!.points : quote.sparkline;
-  const dispPct = usingChart ? chart!.changePercent : quote.changePercent;
-  const dispChange = usingChart ? chart!.change : quote.change;
+  // The quote's change is the 1-day move. On the 1M tab the card shows the
+  // quote's own 1-month sparkline, so measure that window instead (first
+  // close to last, the same way the chart endpoint does for 1W / 1Y).
+  const spark = quote.sparkline || [];
+  const monthBase = spark.length > 1 ? spark[0] : null;
+  const monthLast = spark.length > 1 ? spark[spark.length - 1] : null;
+  const onMonthTab = showRanges && range === "1M" && monthBase != null && monthLast != null && monthBase > 0;
+  const dispPct = usingChart
+    ? chart!.changePercent
+    : onMonthTab
+      ? ((monthLast! - monthBase!) / monthBase!) * 100
+      : quote.changePercent;
+  const dispChange = usingChart ? chart!.change : onMonthTab ? monthLast! - monthBase! : quote.change;
   const up = (dispPct ?? 0) >= 0;
   const cColor = changeColor(dispPct);
 

@@ -91,6 +91,32 @@ def _yf_get(url: str, params: dict):
     return requests.get(url, params=params, headers=YF_HEADERS, timeout=15)
 
 
+def _previous_session_close(result: dict, meta: dict) -> Optional[float]:
+    """Close of the last daily bar from a trading day before the day of the
+    latest price (regularMarketTime), in the exchange's local time.
+
+    Matched by date rather than taking closes[-2], because a bar whose close
+    is still null (common for today's bar early in a session, and on NSE)
+    would otherwise shift the pick back a day. Pre-market the latest price is
+    yesterday's close, so this gives yesterday's move — what Yahoo shows too.
+    """
+    stamps = result.get("timestamp") or []
+    try:
+        closes = result["indicators"]["quote"][0].get("close") or []
+    except Exception:
+        return None
+    bars = [(int(t), float(c)) for t, c in zip(stamps, closes) if t is not None and c is not None]
+    if not bars:
+        return None
+    offset = int(meta.get("gmtoffset") or 0)
+    latest = int(meta.get("regularMarketTime") or bars[-1][0])
+    latest_day = (latest + offset) // 86400
+    for t, c in reversed(bars):
+        if (t + offset) // 86400 < latest_day:
+            return c
+    return None
+
+
 def fetch_quote_sync(symbol: str) -> dict:
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
     r = _yf_get(url, {"range": "1mo", "interval": "1d"})
@@ -100,7 +126,6 @@ def fetch_quote_sync(symbol: str) -> dict:
     meta = result.get("meta", {})
     price = meta.get("regularMarketPrice")
 
-    # Build sparkline first so it can also serve as a fallback for prev.
     closes = []
     try:
         closes = result["indicators"]["quote"][0].get("close", []) or []
@@ -108,20 +133,18 @@ def fetch_quote_sync(symbol: str) -> dict:
         closes = []
     spark = [round(float(c), 4) for c in closes if c is not None]
 
-    # regularMarketChangePercent is Yahoo's authoritative 1-day change %.
-    # chartPreviousClose is the close at the START of the requested range
-    # (here 1-month), which would make the displayed change reflect a whole
-    # month instead of a single day — that was the bug being fixed.
-    chg_pct_raw = meta.get("regularMarketChangePercent")  # e.g. 0.222 means +0.222 %
-    if price is not None and chg_pct_raw is not None:
-        change = price * chg_pct_raw / 100
-        prev = price - change
-        change_pct = chg_pct_raw
-    else:
-        # Fallback: derive from second-to-last daily bar in the chart array
-        prev = spark[-2] if len(spark) >= 2 else None
-        change = (price - prev) if (price is not None and prev is not None) else None
-        change_pct = (change / prev * 100) if (change is not None and prev) else None
+    # 1-day change = price vs the close of the session BEFORE the latest one.
+    # Not chartPreviousClose: with range=1mo that is the close before the
+    # whole month, which made the "1-day" change a 1-month change.
+    prev = _previous_session_close(result, meta)
+    if prev is None:
+        # No usable timestamps: back out the previous close from Yahoo's own
+        # percent (prev = price / (1 + pct/100), not price - price*pct/100).
+        pct = meta.get("regularMarketChangePercent")
+        if price is not None and pct is not None and float(pct) > -100:
+            prev = float(price) / (1 + float(pct) / 100)
+    change = (price - prev) if (price is not None and prev is not None) else None
+    change_pct = (change / prev * 100) if (change is not None and prev) else None
 
     return {
         "symbol": meta.get("symbol", symbol),
