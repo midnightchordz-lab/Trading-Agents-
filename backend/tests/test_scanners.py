@@ -161,7 +161,20 @@ def test_parse_quotes_matches_by_instrument_token():
     keys = {"NSE_EQ|INE002A01018": "RELIANCE", "NSE_EQ|INE467B01029": "TCS"}
     q = upstox_feed.parse_quotes(payload, keys)
     assert q["RELIANCE"] == {"price": 1210.5, "prev_close": 1200.0, "volume": 3_500_000, "last_trade_ms": 1761100000000}
-    assert q["TCS"]["prev_close"] == 3030  # from net_change when ohlc.close is missing
+    assert q["TCS"]["prev_close"] == 3030  # from net_change
+
+
+def test_previous_close_comes_from_net_change_not_ohlc_close():
+    # What the live API actually returned on 22 Oct 2026: ohlc.close equals
+    # the last price. Using it would make every change 0%.
+    payload = {"status": "success", "data": {"NSE_EQ:INFY": {
+        "instrument_token": "NSE_EQ|INE009A01021", "last_price": 1153.35, "net_change": -12.65,
+        "ohlc": {"open": 1165, "high": 1170, "low": 1150, "close": 1153.35}, "volume": 17007168}}}
+    q = upstox_feed.parse_quotes(payload, {"NSE_EQ|INE009A01021": "INFY"})["INFY"]
+    assert q["prev_close"] == pytest.approx(1166.0)
+    # No net_change and ohlc.close == price: unknown, rather than a fake 0%.
+    payload["data"]["NSE_EQ:INFY"].pop("net_change")
+    assert upstox_feed.parse_quotes(payload, {"NSE_EQ|INE009A01021": "INFY"})["INFY"]["prev_close"] is None
 
 
 def test_parse_quotes_rejects_an_error_response():

@@ -84,8 +84,13 @@ def parse_quotes(payload: dict, key_to_symbol: dict[str, str]) -> dict[str, dict
 
     Matched back by `instrument_token` (the key we asked for), not by the
     response's dict keys, whose format ("NSE_EQ:RELIANCE") is not the request's.
-    The previous close is ohlc.close (documented as the previous session's
-    close), or last_price - net_change when that is missing.
+
+    The previous close is last_price - net_change. NOT ohlc.close: the SDK
+    documents it as the previous session's close, but the live API returns
+    today's price there (verified 22 Oct 2026: close == last_price on every
+    symbol), which would make every change 0% and empty the gainers/losers.
+    ohlc.close is used only when net_change is missing, and is then ignored if
+    it simply equals the last price.
     """
     if not isinstance(payload, dict) or payload.get("status") != "success":
         raise UpstoxUnavailable(f"unexpected quote response: {str(payload)[:200]}")
@@ -97,9 +102,13 @@ def parse_quotes(payload: dict, key_to_symbol: dict[str, str]) -> dict[str, dict
         price = q.get("last_price")
         if not sym or not price:
             continue
-        prev = (q.get("ohlc") or {}).get("close")
-        if not prev and q.get("net_change") is not None:
+        prev = None
+        if q.get("net_change") is not None:
             prev = float(price) - float(q["net_change"])
+        else:
+            close = (q.get("ohlc") or {}).get("close")
+            if close and float(close) != float(price):
+                prev = float(close)
         ltt = q.get("last_trade_time")
         out[sym] = {
             "price": float(price),
