@@ -1,6 +1,6 @@
-"""PHONE_LOGIN_MODE: new accounts sign in by email; phone codes go only to
-numbers that already have an account ("existing", the default), to nobody
-("off"), or to anyone ("on").
+"""PHONE_LOGIN_MODE: the app signs in by email code or Google only, so phone
+codes are refused by default ("off"). The switch can still send them only to
+numbers that already have an account ("existing") or to anyone ("on").
 
 Runs the real request handler in-process against an in-memory stand-in for
 the two collections it touches, with the SMS sender replaced — so these
@@ -87,24 +87,35 @@ def ask(number):
     return asyncio.run(ar.auth_otp_request(ar.OtpRequest(identifier=number), REQ))
 
 
-def test_default_mode_is_existing():
+def test_default_mode_is_off():
     os.environ.pop("PHONE_LOGIN_MODE", None)
-    assert ar.phone_login_mode() == "existing"
-    assert asyncio.run(ar.auth_config()) == {"phone_login": "existing"}
+    assert ar.phone_login_mode() == "off"
+    assert asyncio.run(ar.auth_config()) == {"phone_login": "off"}
 
 
-def test_unknown_values_fall_back_to_existing(monkeypatch):
+def test_unknown_values_fall_back_to_off(monkeypatch):
     monkeypatch.setenv("PHONE_LOGIN_MODE", "maybe")
-    assert ar.phone_login_mode() == "existing"
+    assert ar.phone_login_mode() == "off"
+
+
+def test_by_default_a_phone_code_is_refused_and_nothing_is_texted(env):
+    env.db.users.docs.append({"id": "u1", "phone": OLD})
+    for number in (NEW, OLD):
+        with pytest.raises(HTTPException) as e:
+            ask(number)
+        assert e.value.status_code == 400 and "email" in e.value.detail
+    assert env.texts == [] and env.db.otp_requests.docs == []
 
 
 def test_existing_mode_texts_only_numbers_that_have_an_account(env):
+    env.monkeypatch.setenv("PHONE_LOGIN_MODE", "existing")
     env.db.users.docs.append({"id": "u1", "phone": OLD})
     assert ask(OLD)["sent"] is True
     assert env.texts == [OLD]
 
 
 def test_existing_mode_sends_nothing_to_a_new_number_but_says_the_same(env):
+    env.monkeypatch.setenv("PHONE_LOGIN_MODE", "existing")
     res = ask(NEW)
     assert res == {"identifier": NEW, "identifier_type": "phone", "sent": True}
     assert env.texts == []
@@ -113,6 +124,7 @@ def test_existing_mode_sends_nothing_to_a_new_number_but_says_the_same(env):
 
 
 def test_suppressed_probes_do_not_eat_the_sms_budget(env):
+    env.monkeypatch.setenv("PHONE_LOGIN_MODE", "existing")
     env.monkeypatch.setattr(ar, "OTP_SMS_GLOBAL_MAX_PER_HOUR", 1)
     ask(NEW)  # suppressed, recorded
     env.db.users.docs.append({"id": "u1", "phone": OLD})

@@ -49,23 +49,25 @@ OTP_EMAIL_GLOBAL_MAX_PER_HOUR = int(os.environ.get("OTP_EMAIL_GLOBAL_MAX_PER_HOU
 #
 # SMS codes were the least reliable way in (carrier filtering, Twilio geo
 # permissions, number-format errors) and the only one that costs money and can
-# be pumped, so new accounts sign in by email. PHONE_LOGIN_MODE:
-#   "existing" (default) — a code is texted ONLY to a number that already has
+# be pumped, so the app signs in by email code or Google (Apple on iOS) only,
+# and phone codes are refused by default. PHONE_LOGIN_MODE:
+#   "off" (default) — phone codes are refused with a pointer to email.
+#   "existing" — a code is texted ONLY to a number that already has
 #       an account, so people who signed up by phone are never locked out. Any
 #       other number gets the same "sent" reply with nothing sent and nothing
 #       usable stored: no SMS spend, no strangers texted, and no way to tell
 #       from outside which numbers have accounts.
-#   "off" — phone codes are refused with a pointer to email.
 #   "on"  — the old behaviour, anyone can sign up by phone.
 # The store-reviewer identifier is always allowed. Read per request, so a
 # redeploy with a new value takes effect without an app build — and older
-# builds still showing a PHONE tab obey it too.
+# builds still showing a PHONE tab obey it too. The current app has no phone
+# field at all; "existing"/"on" only matter if one is brought back.
 PHONE_LOGIN_MODES = ("existing", "off", "on")
 
 
 def phone_login_mode() -> str:
-    mode = (os.environ.get("PHONE_LOGIN_MODE", "existing") or "").strip().lower()
-    return mode if mode in PHONE_LOGIN_MODES else "existing"
+    mode = (os.environ.get("PHONE_LOGIN_MODE", "off") or "").strip().lower()
+    return mode if mode in PHONE_LOGIN_MODES else "off"
 
 # Whole-deployment ceiling on NEW free-credit grants per hour. Device id and IP
 # are both rotatable, so nothing per-caller stops a distributed signup farm.

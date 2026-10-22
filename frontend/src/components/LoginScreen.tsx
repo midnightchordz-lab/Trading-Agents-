@@ -1,14 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, TextInput, Pressable, ActivityIndicator, StyleSheet, Alert, Animated, Platform, ScrollView } from "react-native";
+import { View, Text, TextInput, Pressable, ActivityIndicator, StyleSheet, Alert, Animated, Platform } from "react-native";
 import * as AppleAuthentication from "expo-apple-authentication";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GoogleLogo } from "phosphor-react-native";
 import { fonts, spacing } from "@/src/theme";
-import { api, PhoneLoginMode } from "@/src/api";
+import { api } from "@/src/api";
 import { setStoredToken } from "@/src/auth";
 import { startGoogleSignIn } from "@/src/googleAuth";
 import { getWalletDeviceId } from "@/src/wallet";
-import { COUNTRIES, Country, defaultCountry, toE164 } from "@/src/region";
 
 // Futuristic "agent terminal" look — scoped to the login screen only, per
 // product decision. Dark panel, acid-green accent, monospace throughout,
@@ -32,7 +31,6 @@ const TEXT_DIM = "#66755A";
 const TEXT_MID = "#CBD8BC";
 
 type Step = "identifier" | "otp";
-type Mode = "phone" | "email";
 
 function PulseDot() {
   const opacity = useRef(new Animated.Value(1)).current;
@@ -63,16 +61,11 @@ function CornerBracket({ position }: { position: "tl" | "tr" | "bl" | "br" }) {
 export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }) {
   const insets = useSafeAreaInsets();
   const [step, setStep] = useState<Step>("identifier");
-  // Email first. Phone sign-in was the least reliable way in, so new users are
-  // sent to email; the server's PHONE_LOGIN_MODE decides what else is shown.
-  // Until it answers (or if it can't be reached) only email is offered.
-  const [mode, setMode] = useState<Mode>("email");
-  const [phoneLogin, setPhoneLogin] = useState<PhoneLoginMode>("off");
-  const [country, setCountry] = useState<Country>(() => defaultCountry());
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [phone, setPhone] = useState("");
+  // Email (one-time code) or Google — and Apple on iOS. Phone sign-in was
+  // removed: it was the least reliable way in, the only one that costs money
+  // per attempt, and the only one that can be pumped.
   const [email, setEmail] = useState("");
-  // What the code was actually sent to (full +E.164 number or email); verify
+  // What the code was actually sent to (the normalised email); verify
   // must use exactly this, not whatever is in the field now.
   const [identifier, setIdentifier] = useState("");
   const [otp, setOtp] = useState("");
@@ -80,19 +73,6 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
   const [googleLoading, setGoogleLoading] = useState(false);
   const [appleReady, setAppleReady] = useState(false);
   const [debugOtp, setDebugOtp] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .authConfig()
-      .then((c) => {
-        if (!cancelled && (c.phone_login === "on" || c.phone_login === "existing")) setPhoneLogin(c.phone_login);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (Platform.OS !== "ios") return;
@@ -108,25 +88,10 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
   }, []);
 
   const requestCode = async () => {
-    let target: string;
-    if (mode === "phone") {
-      const full = toE164(country, phone);
-      if (!full) {
-        Alert.alert(
-          "Check your number",
-          country.iso === "IN"
-            ? "Enter your 10-digit mobile number, e.g. 98765 43210."
-            : `Enter your number without the country code — ${country.dial} is added for you.`
-        );
-        return;
-      }
-      target = full;
-    } else {
-      target = email.trim();
-      if (!target) {
-        Alert.alert("Enter your email address");
-        return;
-      }
+    const target = email.trim();
+    if (!target) {
+      Alert.alert("Enter your email address");
+      return;
     }
     setLoading(true);
     try {
@@ -221,105 +186,24 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
 
         {step === "identifier" ? (
           <>
-            {phoneLogin === "on" ? (
-              <View style={styles.modeRow}>
-                {(["email", "phone"] as Mode[]).map((m) => (
-                  <Pressable
-                    key={m}
-                    testID={`login-mode-${m}`}
-                    onPress={() => {
-                      setMode(m);
-                      setPickerOpen(false);
-                    }}
-                    style={[styles.modeBtn, mode === m && styles.modeBtnOn]}
-                  >
-                    <Text style={[styles.modeText, mode === m && styles.modeTextOn]}>{m === "phone" ? "PHONE" : "EMAIL"}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
             <View style={styles.fieldBlock}>
-              <Text style={styles.fieldLabel}>&gt; {mode === "phone" ? "MOBILE NUMBER" : "EMAIL"}</Text>
-              {mode === "phone" ? (
-                <>
-                  <View style={styles.phoneRow}>
-                    <Pressable
-                      testID="login-country"
-                      onPress={() => setPickerOpen((v) => !v)}
-                      style={styles.ccBtn}
-                      accessibilityLabel={`Country code ${country.name} ${country.dial}`}
-                    >
-                      <Text style={styles.ccText}>
-                        {country.flag} {country.dial} ▾
-                      </Text>
-                    </Pressable>
-                    <TextInput
-                      testID="login-phone-input"
-                      value={phone}
-                      onChangeText={setPhone}
-                      placeholder={country.iso === "IN" ? "98765 43210" : "Phone number"}
-                      placeholderTextColor={TEXT_DIM}
-                      keyboardType="phone-pad"
-                      textContentType="telephoneNumber"
-                      autoComplete="tel"
-                      style={[styles.input, { flex: 1 }]}
-                    />
-                  </View>
-                  {pickerOpen ? (
-                    <ScrollView style={styles.ccList} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-                      {COUNTRIES.map((c) => (
-                        <Pressable
-                          key={c.iso}
-                          testID={`login-country-${c.iso}`}
-                          onPress={() => {
-                            setCountry(c);
-                            setPickerOpen(false);
-                          }}
-                          style={[styles.ccRow, c.iso === country.iso && styles.ccRowOn]}
-                        >
-                          <Text style={styles.ccRowText}>
-                            {c.flag}  {c.name}
-                          </Text>
-                          <Text style={styles.ccRowDial}>{c.dial}</Text>
-                        </Pressable>
-                      ))}
-                    </ScrollView>
-                  ) : null}
-                </>
-              ) : (
-                <TextInput
-                  testID="login-identifier-input"
-                  value={email}
-                  onChangeText={setEmail}
-                  placeholder="you@example.com"
-                  placeholderTextColor={TEXT_DIM}
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                  textContentType="emailAddress"
-                  autoComplete="email"
-                  style={styles.input}
-                />
-              )}
+              <Text style={styles.fieldLabel}>&gt; EMAIL</Text>
+              <TextInput
+                testID="login-identifier-input"
+                value={email}
+                onChangeText={setEmail}
+                placeholder="you@example.com"
+                placeholderTextColor={TEXT_DIM}
+                autoCapitalize="none"
+                keyboardType="email-address"
+                textContentType="emailAddress"
+                autoComplete="email"
+                style={styles.input}
+              />
             </View>
             <Pressable testID="login-send-code" onPress={requestCode} disabled={loading} style={styles.primaryBtn}>
               {loading ? <ActivityIndicator color={PANEL_BG} /> : <Text style={styles.primaryBtnText}>TRANSMIT CODE →</Text>}
             </Pressable>
-            {phoneLogin === "existing" ? (
-              // Only for people who signed up by phone before email became
-              // the way in; the server texts numbers that already have an account.
-              <Pressable
-                testID="login-phone-fallback"
-                onPress={() => {
-                  setMode(mode === "phone" ? "email" : "phone");
-                  setPickerOpen(false);
-                }}
-                hitSlop={8}
-              >
-                <Text style={styles.linkText}>
-                  {mode === "phone" ? "< BACK TO EMAIL SIGN-IN" : "SIGNED UP WITH A PHONE NUMBER? USE PHONE >"}
-                </Text>
-              </Pressable>
-            ) : null}
           </>
         ) : (
           <>
@@ -339,7 +223,7 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
               {loading ? <ActivityIndicator color={PANEL_BG} /> : <Text style={styles.primaryBtnText}>VERIFY →</Text>}
             </Pressable>
             <Pressable onPress={() => setStep("identifier")} hitSlop={8}>
-              <Text style={styles.linkText}>&lt; {mode === "phone" ? "USE A DIFFERENT NUMBER" : "USE A DIFFERENT EMAIL"}</Text>
+              <Text style={styles.linkText}>&lt; USE A DIFFERENT EMAIL</Text>
             </Pressable>
           </>
         )}
@@ -405,26 +289,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
   },
-  modeRow: { flexDirection: "row", gap: spacing.xs, marginBottom: spacing.sm },
-  modeBtn: { flex: 1, borderWidth: 0.5, borderColor: LINE, borderRadius: 8, paddingVertical: spacing.sm, alignItems: "center" },
-  modeBtnOn: { borderColor: LIME, backgroundColor: FIELD_BG },
-  modeText: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1, color: TEXT_DIM },
-  modeTextOn: { color: LIME },
-  phoneRow: { flexDirection: "row", gap: spacing.xs },
-  ccBtn: {
-    backgroundColor: FIELD_BG,
-    borderWidth: 0.5,
-    borderColor: LIME,
-    borderRadius: 6,
-    paddingHorizontal: spacing.sm,
-    justifyContent: "center",
-  },
-  ccText: { fontFamily: fonts.mono, fontSize: 13, color: TEXT_BRIGHT },
-  ccList: { maxHeight: 200, marginTop: spacing.xs, borderWidth: 0.5, borderColor: LINE, borderRadius: 6, backgroundColor: FIELD_BG },
-  ccRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: spacing.sm, paddingVertical: spacing.sm },
-  ccRowOn: { backgroundColor: LINE },
-  ccRowText: { fontFamily: fonts.mono, fontSize: 12, color: TEXT_BRIGHT },
-  ccRowDial: { fontFamily: fonts.mono, fontSize: 12, color: LIME },
   otpLabel: { fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1, color: TEXT_DIM, textAlign: "center", marginBottom: spacing.sm },
   otpInput: { textAlign: "center", letterSpacing: 6, fontSize: 18, marginBottom: spacing.sm },
   debugNote: { fontFamily: fonts.mono, fontSize: 10, color: LIME, marginBottom: spacing.md },

@@ -262,9 +262,6 @@ export type CurrencyOption = {
   prices: Record<string, number>;
 };
 
-/** "existing": phone sign-in only for accounts that already have a number. */
-export type PhoneLoginMode = "existing" | "off" | "on";
-
 export type TopupOrder = { order_id: string; amount: number; currency: string; checkout_url: string };
 
 export type IapPack = { product_id: string; amount: number };
@@ -413,8 +410,6 @@ export const api = {
   getAnalysis: (id: string) => j<Analysis>(`/analysis/${id}`),
   history: () => j<{ results: Analysis[] }>(`/history`),
   remove: (id: string) => j<{ ok: boolean }>(`/analysis/${id}`, { method: "DELETE" }),
-  // Which sign-in methods the server allows; see PHONE_LOGIN_MODE.
-  authConfig: () => j<{ phone_login: PhoneLoginMode }>(`/auth/config`),
   requestOtp: (identifier: string, deviceId?: string) =>
     j<{ identifier: string; identifier_type: string; sent: boolean; debug_otp?: string }>(`/auth/otp/request`, {
       method: "POST",
