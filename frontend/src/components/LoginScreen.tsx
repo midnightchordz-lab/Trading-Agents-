@@ -4,7 +4,7 @@ import * as AppleAuthentication from "expo-apple-authentication";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GoogleLogo } from "phosphor-react-native";
 import { fonts, spacing } from "@/src/theme";
-import { api } from "@/src/api";
+import { api, PhoneLoginMode } from "@/src/api";
 import { setStoredToken } from "@/src/auth";
 import { startGoogleSignIn } from "@/src/googleAuth";
 import { getWalletDeviceId } from "@/src/wallet";
@@ -63,7 +63,11 @@ function CornerBracket({ position }: { position: "tl" | "tr" | "bl" | "br" }) {
 export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }) {
   const insets = useSafeAreaInsets();
   const [step, setStep] = useState<Step>("identifier");
-  const [mode, setMode] = useState<Mode>("phone");
+  // Email first. Phone sign-in was the least reliable way in, so new users are
+  // sent to email; the server's PHONE_LOGIN_MODE decides what else is shown.
+  // Until it answers (or if it can't be reached) only email is offered.
+  const [mode, setMode] = useState<Mode>("email");
+  const [phoneLogin, setPhoneLogin] = useState<PhoneLoginMode>("off");
   const [country, setCountry] = useState<Country>(() => defaultCountry());
   const [pickerOpen, setPickerOpen] = useState(false);
   const [phone, setPhone] = useState("");
@@ -76,6 +80,19 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
   const [googleLoading, setGoogleLoading] = useState(false);
   const [appleReady, setAppleReady] = useState(false);
   const [debugOtp, setDebugOtp] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .authConfig()
+      .then((c) => {
+        if (!cancelled && (c.phone_login === "on" || c.phone_login === "existing")) setPhoneLogin(c.phone_login);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (Platform.OS !== "ios") return;
@@ -204,21 +221,23 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
 
         {step === "identifier" ? (
           <>
-            <View style={styles.modeRow}>
-              {(["phone", "email"] as Mode[]).map((m) => (
-                <Pressable
-                  key={m}
-                  testID={`login-mode-${m}`}
-                  onPress={() => {
-                    setMode(m);
-                    setPickerOpen(false);
-                  }}
-                  style={[styles.modeBtn, mode === m && styles.modeBtnOn]}
-                >
-                  <Text style={[styles.modeText, mode === m && styles.modeTextOn]}>{m === "phone" ? "PHONE" : "EMAIL"}</Text>
-                </Pressable>
-              ))}
-            </View>
+            {phoneLogin === "on" ? (
+              <View style={styles.modeRow}>
+                {(["email", "phone"] as Mode[]).map((m) => (
+                  <Pressable
+                    key={m}
+                    testID={`login-mode-${m}`}
+                    onPress={() => {
+                      setMode(m);
+                      setPickerOpen(false);
+                    }}
+                    style={[styles.modeBtn, mode === m && styles.modeBtnOn]}
+                  >
+                    <Text style={[styles.modeText, mode === m && styles.modeTextOn]}>{m === "phone" ? "PHONE" : "EMAIL"}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
             <View style={styles.fieldBlock}>
               <Text style={styles.fieldLabel}>&gt; {mode === "phone" ? "MOBILE NUMBER" : "EMAIL"}</Text>
               {mode === "phone" ? (
@@ -285,6 +304,22 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
             <Pressable testID="login-send-code" onPress={requestCode} disabled={loading} style={styles.primaryBtn}>
               {loading ? <ActivityIndicator color={PANEL_BG} /> : <Text style={styles.primaryBtnText}>TRANSMIT CODE →</Text>}
             </Pressable>
+            {phoneLogin === "existing" ? (
+              // Only for people who signed up by phone before email became
+              // the way in; the server texts numbers that already have an account.
+              <Pressable
+                testID="login-phone-fallback"
+                onPress={() => {
+                  setMode(mode === "phone" ? "email" : "phone");
+                  setPickerOpen(false);
+                }}
+                hitSlop={8}
+              >
+                <Text style={styles.linkText}>
+                  {mode === "phone" ? "< BACK TO EMAIL SIGN-IN" : "SIGNED UP WITH A PHONE NUMBER? USE PHONE >"}
+                </Text>
+              </Pressable>
+            ) : null}
           </>
         ) : (
           <>
@@ -304,7 +339,7 @@ export function LoginScreen({ onAuthenticated }: { onAuthenticated: () => void }
               {loading ? <ActivityIndicator color={PANEL_BG} /> : <Text style={styles.primaryBtnText}>VERIFY →</Text>}
             </Pressable>
             <Pressable onPress={() => setStep("identifier")} hitSlop={8}>
-              <Text style={styles.linkText}>&lt; USE A DIFFERENT PHONE OR EMAIL</Text>
+              <Text style={styles.linkText}>&lt; {mode === "phone" ? "USE A DIFFERENT NUMBER" : "USE A DIFFERENT EMAIL"}</Text>
             </Pressable>
           </>
         )}

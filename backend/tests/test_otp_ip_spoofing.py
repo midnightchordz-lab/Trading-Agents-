@@ -183,8 +183,10 @@ def ambient(identifier_type):
     has to be set RELATIVE to this: a fixed low cap is already exceeded by the
     suite's own traffic, and a fixed high one needs 1000 seeded rows, which is
     what disturbed other tests in the first place."""
+    # Suppressed phone probes (PHONE_LOGIN_MODE=existing) never draw on the
+    # SMS budget, so they must not count towards its baseline either.
     return db.otp_requests.count_documents(
-        {"identifier_type": identifier_type, "created_at": {"$gt": _iso(60)}})
+        {"identifier_type": identifier_type, "created_at": {"$gt": _iso(60)}, "suppressed": {"$ne": True}})
 
 
 def cap_just_above_ambient(monkeypatch, attr, identifier_type, headroom):
@@ -202,6 +204,10 @@ def exhaust(monkeypatch, attr, identifier_type, tag, rows=2):
 
 def test_sms_budget_stops_a_distributed_pump_but_leaves_email_working(clean_otp_window, monkeypatch):
     tag = clean_otp_window
+    # The budget guards numbers we actually text; in the default "existing"
+    # mode a brand-new number is never texted at all, so test it with phone
+    # sign-up switched on.
+    monkeypatch.setenv("PHONE_LOGIN_MODE", "on")
     exhaust(monkeypatch, "OTP_SMS_GLOBAL_MAX_PER_HOUR", "phone", tag)
     with pytest.raises(HTTPException) as caught:
         call_otp_request("+919812345678", "203.0.113.31")
