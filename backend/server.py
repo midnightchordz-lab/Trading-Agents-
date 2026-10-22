@@ -5,6 +5,7 @@ endpoints in routes/, the agent pipeline in pipeline.py and the market feeds in
 market_data.py. This file only assembles them and owns the startup work that
 has to happen exactly once per process.
 """
+import asyncio
 import os
 
 from fastapi import FastAPI, Request
@@ -17,11 +18,12 @@ import rate_limit as ratelimit
 import razorpay_pay as rzp
 from core import client, db, logger, now_iso
 from email_repair import apply_email_repair, find_email_repair_candidates
-from routes import analysis, auth_routes, market, payments, portfolio
+import scan_jobs
+from routes import analysis, auth_routes, market, payments, portfolio, scans
 
 app = FastAPI()
 
-for module in (market, analysis, auth_routes, payments, portfolio):
+for module in (market, analysis, auth_routes, payments, portfolio, scans):
     app.include_router(module.api_router)
 
 
@@ -67,6 +69,14 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.on_event("startup")
+async def start_scanner():
+    """Background refresh for the stock scanners (see scan_jobs.py). Off with
+    SCANNER_ENABLED=false; only one process does the work, by lease."""
+    if scan_jobs.enabled():
+        asyncio.create_task(scan_jobs.run_forever())
 
 
 @app.on_event("shutdown")

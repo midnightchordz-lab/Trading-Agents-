@@ -262,6 +262,29 @@ export type CurrencyOption = {
   prices: Record<string, number>;
 };
 
+/** One scanner: a factual filter, refreshed in the background. `as_of` is
+ *  when its list was computed; `delayed` means 15-minute delayed data. */
+export type ScanMeta = {
+  id: string;
+  group: "in" | "us" | "crypto";
+  market: string;
+  kind: "live" | "daily";
+  title: string;
+  description: string;
+  count: number;
+  as_of: string | null;
+  source: "upstox" | "yahoo" | null;
+  delayed: boolean;
+  note?: string | null;
+};
+export type ScanItem = {
+  symbol: string;
+  analyze_symbol: string;
+  label: string;
+  price: number | null;
+  change_pct: number | null;
+};
+
 export type TopupOrder = { order_id: string; amount: number; currency: string; checkout_url: string };
 
 export type IapPack = { product_id: string; amount: number };
@@ -372,6 +395,8 @@ export const api = {
     }
     return j<ImportResult>(`/portfolio/import`, { method: "POST", body: form });
   },
+  scans: () => j<{ india_market_open: boolean; scans: ScanMeta[] }>(`/scans`),
+  scan: (id: string) => j<ScanMeta & { items: ScanItem[] }>(`/scans/${encodeURIComponent(id)}`),
   trending: () => j<{ results: Quote[] }>(`/trending`),
   markets: (category: string) => j<{ results: Quote[] }>(`/markets/${category}`),
   analyze: (symbol: string, name?: string, language?: string, deviceId?: string) =>

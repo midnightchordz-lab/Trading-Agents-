@@ -157,6 +157,8 @@ def fetch_quote_sync(symbol: str) -> dict:
         "exchange": meta.get("fullExchangeName"),
         "dayHigh": meta.get("regularMarketDayHigh"),
         "dayLow": meta.get("regularMarketDayLow"),
+        # Today's traded volume, used by the scanners' delayed fallback.
+        "volume": meta.get("regularMarketVolume"),
         "fiftyTwoWeekHigh": meta.get("fiftyTwoWeekHigh"),
         "fiftyTwoWeekLow": meta.get("fiftyTwoWeekLow"),
         "sparkline": spark[-30:],

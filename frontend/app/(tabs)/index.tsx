@@ -15,7 +15,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import { MagnifyingGlass, X, ArrowRight, CaretRight, Star, ArrowsLeftRight } from "phosphor-react-native";
+import { MagnifyingGlass, X, ArrowRight, CaretRight, Star, ArrowsLeftRight, Pulse } from "phosphor-react-native";
 
 import { colors, fonts, spacing, BORDER, changeColor, accentAt, CATEGORY_COLORS, accents, CTA_GRADIENT } from "@/src/theme";
 import { api, Quote, SearchResult, WalletBalance } from "@/src/api";
@@ -370,6 +370,16 @@ export default function AnalyzeScreen() {
               </View>
             ) : null}
 
+            {/* Scanners entry */}
+            <Pressable testID="open-scans" onPress={() => router.push("/scans")} style={styles.scansRow}>
+              <Pulse size={18} color={colors.onSurface} weight="bold" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.scansTitle}>MARKET SCANS</Text>
+                <Text style={styles.scansSub}>Top movers, 52-week highs, RSI and more · free</Text>
+              </View>
+              <CaretRight size={16} color={colors.onSurface} weight="bold" />
+            </Pressable>
+
             {/* Browse markets */}
             <View style={styles.section}>
               <Text style={styles.sectionLabel}>{selected ? t("analyze.or_pick_another") : t("analyze.browse_markets")}</Text>
@@ -587,6 +597,17 @@ const styles = StyleSheet.create({
   watchSymbol: { fontFamily: fonts.monoBold, fontSize: 13, color: colors.onSurface },
   watchName: { fontFamily: fonts.mono, fontSize: 9, color: colors.onSurfaceTertiary, marginTop: 2 },
   watchRemove: { padding: 4 },
+  scansRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    borderWidth: BORDER,
+    borderColor: colors.borderStrong,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  scansTitle: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1.5, color: colors.onSurface },
+  scansSub: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurfaceTertiary, marginTop: 2 },
   sectionLabel: {
     fontFamily: fonts.monoBold,
     fontSize: 11,
