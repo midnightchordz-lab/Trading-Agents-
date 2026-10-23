@@ -357,3 +357,106 @@ def test_api_scan_detail_and_unknown_ids(fake_db):
     with pytest.raises(HTTPException) as e:
         asyncio.run(scan_routes.get_scan("in.$where"))
     assert e.value.status_code == 404
+
+
+# --- daily refresh timing: once after each market's close, completed sessions only ---
+
+def test_last_close_per_market():
+    fri_918 = ist(2026, 10, 23, 9, 18)                     # Friday morning, NSE open
+    at, session = sc.last_close("in", fri_918)
+    assert session.isoformat() == "2026-10-22" and at.astimezone(IST).hour == 15
+    at, session = sc.last_close("in", ist(2026, 10, 23, 16, 0))
+    assert session.isoformat() == "2026-10-23"           # after Friday's close
+    _, session = sc.last_close("in", ist(2026, 10, 25, 12, 0))
+    assert session.isoformat() == "2026-10-23"           # Sunday -> Friday's close
+    _, session = sc.last_close("us", fri_918)             # still Thursday night in New York
+    assert session.isoformat() == "2026-10-22"
+    at, session = sc.last_close("crypto", fri_918)         # 00:15 UTC Friday finalised Thursday
+    assert session.isoformat() == "2026-10-22" and at.astimezone(timezone.utc).hour == 0
+
+
+def test_todays_unfinished_candle_is_dropped():
+    fri_918 = ist(2026, 10, 23, 9, 18)
+    today = int(ist(2026, 10, 23, 9, 15).timestamp())
+    bars = bars_from([100.0] * 40, start=today - 39 * 86400)  # last bar is today's
+    kept = sc.completed_bars("in", bars, fri_918)
+    assert len(kept) == 39
+    assert len(sc.completed_bars("in", bars, ist(2026, 10, 23, 16, 0))) == 40   # after the close
+
+
+def test_daily_refresh_runs_once_per_close(fake_db, monkeypatch):
+    done = []
+
+    async def fake_group(group, now):
+        done.append(group)
+    monkeypatch.setattr(scan_jobs, "refresh_daily_group", fake_group)
+    t1 = ist(2026, 10, 23, 9, 18)
+    asyncio.run(scan_jobs.refresh_due_daily(t1))
+    asyncio.run(scan_jobs.refresh_due_daily(t1 + timedelta(minutes=30)))
+    assert sorted(done) == ["crypto", "in", "us"]          # first run, then nothing new
+    asyncio.run(scan_jobs.refresh_due_daily(ist(2026, 10, 23, 15, 50)))
+    assert done[3:] == ["in"]                              # only India closed since
+
+
+def test_live_runs_before_the_daily_rebuild(fake_db, monkeypatch):
+    order = []
+
+    async def fake_live(now, fraction):
+        order.append("live")
+
+    async def fake_daily(now):
+        order.append("daily")
+    monkeypatch.setattr(scan_jobs, "refresh_live", fake_live)
+    monkeypatch.setattr(scan_jobs, "refresh_due_daily", fake_daily)
+    asyncio.run(scan_jobs.tick(ist(2026, 10, 23, 9, 18)))
+    assert order == ["live", "daily"]
+
+
+def test_daily_results_name_their_session(fake_db, monkeypatch):
+    monkeypatch.setenv("SCAN_UNIVERSE_IN", "RELIANCE")
+    monkeypatch.setattr(scan_jobs, "fetch_daily_bars_sync", lambda sym: bars_from(rising()))
+    asyncio.run(scan_jobs.refresh_daily_group("in", ist(2026, 10, 23, 9, 18)))
+    assert fake_db.scan_results.docs["in.near_52w_high"]["session_date"] == "2026-10-22"
+    out = asyncio.run(scan_routes.get_scan("in.near_52w_high"))
+    assert out["session_date"] == "2026-10-22"
+
+
+# --- trend scans recomputed live with today's price ------------------------------
+
+def test_live_price_moves_rsi_and_52_week_extremes():
+    snap = sc.daily_snapshot(bars_from(falling()))           # oversold at the last close
+    assert snap["rsi14"] < 30
+    crash = sc.intraday_trend_row(snap, snap["price"] * 0.97)
+    rebound = sc.intraday_trend_row(snap, snap["price"] * 1.08)
+    assert crash["rsi14"] <= snap["rsi14"] < rebound["rsi14"]  # a steady fall sits at RSI 0
+    assert crash["low_52w"] == pytest.approx(snap["price"] * 0.97)   # a new low counts today
+    assert crash["change_pct"] == pytest.approx(-3.0)
+    res = sc.run_scans(sc.INTRADAY_TREND_SCANS, {"X": crash})
+    assert [i["symbol"] for i in res["rsi_oversold"]] == ["X"]
+    assert "volume_spike" not in res                           # stays on completed sessions
+
+
+def test_no_history_means_no_live_trend_row():
+    assert sc.intraday_trend_row(None, 100) is None
+    assert sc.intraday_trend_row({"closes": []}, 100) is None
+
+
+def test_live_refresh_writes_provisional_trend_lists(fake_db, monkeypatch):
+    snap = sc.daily_snapshot(bars_from(falling()))
+    fake_db.scan_snapshots.docs["in:RELIANCE"]["snap"] = snap
+    fake_db.scan_snapshots.docs["in:TCS"]["snap"] = snap
+    ts = int(NOW.timestamp() * 1000)
+    monkeypatch.setattr(upstox_feed, "fetch_quotes", lambda syms: {
+        "RELIANCE": {"price": snap["price"] * 0.98, "prev_close": snap["price"], "volume": 1, "last_trade_ms": ts},
+        "TCS": {"price": snap["price"] * 1.10, "prev_close": snap["price"], "volume": 1, "last_trade_ms": ts}})
+    asyncio.run(scan_jobs.refresh_live(NOW, 0.5))
+    doc = fake_db.scan_results.docs["in.rsi_oversold"]
+    assert doc["provisional"] is True and doc["source"] == "upstox" and doc["kind"] == "daily"
+    assert [i["symbol"] for i in doc["items"]] == ["RELIANCE"]   # TCS bounced out of oversold today
+    assert "in.volume_spike" not in fake_db.scan_results.docs
+    # After the close, the daily rebuild replaces it with final values.
+    monkeypatch.setenv("SCAN_UNIVERSE_IN", "RELIANCE")
+    monkeypatch.setattr(scan_jobs, "fetch_daily_bars_sync", lambda sym: bars_from(falling()))
+    asyncio.run(scan_jobs.refresh_daily_group("in", ist(2026, 10, 22, 16, 0)))
+    final = fake_db.scan_results.docs["in.rsi_oversold"]
+    assert final["provisional"] is False and final["session_date"] == "2026-10-22"

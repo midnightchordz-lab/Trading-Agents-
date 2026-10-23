@@ -276,6 +276,10 @@ export type ScanMeta = {
   source: "upstox" | "yahoo" | null;
   delayed: boolean;
   note?: string | null;
+  /** Daily lists: the trading day (YYYY-MM-DD) whose close they describe. */
+  session_date?: string | null;
+  /** True while a daily list is recomputed from today's live price. */
+  provisional?: boolean;
 };
 export type ScanItem = {
   symbol: string;

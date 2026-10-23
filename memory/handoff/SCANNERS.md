@@ -85,3 +85,44 @@ Report the following:
    - Tapping one starts an analysis.
 
 No iOS build. No secrets in commits or replies.
+
+## Update (23 Oct): close-based timing and live trend scans
+
+Two problems surfaced in the first live session, and both are fixed:
+
+1. **Daily scans refreshed at 9:18 AM using today's unfinished candle.** "Unusual volume" compared 3 minutes of
+   trading with a full day's average. The refresh was a 6-hour timer started whenever the server woke up.
+   Now:
+   - each market refreshes **once after its close** (`scanner.MARKET_CLOSE`):
+     - India 15:45 IST on weekdays;
+     - US 16:30 New York time on weekdays;
+     - crypto 00:15 UTC for the previous day's candle.
+   - `scanner.completed_bars` drops any bar for a session that hasn't closed.
+   - Per-market state is in `scan_meta` `daily:<group>` (`{"close": iso}`). The old `daily` doc is unused.
+   - Results carry `session_date`, and the app shows "CLOSE OF 22 OCT".
+2. **RSI / momentum / 52-week lists weren't live in India.** During the NSE session, `refresh_live` now also
+   recomputes them every 90s:
+   - it uses today's live price (Upstox, or delayed Yahoo) as a provisional close;
+   - see `scanner.intraday_trend_row` / `INTRADAY_TREND_SCANS`; unusual volume stays session-based.
+   - Stored with `provisional: true`; the app shows "LIVE · TODAY SO FAR".
+   - The post-close refresh replaces them with final values (`provisional: false`, `session_date` set).
+   - Snapshots now store the last 300 completed `closes` for this.
+3. `tick()` runs the live refresh **before** the daily rebuild, so a server waking mid-session isn't held back.
+
+Tests: `tests/test_scanners.py` now has 35 tests, all offline.
+
+### Verify (during NSE hours)
+
+```bash
+cd /app/backend && sudo supervisorctl restart backend
+python -m pytest -n 0 -q tests/test_scanners.py   # 35 passed
+sleep 150
+```
+
+1. For `in.rsi_oversold`, `in.rsi_overbought`, `in.macd_bullish`, `in.near_52w_high`, report:
+   `provisional` (true), `source` (upstox), `as_of` (moving every ~90s) and `count`.
+2. For `in.volume_spike`, `provisional` must be false and `session_date` must be the previous trading day.
+3. For `us.*` and `crypto.*`, `session_date` must be set and `provisional` false.
+4. In the app, India's trend section reads "TREND · RECALCULATED WITH TODAY'S LIVE PRICE", with
+   "LIVE · TODAY SO FAR" badges. US and crypto show "CLOSE OF …".
+5. **After 15:45 IST:** the India trend lists flip to `provisional: false` with today's `session_date`.

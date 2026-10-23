@@ -1,8 +1,8 @@
 """Keeps the scanners fresh: a background loop started with the API.
 
-- Daily scans: every DAILY_REFRESH_SECONDS (6h) — so each market's close is
-  picked up within a few hours — from Yahoo daily bars for every asset in the
-  universe. Cheap: one request per asset, spaced out.
+- Daily scans: once after each market's close (India ~15:45 IST, US ~16:30
+  New York, crypto ~00:15 UTC — see scanner.MARKET_CLOSE), from Yahoo daily
+  bars, completed sessions only. Cheap: one request per asset, spaced out.
 - Live scans (India): during the NSE session, every LIVE_SECONDS from Upstox.
   If Upstox is unavailable, every YAHOO_LIVE_SECONDS from Yahoo instead, and
   the results are marked delayed so the app says so.
@@ -27,7 +27,6 @@ import upstox_feed
 from core import db, logger
 from market_data import fetch_daily_bars_sync, fetch_quote_sync
 
-DAILY_REFRESH_SECONDS = 6 * 3600
 LIVE_SECONDS = 90
 YAHOO_LIVE_SECONDS = 15 * 60
 LEASE_SECONDS = 180
@@ -36,7 +35,7 @@ STALE_TRADE_SECONDS = 20 * 60   # no trade this long "in session" = holiday / ha
 PER_ASSET_PAUSE = 0.3           # be gentle with Yahoo
 
 _owner = uuid.uuid4().hex
-_state = {"last_daily": 0.0, "last_live": 0.0, "last_live_source": None}
+_state = {"last_live": 0.0, "last_live_source": None}
 
 
 def enabled() -> bool:
@@ -64,40 +63,62 @@ async def acquire_lease(now: datetime) -> bool:
 
 
 async def save_results(group: str, results: dict[str, list], *, kind: str, source: str,
-                       delayed: bool, as_of: str, notes: dict | None = None) -> None:
+                       delayed: bool, as_of: str, notes: dict | None = None,
+                       session_date: str | None = None, provisional: bool = False) -> None:
     for scan_id, items in results.items():
         await db.scan_results.update_one(
             {"_id": f"{group}.{scan_id}"},
             {"$set": {"items": items, "kind": kind, "source": source, "delayed": delayed,
-                      "as_of": as_of, "note": (notes or {}).get(scan_id)}},
+                      "as_of": as_of, "note": (notes or {}).get(scan_id), "session_date": session_date,
+                      "provisional": provisional}},
             upsert=True,
         )
 
 
+async def refresh_daily_group(group: str, now: datetime) -> None:
+    """Rebuild one market's daily scans from its completed sessions."""
+    symbols = sc.universe()[group]
+    tz = sc.MARKET_CLOSE[group][0]
+    _, session = sc.last_close(group, now)
+    rows = {}
+    for sym in symbols:
+        try:
+            bars = await asyncio.to_thread(fetch_daily_bars_sync, sc.yahoo_symbol(group, sym))
+            snap = sc.daily_snapshot(sc.completed_bars(group, bars, now), tz)
+        except Exception as e:
+            logger.warning(f"scanner: daily bars failed for {sym}: {e}")
+            snap = None
+        if snap:
+            rows[sym] = snap
+            await db.scan_snapshots.update_one(
+                {"_id": f"{group}:{sym}"},
+                {"$set": {"group": group, "symbol": sym, "snap": snap, "updated_at": now.isoformat()}},
+                upsert=True,
+            )
+        await asyncio.sleep(PER_ASSET_PAUSE)
+    if rows:
+        await save_results(group, sc.run_scans(sc.DAILY_SCANS, rows), kind="daily", source="yahoo",
+                           delayed=False, as_of=now.isoformat(), session_date=session.isoformat())
+    await acquire_lease(now_utc())  # a full refresh can outlast one lease period
+    logger.info(f"scanner: daily {group} refreshed for the {session} close ({len(rows)}/{len(symbols)} assets)")
+
+
 async def refresh_daily(now: datetime) -> None:
-    for group, symbols in sc.universe().items():
-        tz = sc.IST if group == "in" else timezone.utc
-        rows = {}
-        for sym in symbols:
-            try:
-                bars = await asyncio.to_thread(fetch_daily_bars_sync, sc.yahoo_symbol(group, sym))
-                snap = sc.daily_snapshot(bars, tz)
-            except Exception as e:
-                logger.warning(f"scanner: daily bars failed for {sym}: {e}")
-                snap = None
-            if snap:
-                rows[sym] = snap
-                await db.scan_snapshots.update_one(
-                    {"_id": f"{group}:{sym}"},
-                    {"$set": {"group": group, "symbol": sym, "snap": snap, "updated_at": now.isoformat()}},
-                    upsert=True,
-                )
-            await asyncio.sleep(PER_ASSET_PAUSE)
-        if rows:
-            await save_results(group, sc.run_scans(sc.DAILY_SCANS, rows), kind="daily",
-                               source="yahoo", delayed=False, as_of=now.isoformat())
-        await acquire_lease(now_utc())  # a full refresh can outlast one lease period
-        logger.info(f"scanner: daily {group} refreshed ({len(rows)}/{len(symbols)} assets)")
+    for group in sc.universe():
+        await refresh_daily_group(group, now)
+
+
+async def refresh_due_daily(now: datetime) -> None:
+    """Refresh each market whose latest close hasn't been processed yet —
+    exactly once per close, whichever process holds the lease."""
+    for group in sc.universe():
+        close_at, _ = sc.last_close(group, now)
+        meta = await db.scan_meta.find_one({"_id": f"daily:{group}"})
+        if meta and meta.get("close") == close_at.isoformat():
+            continue
+        await refresh_daily_group(group, now)
+        await db.scan_meta.update_one({"_id": f"daily:{group}"}, {"$set": {"close": close_at.isoformat()}},
+                                      upsert=True)
 
 
 def _yahoo_live(symbols: list[str]) -> dict[str, dict]:
@@ -144,25 +165,25 @@ async def refresh_live(now: datetime, fraction: float) -> None:
         notes["live_volume_surge"] = "Available from about 30 minutes after the open."
     await save_results("in", results, kind="live", source=source, delayed=delayed,
                        as_of=now.isoformat(), notes=notes)
+    # The trend scans (RSI, momentum, 52-week high/low) recomputed with the
+    # live price as today's provisional close. Marked provisional; the daily
+    # refresh after the close replaces them with the final values.
+    trend_rows = {s: sc.intraday_trend_row(snaps.get(s), q.get("price")) for s, q in quotes.items()}
+    await save_results("in", sc.run_scans(sc.INTRADAY_TREND_SCANS, trend_rows), kind="daily",
+                       source=source, delayed=delayed, as_of=now.isoformat(), provisional=True)
     _state.update(last_live=now.timestamp(), last_live_source=source)
 
 
 async def tick(now: datetime) -> None:
-    if now.timestamp() - _state["last_daily"] >= DAILY_REFRESH_SECONDS:
-        latest = await db.scan_meta.find_one({"_id": "daily"})
-        last = latest.get("at", 0) if latest else 0
-        if now.timestamp() - last >= DAILY_REFRESH_SECONDS:
-            await refresh_daily(now)
-            await db.scan_meta.update_one({"_id": "daily"}, {"$set": {"at": now.timestamp()}}, upsert=True)
-            _state["last_daily"] = now.timestamp()
-        else:
-            _state["last_daily"] = last  # another process (or a restart) did it recently
+    # Live first: a process waking up mid-session must not hold live data
+    # back behind a 2-3 minute daily rebuild.
     fraction = sc.session_fraction(now)
     if fraction is not None:
         # Upstox is retried every LIVE_SECONDS; while it is down, refresh_live
         # itself holds the Yahoo fallback to one pass per YAHOO_LIVE_SECONDS.
         if now.timestamp() - _state["last_live"] >= LIVE_SECONDS:
             await refresh_live(now, fraction)
+    await refresh_due_daily(now)
 
 
 async def run_forever() -> None:

@@ -16,14 +16,53 @@ network, no database — so all of it is unit-testable; scan_jobs.py feeds it.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Optional
+from zoneinfo import ZoneInfo
 
 import indicators as ind
 
 IST = timezone(timedelta(hours=5, minutes=30))
 NSE_OPEN = (9, 15)
 NSE_CLOSE = (15, 30)
+
+# When each market's daily candle is final, in its own time zone, plus a
+# margin for the data to settle: NSE closes 15:30 IST, NYSE/Nasdaq 16:00 New
+# York time, and a crypto day ends at 00:00 UTC. Daily scans refresh once
+# after each of these, from completed sessions only.
+MARKET_CLOSE = {
+    "in": (IST, 15, 45, True),                              # weekdays only
+    "us": (ZoneInfo("America/New_York"), 16, 30, True),
+    "crypto": (timezone.utc, 0, 15, False),                 # every day
+}
+
+
+def last_close(group: str, now: datetime) -> tuple[datetime, date]:
+    """The most recent moment `group`'s daily data became final, and the
+    trading day it finalised. For crypto the 00:15 UTC close finalises the
+    PREVIOUS day's candle. Exchange holidays aren't modelled: a refresh then
+    simply finds the same last session again, which is harmless."""
+    tz, hh, mm, weekdays_only = MARKET_CLOSE[group]
+    local = now.astimezone(tz)
+    day = local.date()
+    for _ in range(8):
+        candidate = datetime(day.year, day.month, day.day, hh, mm, tzinfo=tz)
+        if candidate <= local and (not weekdays_only or day.weekday() < 5):
+            session = day - timedelta(days=1) if group == "crypto" else day
+            return candidate, session
+        day -= timedelta(days=1)
+    raise RuntimeError("no market close found in the last week")
+
+
+def completed_bars(group: str, bars: list[dict], now: datetime) -> list[dict]:
+    """Drop any bar for a session that hasn't closed yet. During market hours
+    Yahoo's daily series ends with today's still-forming candle; treating it as
+    a finished day made 'unusual volume' compare a few minutes of trading with
+    a full day's average."""
+    tz = MARKET_CLOSE[group][0]
+    _, session = last_close(group, now)
+    return [b for b in bars
+            if b.get("time") is None or datetime.fromtimestamp(int(b["time"]), tz).date() <= session]
 
 # Large, liquid names to start. Index membership changes twice a year, so this
 # is a starting universe rather than a claim to be "the Nifty 50"; each list
@@ -107,6 +146,9 @@ def daily_snapshot(bars: list[dict], tz=IST) -> Optional[dict]:
         "avg_volume_20_incl": ind._sma(vols, 20),
         "volume_ratio": (vols[-1] / avg20) if avg20 and vols[-1] else None,
         "last_bar_date": _date_of(bars[-1]["time"], tz) if bars[-1].get("time") is not None else None,
+        # Completed closes, so the trend scans can be recomputed during the
+        # session with today's live price as a provisional close.
+        "closes": [round(c, 4) for c in closes[-300:]],
     }
 
 
@@ -213,6 +255,33 @@ def live_row(quote: dict, snap: Optional[dict], today: str) -> Optional[dict]:
         "volume": quote.get("volume"),
         "avg_volume_20": avg_vol,
         "high_before_today": high_before_today,
+    }
+
+
+# The daily scans that still mean something mid-session when today's live
+# price stands in for today's close: RSI, MACD momentum, 52-week high/low.
+# Unusual volume is left on completed sessions; live volume has its own scan.
+INTRADAY_TREND_SCANS = [sc for sc in DAILY_SCANS if sc.id != "volume_spike"]
+
+
+def intraday_trend_row(snap: Optional[dict], price: Optional[float]) -> Optional[dict]:
+    """A daily-scan row recomputed with the live price appended as today's
+    provisional close. The values move during the day and settle at the
+    close, when the daily refresh replaces them with the final ones."""
+    if not snap or not price or not snap.get("closes"):
+        return None
+    price = float(price)
+    closes = list(snap["closes"]) + [price]
+    m = ind.macd(closes)
+    prev = snap["price"]  # the last completed close = today's previous close
+    return {
+        "price": price,
+        "change_pct": (price / prev - 1) * 100 if prev else None,
+        "rsi14": ind.rsi(closes),
+        "macd_cross": (m or {}).get("recent_cross"),
+        "high_52w": max(snap["high_52w"], price),
+        "low_52w": min(snap["low_52w"], price),
+        "volume_ratio": None,
     }
 
 

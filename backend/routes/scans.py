@@ -28,14 +28,19 @@ def _meta(entry: dict, doc: dict | None) -> dict:
         "source": doc.get("source"),
         "delayed": bool(doc.get("delayed")),
         "note": doc.get("note"),
+        # Daily lists: the trading day whose close they describe.
+        "session_date": doc.get("session_date"),
+        # True while a daily list is recomputed from today's live price.
+        "provisional": bool(doc.get("provisional")),
     }
 
 
 @api_router.get("/scans", dependencies=[Depends(limit_market)])
 async def list_scans():
     catalog = _catalog()
-    docs = {d["_id"]: d async for d in db.scan_results.find({}, {"items": 1, "as_of": 1, "source": 1,
-                                                                    "delayed": 1, "note": 1})}
+    docs = {d["_id"]: d async for d in db.scan_results.find({}, {"items": 1, "as_of": 1, "source": 1, "delayed": 1,
+                                                                    "note": 1, "session_date": 1,
+                                                                    "provisional": 1})}
     return {
         "india_market_open": sc.session_fraction(datetime.now(timezone.utc)) is not None,
         "scans": [_meta(entry, docs.get(sid)) for sid, entry in catalog.items()],

@@ -42,6 +42,20 @@ function freshness(s: ScanMeta, marketOpen: boolean): { text: string; tone: stri
     if (marketOpen && s.delayed) return { text: `15-MIN DELAYED · ${timeLabel(s.as_of)}`, tone: colors.warning };
     return { text: `AS OF ${timeLabel(s.as_of)}`, tone: colors.onSurfaceTertiary };
   }
+  if (s.provisional) {
+    // A trend list recomputed with today's live price as the provisional close.
+    const recent = Date.now() - new Date(s.as_of).getTime() < LIVE_FRESH_MS;
+    if (marketOpen && recent && !s.delayed) return { text: "LIVE · TODAY SO FAR", tone: colors.success };
+    if (marketOpen && s.delayed) return { text: `15-MIN DELAYED · TODAY SO FAR`, tone: colors.warning };
+    return { text: `TODAY SO FAR · AS OF ${timeLabel(s.as_of)}`, tone: colors.onSurfaceTertiary };
+  }
+  if (s.session_date) {
+    // "CLOSE OF 22 OCT": the list describes that session's final prices,
+    // whenever it happened to be computed.
+    const [y, m, d] = s.session_date.split("-").map(Number);
+    const label = new Date(y, m - 1, d).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+    return { text: `CLOSE OF ${label.toUpperCase()}`, tone: colors.onSurfaceTertiary };
+  }
   return { text: `UPDATED ${timeLabel(s.as_of)}`, tone: colors.onSurfaceTertiary };
 }
 
@@ -125,7 +139,13 @@ export default function ScansScreen() {
   const visible = (scans || []).filter((s) => s.group === group);
   const sections: { title: string; rows: ScanMeta[] }[] = [
     { title: group === "in" ? `LIVE · NSE ${marketOpen ? "OPEN" : "CLOSED"}` : "", rows: visible.filter((s) => s.kind === "live") },
-    { title: "DAILY · FROM CLOSING PRICES", rows: visible.filter((s) => s.kind === "daily") },
+    {
+      title:
+        group === "in" && marketOpen
+          ? "TREND · RECALCULATED WITH TODAY'S LIVE PRICE"
+          : "TREND · FROM CLOSING PRICES",
+      rows: visible.filter((s) => s.kind === "daily"),
+    },
   ].filter((s) => s.rows.length > 0);
 
   return (
