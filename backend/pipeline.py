@@ -14,6 +14,7 @@ from typing import Optional
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
+import chart_reader
 import fundamentals as fund
 import indicators as ind
 from core import EMERGENT_LLM_KEY, MODEL_NAME, MODEL_PROVIDER, db, logger, now_iso
@@ -467,7 +468,7 @@ async def append_message(analysis_id: str, message: dict, step: int):
 # ----------------------------------------------------------------------------
 # The multi-agent pipeline
 # ----------------------------------------------------------------------------
-async def run_analysis(analysis_id: str, symbol: str, language: str = "en"):
+async def run_analysis(analysis_id: str, symbol: str, language: str = "en", chart_reading: Optional[dict] = None):
     try:
         quote = None
         try:
@@ -487,6 +488,7 @@ async def run_analysis(analysis_id: str, symbol: str, language: str = "en"):
             logger.warning(f"fundamentals unavailable for {symbol}: {e}")
 
         technicals_summary = None
+        technicals = None
         try:
             bars = await asyncio.to_thread(fetch_daily_bars_sync, symbol)
             technicals = ind.compute(bars, crypto=symbol.endswith("-USD"))
@@ -500,6 +502,13 @@ async def run_analysis(analysis_id: str, symbol: str, language: str = "en"):
             logger.warning(f"computed technicals unavailable for {symbol}: {e}")
 
         ctx = build_context(symbol, quote, fundamentals_summary, technicals_summary)
+        if chart_reading:
+            # The user's screenshot, as unverified context below the real
+            # numbers, and a side-by-side of where the two agree.
+            ctx += "\n\n" + chart_reader.context_block(chart_reading)
+            check = chart_reader.compare_with_data(chart_reading, technicals, (quote or {}).get("price"))
+            await db.analyses.update_one({"id": analysis_id},
+                                         {"$set": {"chart_check": check, "updated_at": now_iso()}})
         step = 0
         lang_directive = language_directive(language if language in SUPPORTED_LANGUAGES else "en")
 

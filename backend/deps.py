@@ -272,7 +272,9 @@ async def latest_completed_analysis_for(symbol: str, language: str = "en") -> Op
     free-recheck decision. A cached run in another language is not a valid
     answer, so it isn't reused. Never triggers a new run."""
     return await db.analyses.find_one(
-        {"symbol": symbol, "language": language, "status": "completed", "verdict": {"$ne": None}},
+        # Chart analyses are excluded: their text answers one user's screenshot.
+        {"symbol": symbol, "language": language, "status": "completed", "verdict": {"$ne": None},
+         "chart_reading": None},
         {"_id": 0, "owner_hash": 0, "viewer_hashes": 0},
         sort=[("updated_at", -1)],
     )

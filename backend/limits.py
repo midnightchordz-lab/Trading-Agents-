@@ -48,6 +48,11 @@ PORTFOLIO_IMPORT_PER_MIN = rl.env_int("RL_PORTFOLIO_IMPORT_PER_MIN", 3)
 # Whole-deployment ceiling on imports, so many accounts together can't turn
 # the endpoint into a Yahoo amplifier either.
 PORTFOLIO_IMPORT_GLOBAL_PER_MIN = rl.env_int("RL_PORTFOLIO_IMPORT_GLOBAL_PER_MIN", 30)
+# Chart screenshots: each read is one vision-model call, free to the user, so
+# it is bounded per minute, per day, and across the whole deployment.
+CHART_READ_PER_MIN = rl.env_int("RL_CHART_READ_PER_MIN", 3)
+CHART_READ_PER_DAY = rl.env_int("RL_CHART_READ_PER_DAY", 30)
+CHART_READ_GLOBAL_PER_MIN = rl.env_int("RL_CHART_READ_GLOBAL_PER_MIN", 30)
 
 
 class PerIp:
@@ -108,6 +113,14 @@ limit_pay_config = PerIp("pay_config", PAY_CONFIG_PER_MIN)
 limit_market = PerIp("market", MARKET_PER_MIN)
 limit_portfolio = PerIp("portfolio", PORTFOLIO_PER_MIN)
 limit_portfolio_import = PerUser("portfolio_import", PORTFOLIO_IMPORT_PER_MIN)
+
+
+limit_chart_read = PerUser("chart_read", CHART_READ_PER_MIN)
+limit_chart_read_daily = PerUser("chart_read_day", CHART_READ_PER_DAY, 86400)
+
+
+async def limit_chart_read_global() -> None:
+    await rl.global_enforce("chart_read_global", CHART_READ_GLOBAL_PER_MIN, 60)
 
 
 async def limit_portfolio_import_global() -> None:

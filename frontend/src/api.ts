@@ -303,6 +303,30 @@ export type IapConfig = {
 
 export type PaymentStatus = { order_id: string; status: string; balance: number };
 
+/** What the AI read off a chart screenshot (unverified until checked against data). */
+export type ChartReading = {
+  is_chart: boolean;
+  symbol: string | null;
+  company: string | null;
+  exchange: string | null;
+  timeframe: string | null;
+  trend: "up" | "down" | "sideways" | null;
+  patterns: string[];
+  support: number[];
+  resistance: number[];
+  indicators: Record<string, number>;
+  last_price: number | null;
+  observations: string | null;
+};
+export type ChartCheckRow = { item: string; chart: string; data: string; agrees: boolean; note: string | null };
+export type ChartReadResult = {
+  is_chart: boolean;
+  reading_id: string | null;
+  reading: ChartReading;
+  candidates: { symbol: string; name?: string | null; exchange?: string | null }[];
+  message?: string;
+};
+
 export type Analysis = {
   id: string;
   symbol: string;
@@ -314,6 +338,9 @@ export type Analysis = {
   debate: Debate | null;
   timeframes?: Timeframes | null;
   grounding?: Grounding | null;
+  /** Set when the analysis was started from a chart screenshot. */
+  chart_reading?: ChartReading | null;
+  chart_check?: ChartCheckRow[] | null;
   current_step: number;
   total_steps: number;
   error: string | null;
@@ -403,8 +430,28 @@ export const api = {
   scan: (id: string) => j<ScanMeta & { items: ScanItem[] }>(`/scans/${encodeURIComponent(id)}`),
   trending: () => j<{ results: Quote[] }>(`/trending`),
   markets: (category: string) => j<{ results: Quote[] }>(`/markets/${category}`),
-  analyze: (symbol: string, name?: string, language?: string, deviceId?: string) =>
-    j<Analysis>(`/analyze`, { method: "POST", body: JSON.stringify({ symbol, name, language, device_id: deviceId }) }),
+  analyze: (symbol: string, name?: string, language?: string, deviceId?: string, chartReadingId?: string) =>
+    j<Analysis>(`/analyze`, {
+      method: "POST",
+      body: JSON.stringify({
+        symbol,
+        name,
+        language,
+        device_id: deviceId,
+        ...(chartReadingId ? { chart_reading_id: chartReadingId } : {}),
+      }),
+    }),
+  // Same upload path as portfolioImport (web File, or an expo-file-system File
+  // on native). The image is read once on the server and never stored.
+  chartRead: (asset: { uri: string; name: string; file: Blob | null }) => {
+    const form = new FormData();
+    if (asset.file) {
+      form.append("file", asset.file, asset.name);
+    } else {
+      form.append("file", new FsFile(asset.uri) as unknown as Blob, asset.name);
+    }
+    return j<ChartReadResult>(`/chart/read`, { method: "POST", body: form });
+  },
   getWalletBalance: (deviceId: string) =>
     j<WalletBalance>(
       `/wallet/balance?device_id=${encodeURIComponent(deviceId)}${REGION ? `&region=${encodeURIComponent(REGION)}` : ""}`

@@ -35,6 +35,7 @@ from deps import (
 from limits import ANALYZE_MAX_CONCURRENT, limit_analyze, limit_poll
 from market_data import fetch_quote_sync
 from pipeline import SUPPORTED_LANGUAGES, TOTAL_STEPS, run_analysis
+from routes.chart import load_reading as load_chart_reading
 
 api_router = APIRouter(prefix="/api")
 
@@ -44,6 +45,9 @@ class AnalyzeRequest(BaseModel):
     name: Optional[str] = None
     language: str = "en"
     device_id: Optional[str] = None  # required only when WALLET_ENFORCEMENT_ENABLED
+    # From POST /api/chart/read: analyse with the user's chart screenshot as
+    # extra (unverified) context, and compare the two afterwards.
+    chart_reading_id: Optional[str] = None
 
 @api_router.post("/analyze", dependencies=[Depends(limit_analyze)])
 async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_user)):
@@ -51,6 +55,12 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
     if not symbol or not re.match(r'^[A-Z0-9.\-\^=]{1,20}$', symbol):
         raise HTTPException(status_code=400, detail="Invalid ticker symbol")
     language = body.language if body.language in SUPPORTED_LANGUAGES else "en"
+    chart_reading = None
+    if body.chart_reading_id:
+        if not re.match(r"^[0-9a-f-]{36}$", body.chart_reading_id):
+            raise HTTPException(status_code=400, detail="That chart reading has expired. Upload the chart again.")
+        # Checked before any charge, so an expired reading never costs anything.
+        chart_reading = await load_chart_reading(body.chart_reading_id, user)
 
     # A per-minute limit alone doesn't bound the real cost here: an analysis is
     # a long multi-agent LLM run, so six starts in a minute can leave six runs
@@ -174,7 +184,8 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
             logger.warning(f"pricing quote fetch failed for {symbol}: {e}")
         live_price = live_quote.get("price") if live_quote else None
 
-        if not wal.should_charge_for_recheck(cached_verdict, live_price, reference_price):
+        # A chart analysis always runs fresh: the screenshot is new input.
+        if chart_reading is None and not wal.should_charge_for_recheck(cached_verdict, live_price, reference_price):
             # Nothing has meaningfully changed since the cached verdict —
             # serve it for free. No new analysis document, no LLM calls.
             # Billing fields must describe THIS request, not the original
@@ -241,6 +252,7 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         "admin_bypass": admin_bypass if WALLET_ENFORCEMENT_ENABLED else False,
         "launch_free_active": launch_free_daily_ok if WALLET_ENFORCEMENT_ENABLED else False,
         "used_free_credit": used_free_credit,
+        "chart_reading": chart_reading,
         "free_credits_remaining": await get_free_credits_remaining(
             await db.users.find_one({"id": user["id"]}, {"_id": 0}) if user else None
         ),
@@ -250,7 +262,7 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
     # Stored alongside, never returned to the client: lets the owner delete
     # their own record without putting an identity on the analysis itself.
     await db.analyses.insert_one({**analysis, "owner_hash": owner_hash_for(user)})
-    asyncio.create_task(run_analysis(analysis["id"], symbol, language))
+    asyncio.create_task(run_analysis(analysis["id"], symbol, language, chart_reading=chart_reading))
     return analysis
 
 

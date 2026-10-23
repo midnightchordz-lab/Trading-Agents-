@@ -15,7 +15,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import { MagnifyingGlass, X, ArrowRight, CaretRight, Star, ArrowsLeftRight, Pulse } from "phosphor-react-native";
+import { MagnifyingGlass, X, ArrowRight, CaretRight, Star, ArrowsLeftRight, Pulse, ImageSquare } from "phosphor-react-native";
 
 import { colors, fonts, spacing, BORDER, changeColor, accentAt, CATEGORY_COLORS, accents, CTA_GRADIENT } from "@/src/theme";
 import { api, Quote, SearchResult, WalletBalance } from "@/src/api";
@@ -376,6 +376,16 @@ export default function AnalyzeScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.scansTitle}>MARKET SCANS</Text>
                 <Text style={styles.scansSub}>Top movers, 52-week highs, RSI and more · free</Text>
+              </View>
+              <CaretRight size={16} color={colors.onSurface} weight="bold" />
+            </Pressable>
+
+            {/* Chart screenshot entry — its own button, separate from scans */}
+            <Pressable testID="open-chart" onPress={() => router.push("/chart")} style={styles.scansRow}>
+              <ImageSquare size={18} color={colors.onSurface} weight="bold" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.scansTitle}>ANALYSE A CHART</Text>
+                <Text style={styles.scansSub}>Upload a screenshot from any app · the desk checks it against live data</Text>
               </View>
               <CaretRight size={16} color={colors.onSurface} weight="bold" />
             </Pressable>

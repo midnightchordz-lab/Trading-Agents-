@@ -19,11 +19,11 @@ import razorpay_pay as rzp
 from core import client, db, logger, now_iso
 from email_repair import apply_email_repair, find_email_repair_candidates
 import scan_jobs
-from routes import analysis, auth_routes, market, payments, portfolio, scans
+from routes import analysis, auth_routes, chart, market, payments, portfolio, scans
 
 app = FastAPI()
 
-for module in (market, analysis, auth_routes, payments, portfolio, scans):
+for module in (market, analysis, auth_routes, payments, portfolio, scans, chart):
     app.include_router(module.api_router)
 
 
@@ -268,6 +268,10 @@ async def ensure_payment_indexes():
     # Signup abuse guard reads these on every new account.
     await guarded_index("free_credit_grants.device_id",
                         lambda: db.free_credit_grants.create_index("device_id"))
+    # Chart screenshot readings expire after 30 minutes (no image is stored).
+    await guarded_index("chart_readings.expires_at",
+                        lambda: db.chart_readings.create_index("expires_at", expireAfterSeconds=0))
+    await guarded_index("chart_readings.id", lambda: db.chart_readings.create_index("id", unique=True))
     await guarded_index("free_credit_grants.ip+created_at",
                         lambda: db.free_credit_grants.create_index([("ip", 1), ("created_at", -1)]))
     await guarded_index("free_credit_grants.created_at",

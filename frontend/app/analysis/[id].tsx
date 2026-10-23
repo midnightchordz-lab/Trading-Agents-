@@ -18,6 +18,7 @@ import { TradingViewChart } from "@/src/components/TradingViewChart";
 import { VerdictLevels } from "@/src/components/VerdictLevels";
 import { FearGreedGauge } from "@/src/components/FearGreedGauge";
 import { GroundingBadge } from "@/src/components/GroundingBadge";
+import { ChartCheckCard } from "@/src/components/ChartCheckCard";
 import { TimeframesCard, HORIZON_LABEL } from "@/src/components/TimeframesCard";
 import { NewsList } from "@/src/components/NewsList";
 import { rangeToInterval, widgetSupports } from "@/src/tv";
@@ -453,6 +454,8 @@ function VerdictView({
       <VerdictBlock decision={verdict.decision} confidence={verdict.confidence} />
 
       {analysis.grounding ? <GroundingBadge grounding={analysis.grounding} /> : null}
+
+      {analysis.chart_check?.length ? <ChartCheckCard rows={analysis.chart_check} /> : null}
 
       {/* PositionSizer is hidden: computing a share quantity against the
           desk's levels reads as sizing a trade for the user, which an

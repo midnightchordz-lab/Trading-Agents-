@@ -109,6 +109,7 @@ export default function RootLayout() {
                   <Stack.Screen name="analysis/[id]" />
                   <Stack.Screen name="compare" />
                   <Stack.Screen name="scans" />
+                  <Stack.Screen name="chart" />
                 </Stack>
               </AlertsProvider>
             </WatchlistProvider>
