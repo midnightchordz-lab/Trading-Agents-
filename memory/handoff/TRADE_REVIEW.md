@@ -12,8 +12,20 @@ tax-filing view (F&O turnover, net result, charges). Observations are
 descriptive only — tested to contain no buy/sell/should/stop/avoid wording —
 and every report ends with SEBI's F&O risk line. No AI call; pure arithmetic.
 
-Free for now (rate-limited). Pricing (free preview + paid full report) is a
-pending business decision.
+## Pricing
+- **First 2 runs per account free, then ₹99 per run** ($1.25 for USD wallets) from the wallet.
+  `wallet.PRICES[_INR]["trade_review"]`, `TRADE_REVIEW_FREE_RUNS` env (default 2).
+- Counted on the user doc (`trade_review_free_used`). The free run is claimed and the wallet
+  debited with single conditional updates (no double use of the last free run, no overdraft).
+- Nothing is claimed or charged until the report is built — a file that fails to parse costs nothing.
+- With no free runs left and too little balance → 402 *before* the file is read
+  ("Your 2 free reviews are used. Each review is now ₹99 — your wallet has ₹X…").
+- Admins and deployments with `WALLET_ENFORCEMENT_ENABLED=false` are never charged
+  (same switch as paid analyses). **If that flag is off in production, Trade Review is free.**
+- `GET /api/trade-review/pricing` → `{charged, free_runs, free_left, price, currency, symbol, balance}`;
+  the screen shows "2 of 2 free reviews left · then ₹99 per review", and the run button
+  shows "· ₹99" once the free runs are used. The report carries `billing`.
+- Same DPDP consent gate as /analyze (403 `consent_required`).
 
 ### Added after comparing with Vibe-Trading's Shadow Account
 1. **Winners vs losers · how long held** table + an observation when losers are held ≥1.3× longer (the disposition effect) — or the reverse.
@@ -67,7 +79,7 @@ statement to the rupee, net within ₹4 rounding.
 
 ## Please verify (Emergent)
 1. `pip install -r backend/requirements.txt` (pdfplumber), restart backend.
-2. `cd backend && python -m pytest tests/test_trade_review.py tests/test_portfolio_health.py tests/test_chart_analysis.py tests/test_scanners.py tests/test_trade_review_sheets.py -n 0 -q` → 126 passed.
+2. `cd backend && python -m pytest tests/test_trade_review.py tests/test_portfolio_health.py tests/test_chart_analysis.py tests/test_scanners.py tests/test_trade_review_sheets.py -n 0 -q` → all pass (45 trade-review tests, incl. 6 billing).
 3. App: SHARE MY REVIEW opens the image with no ₹ amounts; the share sheet opens on Android. The HINDSIGHT card shows under the observations.
 4. App: the REVIEW tab appears between PORTFOLIO and ALERTS; the tab bar still fits on a small Android screen (6 tabs).
 5. The owner will test with their own statements on the phone. Do NOT ask for, upload or paste anyone's real statement in chat.

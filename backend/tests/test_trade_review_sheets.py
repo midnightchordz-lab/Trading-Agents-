@@ -157,8 +157,11 @@ def test_old_xls_macros_and_junk_are_refused():
 
 
 def test_endpoint_accepts_a_csv(monkeypatch):
-    from test_trade_review import USER, multipart
+    from test_trade_review import USER, fake_db, multipart
     from routes import trade_review as tr_routes
+    monkeypatch.setattr(tr_routes, "db", fake_db())
+    monkeypatch.setattr(tr_routes, "WALLET_ENFORCEMENT_ENABLED", False)
+    monkeypatch.setattr(tr_routes, "suggest_currency", lambda user, region: "INR")
     rep = asyncio.run(tr_routes.trade_review(multipart([("tradebook.csv", csv_bytes(ZERODHA))]), USER))
     assert rep["sources"][0]["format"] == "spreadsheet_trades"
 

@@ -410,6 +410,17 @@ export type TradeReview = {
   open_positions: { contract: string; status: string }[];
   notes: string[];
   risk_line: string;
+  billing?: { free_run: boolean; charged: number | null; symbol: string; free_left: number };
+};
+
+export type TradeReviewPricing = {
+  charged: boolean;
+  free_runs: number;
+  free_left: number;
+  price: number;
+  currency: string;
+  symbol: string;
+  balance: number;
 };
 
 export type Analysis = {
@@ -533,6 +544,7 @@ export const api = {
     cash: number;
     targets?: Partial<Record<HealthBucket, number>> | null;
   }) => j<HealthReport>(`/portfolio/health`, { method: "POST", body: JSON.stringify(body) }),
+  tradeReviewPricing: () => j<TradeReviewPricing>(`/trade-review/pricing`),
   /** Up to three broker statement PDFs; parsed in memory, nothing stored. */
   tradeReview: (assets: { uri: string; name: string; file: Blob | null }[]) => {
     const form = new FormData();

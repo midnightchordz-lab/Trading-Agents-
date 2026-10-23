@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -15,7 +15,8 @@ import * as Sharing from "expo-sharing";
 import ViewShot from "react-native-view-shot";
 
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
-import { api, ReviewTable, TradeReview } from "@/src/api";
+import { useFocusEffect } from "expo-router";
+import { api, ReviewTable, TradeReview, TradeReviewPricing } from "@/src/api";
 import { trackEvent } from "@/src/firebase";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
 
@@ -45,6 +46,25 @@ export default function ReviewScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<TradeReview | null>(null);
+  const [pricing, setPricing] = useState<TradeReviewPricing | null>(null);
+
+  const loadPricing = useCallback(() => {
+    api
+      .tradeReviewPricing()
+      .then(setPricing)
+      .catch(() => setPricing(null));
+  }, []);
+  useFocusEffect(loadPricing);
+
+  // "2 of 2 free reviews left", or the price once they are used.
+  const priceLine = !pricing
+    ? null
+    : !pricing.charged
+      ? "Free"
+      : pricing.free_left > 0
+        ? `${pricing.free_left} of ${pricing.free_runs} free reviews left · then ${pricing.symbol}${pricing.price} per review`
+        : `${pricing.symbol}${pricing.price} per review · wallet ${pricing.symbol}${pricing.balance}`;
+  const paidRun = !!pricing && pricing.charged && pricing.free_left === 0;
 
   const pick = async () => {
     let res: DocumentPicker.DocumentPickerResult;
@@ -83,6 +103,7 @@ export default function ReviewScreen() {
     try {
       const r = await api.tradeReview(files);
       setReport(r);
+      loadPricing();
       trackEvent("trade_review", {
         files: files.length,
         positions: r.positions,
@@ -109,8 +130,13 @@ export default function ReviewScreen() {
           <Text style={styles.body}>
             See your own patterns from your broker statements: what you win and
             lose on, by size, time of day, trades per day and after a loss. F&O
-            and commodity options. Free.
+            and commodity options.
           </Text>
+          {priceLine ? (
+            <Text testID="review-price" style={styles.price}>
+              {priceLine}
+            </Text>
+          ) : null}
           <Text style={styles.small}>
             Your tradebook or P&L — PDF, Excel (.xlsx) or CSV:
           </Text>
@@ -170,6 +196,7 @@ export default function ReviewScreen() {
             ) : (
               <Text style={styles.runText}>
                 {report ? "RUN AGAIN" : "RUN REVIEW"}
+                {paidRun ? ` · ${pricing!.symbol}${pricing!.price}` : ""}
               </Text>
             )}
           </Pressable>
@@ -180,6 +207,15 @@ export default function ReviewScreen() {
             </Text>
           ) : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
+          {report?.billing && !loading ? (
+            <Text style={styles.small}>
+              {report.billing.free_run
+                ? pricing?.charged
+                  ? `Free review used · ${report.billing.free_left} left`
+                  : "Free review"
+                : `${report.billing.symbol}${report.billing.charged} charged from your wallet`}
+            </Text>
+          ) : null}
         </View>
 
         {report ? <Report r={report} /> : null}
@@ -774,6 +810,13 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: colors.onSurfaceTertiary,
     marginTop: spacing.md,
+  },
+  price: {
+    fontFamily: fonts.monoBold,
+    fontSize: 11,
+    color: colors.brand,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.sm,
   },
   note: {
     fontFamily: fonts.mono,

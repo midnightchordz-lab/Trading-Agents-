@@ -259,7 +259,66 @@ def multipart(files: list[tuple[str, bytes]]):
     return Request(scope, receive)
 
 
-USER = {"id": "u1"}
+CONSENTED = {"agreed": True, "version": "1.1"}
+USER = {"id": "u1", "consent": CONSENTED}
+
+
+class _Coll:
+    """Just enough of a Mongo collection for the billing code: find_one, and
+    update_one with the exact filter shapes it uses ($or/$exists/$lt on the
+    free-run counter, $gte on the balance)."""
+
+    def __init__(self, key):
+        self.key, self.docs = key, {}
+
+    @staticmethod
+    def _match(doc, flt):
+        for k, v in flt.items():
+            if k == "$or":
+                if not any(_Coll._match(doc, alt) for alt in v):
+                    return False
+            elif isinstance(v, dict):
+                have = doc.get(k)
+                for op, arg in v.items():
+                    if op == "$exists" and (k in doc) != arg:
+                        return False
+                    if op == "$lt" and not (have is not None and have < arg):
+                        return False
+                    if op == "$gte" and not (have is not None and have >= arg):
+                        return False
+            elif doc.get(k) != v:
+                return False
+        return True
+
+    async def find_one(self, flt, projection=None):
+        doc = self.docs.get(flt.get(self.key))
+        return dict(doc) if doc and self._match(doc, flt) else None
+
+    async def update_one(self, flt, upd):
+        from types import SimpleNamespace
+        doc = self.docs.get(flt.get(self.key))
+        if not doc or not self._match(doc, flt):
+            return SimpleNamespace(modified_count=0)
+        for k, v in upd.get("$inc", {}).items():
+            doc[k] = doc.get(k, 0) + v
+        doc.update(upd.get("$set", {}))
+        return SimpleNamespace(modified_count=1)
+
+
+def fake_db(balance=None, currency="INR", free_used=None):
+    from types import SimpleNamespace
+    db = SimpleNamespace(users=_Coll("id"), wallets=_Coll("device_id"))
+    db.users.docs["u1"] = {"id": "u1", **({"trade_review_free_used": free_used} if free_used is not None else {})}
+    if balance is not None:
+        db.wallets.docs["user:u1"] = {"device_id": "user:u1", "balance": balance, "currency": currency}
+    return db
+
+
+@pytest.fixture(autouse=True)
+def billing_off_by_default(monkeypatch):
+    monkeypatch.setattr(tr_routes, "db", fake_db())
+    monkeypatch.setattr(tr_routes, "WALLET_ENFORCEMENT_ENABLED", False)
+    monkeypatch.setattr(tr_routes, "suggest_currency", lambda user, region: "INR")
 
 
 @pytest.fixture
@@ -330,3 +389,74 @@ def test_few_underlyings_are_not_listed_twice():
     assert sorted(labels) == ["BANKNIFTY", "NIFTY"]
     for t in rep["tables"]:
         assert len({r["label"] for r in t["rows"]}) == len(t["rows"]), t["id"]
+
+
+
+# --- pricing: 2 free runs, then ₹99 a run ----------------------------------------------
+
+@pytest.fixture
+def billing_on(monkeypatch, fake_pdfs):
+    db = fake_db(balance=150.0)
+    monkeypatch.setattr(tr_routes, "db", db)
+    monkeypatch.setattr(tr_routes, "WALLET_ENFORCEMENT_ENABLED", True)
+    monkeypatch.setattr(tr_routes, "is_admin", lambda u: False)
+    return db
+
+
+def run(name=b"%PDF-ktx"):
+    return asyncio.run(tr_routes.trade_review(multipart([("a.pdf", name)]), USER))
+
+
+def test_two_free_runs_then_99_from_the_wallet(billing_on):
+    first, second, third = run(), run(), run()
+    assert first["billing"] == {"free_run": True, "charged": None, "symbol": "₹", "free_left": 1}
+    assert second["billing"]["free_run"] and second["billing"]["free_left"] == 0
+    assert third["billing"] == {"free_run": False, "charged": 99.0, "symbol": "₹", "free_left": 0}
+    assert billing_on.wallets.docs["user:u1"]["balance"] == pytest.approx(51.0)
+    with pytest.raises(HTTPException) as e:            # ₹51 left: refused before any parsing
+        run()
+    assert e.value.status_code == 402 and "₹99" in e.value.detail and "₹51" in e.value.detail
+
+
+def test_a_file_that_fails_costs_nothing(billing_on):
+    with pytest.raises(HTTPException):
+        run(b"%PDF-other")
+    assert "trade_review_free_used" not in billing_on.users.docs["u1"]
+    assert run()["billing"]["free_left"] == 1
+
+
+def test_no_charge_for_admins_or_when_billing_is_off(billing_on, monkeypatch):
+    monkeypatch.setattr(tr_routes, "is_admin", lambda u: True)
+    for _ in range(4):
+        assert run()["billing"]["free_run"] is True
+    assert billing_on.wallets.docs["user:u1"]["balance"] == 150.0
+    assert "trade_review_free_used" not in billing_on.users.docs["u1"]
+
+
+def test_the_last_free_run_cannot_be_used_twice(monkeypatch):
+    db = fake_db(balance=500.0, free_used=1)
+    monkeypatch.setattr(tr_routes, "db", db)
+    monkeypatch.setattr(tr_routes, "WALLET_ENFORCEMENT_ENABLED", True)
+    monkeypatch.setattr(tr_routes, "is_admin", lambda u: False)
+
+    async def both():
+        st = await tr_routes.billing_status(USER)
+        return await asyncio.gather(tr_routes.claim_run(USER, st), tr_routes.claim_run(USER, st))
+    a, b = asyncio.run(both())
+    assert sorted([a["free_run"], b["free_run"]]) == [False, True]
+    assert db.wallets.docs["user:u1"]["balance"] == pytest.approx(401.0)
+
+
+def test_pricing_endpoint_and_dollar_wallets(monkeypatch):
+    monkeypatch.setattr(tr_routes, "db", fake_db(balance=3.0, currency="USD", free_used=2))
+    monkeypatch.setattr(tr_routes, "WALLET_ENFORCEMENT_ENABLED", True)
+    monkeypatch.setattr(tr_routes, "is_admin", lambda u: False)
+    st = asyncio.run(tr_routes.trade_review_pricing(USER))
+    assert st == {"charged": True, "free_runs": 2, "free_left": 0, "price": 1.25, "currency": "USD",
+                  "symbol": "$", "balance": 3.0}
+
+
+def test_consent_is_required(fake_pdfs):
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(tr_routes.trade_review(multipart([("a.pdf", b"%PDF-ktx")]), {"id": "u1"}))
+    assert e.value.status_code == 403 and e.value.detail == "consent_required"

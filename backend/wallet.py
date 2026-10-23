@@ -59,6 +59,7 @@ PRICES = {
     "full_analysis": 0.25,   # measured cost ~$0.081
     "compare": 0.39,         # two analyses bundled, cheaper than 2x full_analysis
     "portfolio_optimize": 0.05,  # no new LLM calls (reads cached verdicts only)
+    "trade_review": 1.25,        # after the free runs; no LLM, priced on value (₹99 in INR)
 }
 
 # Top-up packs a user may buy. Amounts are validated server-side against this
@@ -82,8 +83,14 @@ PRICES_INR = {
     "full_analysis": 20.0,
     "compare": 30.0,
     "portfolio_optimize": 5.0,
+    "trade_review": 99.0,
 }
 TOPUP_PACKS_INR = [99.0, 199.0, 499.0]
+
+# Trade Review: this many runs per account cost nothing, then each run is
+# priced as "trade_review" above. Counted on the user document, claimed
+# atomically (see routes/trade_review.py).
+TRADE_REVIEW_FREE_RUNS = int(os.environ.get("TRADE_REVIEW_FREE_RUNS", "2"))
 
 # A currency is chosen once per account and then locked forever (see
 # create_topup_order). Anything that isn't INR resolves to USD, so a missing,
