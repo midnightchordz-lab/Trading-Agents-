@@ -11,7 +11,7 @@ import {
   RefreshControl,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
 import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
@@ -58,6 +58,7 @@ function currencySymbol(code?: string) {
 
 export default function PortfolioScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { items: watchlist } = useWatchlist();
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [cash, setCash] = useState("0");
@@ -485,6 +486,17 @@ export default function PortfolioScreen() {
           </View>
         ) : null}
 
+        {/* Health check — observations about what the portfolio is */}
+        {holdings.length > 0 ? (
+          <Pressable testID="open-health" onPress={() => router.push("/health")} style={styles.healthBtn}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.healthTitle}>HEALTH CHECK</Text>
+              <Text style={styles.healthSub}>Diversification, market vs your picks, Sharpe, efficient frontier · free</Text>
+            </View>
+            <Text style={styles.healthTitle}>{"→"}</Text>
+          </Pressable>
+        ) : null}
+
         {/* Controls */}
         {holdings.length > 0 && holdings.length < 2 ? (
           <Text style={styles.hint}>Add at least one more holding to run the optimizer.</Text>
@@ -696,6 +708,18 @@ const styles = StyleSheet.create({
   searchRow: { paddingHorizontal: spacing.sm, paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border },
   searchSymbol: { fontFamily: fonts.monoBold, fontSize: 12, color: colors.onSurface },
   searchName: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary },
+  healthBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    borderWidth: BORDER,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceSecondary,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  healthTitle: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1, color: colors.onSurface },
+  healthSub: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary, marginTop: 2 },
   missingBox: { borderTopWidth: 1, borderTopColor: colors.border },
   analyzeMissingBtn: {
     flexDirection: "row",

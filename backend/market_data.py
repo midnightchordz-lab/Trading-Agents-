@@ -431,3 +431,63 @@ async def get_market(category: str) -> list:
     return clean
 
 
+
+
+# --- Portfolio Health Check inputs (additive) ---------------------------------
+def fetch_dated_history_sync(symbol: str) -> dict:
+    """One year of daily closes and volumes keyed by the exchange's LOCAL date,
+    plus what the chart meta says about the instrument. Dated (not a bare list
+    like portfolio.fetch_price_history_sync) because a health check mixes
+    exchanges with different holidays — NSE, NYSE, 24/7 crypto — and returns
+    must be lined up day by day, not position by position."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    r = _yf_get(url, {"range": "1y", "interval": "1d"})
+    r.raise_for_status()
+    result = r.json()["chart"]["result"][0]
+    meta = result.get("meta", {})
+    offset = int(meta.get("gmtoffset") or 0)
+    closes, volumes = {}, {}
+    for bar in _bars_from_chart(result):
+        day = time.strftime("%Y-%m-%d", time.gmtime(bar["time"] + offset))
+        closes[day] = bar["close"]
+        volumes[day] = bar["volume"]
+    return {
+        "symbol": meta.get("symbol", symbol),
+        "currency": meta.get("currency") or None,  # as Yahoo sends it: "GBp" is pence
+        "quote_type": (meta.get("instrumentType") or "").upper() or None,
+        "name": meta.get("longName") or meta.get("shortName"),
+        "price": meta.get("regularMarketPrice"),
+        "closes": closes,
+        "volumes": volumes,
+    }
+
+
+_profile_cache: dict = {}
+_PROFILE_TTL = 7 * 86400
+
+
+def fetch_sector_sync(symbol: str) -> Optional[str]:
+    """The company's sector from quoteSummary's assetProfile, or None (ETFs,
+    funds, crypto and many small Indian listings have none). Cached for a week:
+    sectors don't change and the health check asks for up to 50 at once."""
+    hit = _profile_cache.get(symbol)
+    if hit and time.time() - hit[0] < _PROFILE_TTL:
+        return hit[1]
+    url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
+    sector = None
+    for attempt in (1, 2):
+        session, crumb = _yf_authed_session()
+        r = session.get(url, params={"modules": "assetProfile", "crumb": crumb}, headers=YF_HEADERS, timeout=15)
+        if r.status_code in (401, 403) and attempt == 1:
+            global _yf_session, _yf_crumb
+            _yf_session, _yf_crumb = None, None
+            continue
+        if r.status_code == 404:
+            break
+        r.raise_for_status()
+        results = (r.json().get("quoteSummary") or {}).get("result") or []
+        profile = (results[0] if results else {}).get("assetProfile") or {}
+        sector = (profile.get("sector") or "").strip() or None
+        break
+    _profile_cache[symbol] = (time.time(), sector)
+    return sector

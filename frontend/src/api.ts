@@ -327,6 +327,47 @@ export type ChartReadResult = {
   message?: string;
 };
 
+export type HealthBucket = "in_equity" | "us_equity" | "other_equity" | "debt" | "gold" | "crypto" | "cash";
+export type RiskReturn = { annual_return: number; volatility: number; sharpe: number | null; max_drawdown: number };
+export type FrontierPoint = { volatility: number; return: number };
+export type HealthReport = {
+  base_currency: "INR" | "USD";
+  invested_value: number;
+  cash: number;
+  holdings: { symbol: string; name?: string | null; weight: number; value: number; bucket: HealthBucket; sector: string }[];
+  skipped: { symbol: string; reason: string }[];
+  days_analysed: number;
+  concentration: { holdings: number; effective_holdings: number; top: { symbol: string; weight: number }[] };
+  avg_correlation: number | null;
+  clusters: { symbols: string[]; weight: number; avg_correlation: number }[];
+  sectors: { sector: string; weight: number }[];
+  asset_mix: { bucket: HealthBucket; label: string; weight: number }[];
+  drift: { bucket: HealthBucket; label: string; actual: number; target: number; drift: number; flag: boolean }[];
+  targets_set: boolean;
+  benchmark: { symbol: string; name: string };
+  market: { beta: number; r_squared: number; correlation: number; days: number } | null;
+  risk_free_rate: number;
+  risk_return: RiskReturn | null;
+  benchmark_risk_return: RiskReturn | null;
+  frontier: {
+    you: FrontierPoint;
+    curve: FrontierPoint[];
+    lowest_risk: FrontierPoint;
+    best_return_per_risk: FrontierPoint | null;
+    same_risk_best_return: FrontierPoint | null;
+    same_return_lowest_risk: FrontierPoint | null;
+    return_gap_at_same_risk: number | null;
+    risk_gap_at_same_return: number | null;
+  } | null;
+  liquidity: { symbol: string; avg_daily_value: number; position_share_of_day: number; thinly_traded: boolean; flag: boolean }[];
+  diversification: {
+    score: number;
+    label: string;
+    parts: { breadth: number; independence: number; sectors: number; asset_classes: number };
+  };
+  observations: string[];
+};
+
 export type Analysis = {
   id: string;
   symbol: string;
@@ -443,6 +484,11 @@ export const api = {
     }),
   // Same upload path as portfolioImport (web File, or an expo-file-system File
   // on native). The image is read once on the server and never stored.
+  portfolioHealth: (body: {
+    holdings: { symbol: string; quantity: number }[];
+    cash: number;
+    targets?: Partial<Record<HealthBucket, number>> | null;
+  }) => j<HealthReport>(`/portfolio/health`, { method: "POST", body: JSON.stringify(body) }),
   chartRead: (asset: { uri: string; name: string; file: Blob | null }) => {
     const form = new FormData();
     if (asset.file) {

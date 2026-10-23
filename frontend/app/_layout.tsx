@@ -110,6 +110,7 @@ export default function RootLayout() {
                   <Stack.Screen name="compare" />
                   <Stack.Screen name="scans" />
                   <Stack.Screen name="chart" />
+                  <Stack.Screen name="health" />
                 </Stack>
               </AlertsProvider>
             </WatchlistProvider>

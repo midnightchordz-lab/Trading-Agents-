@@ -53,6 +53,10 @@ PORTFOLIO_IMPORT_GLOBAL_PER_MIN = rl.env_int("RL_PORTFOLIO_IMPORT_GLOBAL_PER_MIN
 CHART_READ_PER_MIN = rl.env_int("RL_CHART_READ_PER_MIN", 3)
 CHART_READ_PER_DAY = rl.env_int("RL_CHART_READ_PER_DAY", 30)
 CHART_READ_GLOBAL_PER_MIN = rl.env_int("RL_CHART_READ_GLOBAL_PER_MIN", 30)
+# A health check fans out to two Yahoo calls per holding (up to 50) plus FX and
+# the benchmark, so it is bounded per account and across the deployment.
+HEALTH_CHECK_PER_MIN = rl.env_int("RL_HEALTH_CHECK_PER_MIN", 3)
+HEALTH_CHECK_GLOBAL_PER_MIN = rl.env_int("RL_HEALTH_CHECK_GLOBAL_PER_MIN", 20)
 
 
 class PerIp:
@@ -121,6 +125,13 @@ limit_chart_read_daily = PerUser("chart_read_day", CHART_READ_PER_DAY, 86400)
 
 async def limit_chart_read_global() -> None:
     await rl.global_enforce("chart_read_global", CHART_READ_GLOBAL_PER_MIN, 60)
+
+
+limit_health_check = PerUser("health_check", HEALTH_CHECK_PER_MIN)
+
+
+async def limit_health_check_global() -> None:
+    await rl.global_enforce("health_check_global", HEALTH_CHECK_GLOBAL_PER_MIN, 60)
 
 
 async def limit_portfolio_import_global() -> None:
