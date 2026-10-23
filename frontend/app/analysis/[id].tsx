@@ -304,6 +304,15 @@ export default function AnalysisScreen() {
             <Warning size={28} color={colors.onError} weight="bold" />
             <Text style={styles.errorTitle}>ANALYSIS FAILED</Text>
             <Text style={styles.errorBody}>The desk could not complete this run. Head back and try again.</Text>
+            <Text testID="analysis-refund" style={styles.errorBody}>
+              {analysis.refund?.kind === "wallet" && analysis.refund.amount
+                ? `${analysis.refund.currency === "INR" ? "\u20b9" : "$"}${analysis.refund.amount} has been returned to your wallet.`
+                : analysis.refund?.kind === "free_credit"
+                  ? "Your free analysis credit has been given back."
+                  : analysis.refund
+                    ? "This run didn't count towards today's free analyses."
+                    : "If this run was charged, the charge is returned automatically."}
+            </Text>
           </View>
         ) : tab === "debate" ? (
           <DebateView analysis={analysis} running={running} blink={blink} currentAgent={currentAgent} />

@@ -168,6 +168,12 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
             raise HTTPException(status_code=403, detail="consent_required")
 
     used_free_credit = False
+    # What this run took, so it can be given back if the run fails (see
+    # _run_and_refund). Held in memory only, never stored: storing it would
+    # link an account to an analysis, which the privacy design avoids.
+    charge: Optional[dict] = None
+    if launch_free_daily_ok:
+        charge = {"kind": "launch_free", "wallet_key": launch_key, "day": today_str}
     billed = WALLET_ENFORCEMENT_ENABLED and not admin_bypass
     if billed:
         wkey = wallet_key_for(user, body.device_id)
@@ -208,6 +214,7 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
         if wal.should_use_free_credit(await get_free_credits_remaining(user)) and await consume_free_credit(user):
             used_free_credit = True
             billed = False
+            charge = {"kind": "free_credit", "user_id": user["id"]}
         else:
             wallet_doc = await db.wallets.find_one({"device_id": wkey})
             currency = (wallet_doc or {}).get("currency") or "USD"
@@ -229,6 +236,7 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
                     detail=(f"Insufficient balance: need {wal.currency_symbol_for(currency)}{price:.2f}, "
                             f"have {wal.currency_symbol_for(currency)}{balance:.2f}"),
                 )
+            charge = {"kind": "wallet", "wallet_key": wkey, "amount": price, "currency": currency}
 
     analysis = {
         "id": str(uuid.uuid4()),
@@ -262,8 +270,54 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
     # Stored alongside, never returned to the client: lets the owner delete
     # their own record without putting an identity on the analysis itself.
     await db.analyses.insert_one({**analysis, "owner_hash": owner_hash_for(user)})
-    asyncio.create_task(run_analysis(analysis["id"], symbol, language, chart_reading=chart_reading))
+    asyncio.create_task(_run_and_refund(analysis["id"], symbol, language, chart_reading, charge))
     return analysis
+
+
+async def _run_and_refund(analysis_id: str, symbol: str, language: str, chart_reading: Optional[dict],
+                          charge: Optional[dict]) -> None:
+    """Run the desk; if it ends in error, give back whatever the run took."""
+    try:
+        await run_analysis(analysis_id, symbol, language, chart_reading=chart_reading)
+    finally:
+        if charge:
+            try:
+                await refund_if_failed(analysis_id, charge)
+            except Exception:
+                logger.exception(f"refund for failed analysis {analysis_id} did not complete")
+
+
+async def refund_if_failed(analysis_id: str, charge: dict) -> bool:
+    """Give back the wallet charge, free credit or launch-free slot of a run
+    that ended in error. At most once per analysis: the analysis is marked
+    refunded with a conditional update first, and only the call that wins that
+    update pays out. Returns True if it refunded."""
+    marked = await db.analyses.update_one(
+        {"id": analysis_id, "status": "error", "refunded": {"$ne": True}},
+        {"$set": {"refunded": True, "refund": {"kind": charge["kind"], "amount": charge.get("amount"),
+                                               "currency": charge.get("currency")},
+                  "updated_at": now_iso()}},
+    )
+    if marked.modified_count != 1:
+        return False
+    kind = charge["kind"]
+    if kind == "wallet":
+        await db.wallets.update_one(
+            {"device_id": charge["wallet_key"]},
+            {"$inc": {"balance": charge["amount"]}, "$set": {"updated_at": now_iso()}},
+        )
+    elif kind == "free_credit":
+        await db.users.update_one({"id": charge["user_id"]}, {"$inc": {"free_credits_remaining": 1}})
+    elif kind == "launch_free":
+        # Only if it is still the same day; after midnight the allowance has
+        # rolled over anyway.
+        await db.wallets.update_one(
+            {"device_id": charge["wallet_key"], "launch_free_daily_date": charge["day"],
+             "launch_free_daily_count": {"$gt": 0}},
+            {"$inc": {"launch_free_daily_count": -1}},
+        )
+    logger.info(f"refunded failed analysis {analysis_id}: {kind}")
+    return True
 
 
 @api_router.get("/analysis/{analysis_id}", dependencies=[Depends(limit_poll)])

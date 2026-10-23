@@ -440,6 +440,9 @@ export type Analysis = {
   current_step: number;
   total_steps: number;
   error: string | null;
+  /** Set when a failed run's charge, free credit or launch-free slot was given back. */
+  refunded?: boolean;
+  refund?: { kind: "wallet" | "free_credit" | "launch_free"; amount?: number | null; currency?: string | null } | null;
   created_at: string;
   updated_at: string;
 };
