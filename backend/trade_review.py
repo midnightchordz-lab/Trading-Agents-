@@ -380,11 +380,14 @@ def build_report(parsed: list[dict]) -> dict:
                 "figures to your CA — this is not tax advice.",
     }
 
+    stated = [p["period"] for p in parsed if p.get("period")]
     ts = [f["ts"] for f in fills]
     exp = [c["expiry"] for c in contracts]
     period = {"from": (min(ts).date() if ts else min(exp)).isoformat() if ts or exp else None,
               "to": (max(ts).date() if ts else max(exp)).isoformat() if ts or exp else None}
 
+    if stated:
+        period = {"from": min(x["from"] for x in stated), "to": max(x["to"] for x in stated)}
     obs = observations(money, facts, top_losers, len(top))
     if not len(P) and len(C):
         obs.append("This statement has no trade times, so timing habits (time of day, holding time, trades "
@@ -400,6 +403,11 @@ def build_report(parsed: list[dict]) -> dict:
     if fo_fills and not timed:
         notes.append("This file has trade dates but no times, so time of day, holding time and trades after a "
                      "loss can't be shown. A tradebook with execution times adds them.")
+    not_closed = sum(p.get("not_closed", 0) for p in parsed)
+    if not_closed:
+        notes.append(f"{not_closed} contract{'s' if not_closed > 1 else ''} in the summary had only one side "
+                     f"(opened before the statement's start date, or still open) and {'were' if not_closed > 1 else 'was'} "
+                     "left out of the results.")
     lots = sum(p.get("lots_assumed", 0) for p in parsed)
     if lots:
         notes.append(f"{lots} commodity trades had no cash value, so quantities were read as lots and multiplied "

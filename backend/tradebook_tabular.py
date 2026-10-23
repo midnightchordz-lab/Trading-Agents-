@@ -72,6 +72,9 @@ _COLS = {
     "misc": ["misc", "other charges", "exchange charges"],
     "exchange": ["exchange", "exch", "segment", "market"],
     "buy": ["buy amt", "buy amount", "buy value", "total buy value", "buy val"],
+    "buy_qty": ["buy qty", "buy quantity"],
+    "sell_qty": ["sell qty", "sell quantity"],
+    "open_qty": ["balance qty", "open quantity", "open qty", "net qty", "net quantity"],
     "sell": ["sell amt", "sell amount", "sell value", "total sell value", "sell val"],
     "pnl": ["realized p l", "realised p l", "realized pnl", "realised pnl", "net p l", "p l", "pnl", "profit loss",
             "gain loss", "total"],
@@ -141,6 +144,9 @@ def _read_xlsx(data: bytes) -> list[list]:
         # The first sheet that has a recognisable header wins (some exports
         # put a summary sheet first).
         for ws in wb.worksheets[:5]:
+            # Many broker exports declare a wrong sheet size (Upstox's says one
+            # row); read-only mode trusts it unless the dimensions are reset.
+            ws.reset_dimensions()
             rows = []
             for row in ws.iter_rows(max_col=MAX_COLUMNS, values_only=True):
                 rows.append(list(row))
@@ -328,7 +334,33 @@ def parse_table(rows: list[list]) -> dict:
                              "symbol, buy/sell, quantity and price — like a broker's tradebook or P&L export.")
     h = _Header(rows[at])
     body = rows[at + 1:]
-    return _fills(h, body) if kind == "fills" else _contracts(h, body)
+    out = _fills(h, body) if kind == "fills" else _contracts(h, body)
+    out.update(_preamble(rows[:at]))
+    return out
+
+
+_BROKERS = ("Upstox", "Zerodha", "Kotak", "Groww", "Angel One", "Dhan", "ICICI Direct", "HDFC Securities",
+            "Motilal Oswal", "5paisa", "Fyers", "Sharekhan")
+
+
+def _preamble(rows: list[list]) -> dict:
+    """Broker name and the statement's own date range from the rows above the
+    header. Only these two things are read there — the same rows hold the
+    holder's name, PAN and client code, which are never looked at."""
+    out: dict = {}
+    for row in rows:
+        text = " ".join(str(c) for c in row if c is not None)
+        low = text.lower()
+        if "broker" not in out:
+            hit = next((b for b in _BROKERS if b.lower() in low), None)
+            if hit:
+                out["broker"] = "Kotak Neo" if hit == "Kotak" else hit
+        if "period" not in out and ("period" in low or re.search(r"\bfrom\b.*\bto\b", low)):
+            dates = [parse_date(d) for d in re.findall(r"\d{1,2}[-/]\d{1,2}[-/]\d{4}|\d{4}-\d\d-\d\d|\d{1,2}[- ][A-Za-z]{3}[- ]\d{4}", text)]
+            dates = [d for d in dates if d]
+            if len(dates) >= 2:
+                out["period"] = {"from": min(dates).isoformat(), "to": max(dates).isoformat()}
+    return out
 
 
 def _cell(row: list, i: Optional[int]):
@@ -398,7 +430,7 @@ def _row(ts, timed, und, segment, opt, strike, expiry, side, qty, price, amount,
 
 def _contracts(h: _Header, body: list[list]) -> dict:
     c = {k: h.find(k) for k in ("underlying", "opt", "strike", "expiry", "qty", "buy", "sell", "gst", "brokerage",
-                                "misc", "stt", "exchange")}
+                                "misc", "stt", "exchange", "buy_qty", "sell_qty", "open_qty")}
     c["symbol"] = h.find("symbol")
     c["pnl"] = h.find("pnl")
     c["charges"] = h.find("charges")
@@ -406,11 +438,18 @@ def _contracts(h: _Header, body: list[list]) -> dict:
         # Kotak repeats "Total": the first is P&L, the second total charges.
         c["charges"] = h.names.index("total", c["pnl"] + 1)
     kotak_layout = all(c[k] is not None for k in ("gst", "brokerage", "misc", "stt"))
-    out = []
+    out, still_open = [], []
     for row in body:
         buy, sell = _number(_cell(row, c["buy"])), _number(_cell(row, c["sell"]))
         sym = str(_cell(row, c["symbol"]) or _cell(row, c["underlying"]) or "")
         if buy is None or sell is None or not sym.strip() or "total" in _norm(sym):
+            continue
+        open_qty = _number(_cell(row, c["open_qty"]))
+        bq, sq = _number(_cell(row, c["buy_qty"])), _number(_cell(row, c["sell_qty"]))
+        if (open_qty is not None and abs(open_qty) > 1e-9) or (bq is not None and sq is not None and abs(bq - sq) > 1e-9):
+            # Opened before (or still open after) the statement's dates: its buy
+            # or sell side is missing, so sell − buy is not a result.
+            still_open.append(sym.strip())
             continue
         expiry_col = parse_date(_cell(row, c["expiry"]))
         resolved = resolve_contract(sym, expiry_col)
@@ -437,9 +476,10 @@ def _contracts(h: _Header, body: list[list]) -> dict:
                     "qty": _number(_cell(row, c["qty"])) or 0.0, "buy": buy, "sell": sell,
                     "gross_pnl": round(gross, 2), "charges": round(charges, 2) if charges is not None else None,
                     "stt": stt, "net_pnl": round(net, 2), "contract": contract_key(u, exp, o, k)})
-    if not out:
+    if not out and not still_open:
         raise TradebookError("No F&O contracts found under the heading row.")
-    return {"format": "spreadsheet_pnl", "broker": "Spreadsheet", "kind": "contracts", "rows": out}
+    return {"format": "spreadsheet_pnl", "broker": "Spreadsheet", "kind": "contracts", "rows": out,
+            "not_closed": len(still_open)}
 
 
 def parse_any(data: bytes) -> dict:

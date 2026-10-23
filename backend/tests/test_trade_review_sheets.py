@@ -161,3 +161,51 @@ def test_endpoint_accepts_a_csv(monkeypatch):
     from routes import trade_review as tr_routes
     rep = asyncio.run(tr_routes.trade_review(multipart([("tradebook.csv", csv_bytes(ZERODHA))]), USER))
     assert rep["sources"][0]["format"] == "spreadsheet_trades"
+
+
+# --- real-world quirks (from an actual Upstox trade summary export) ----------------------
+
+def shrink_dimension(data: bytes) -> bytes:
+    """Rewrite the sheet's declared size to A1, as Upstox's exports do."""
+    src, out = zipfile.ZipFile(io.BytesIO(data)), io.BytesIO()
+    with zipfile.ZipFile(out, "w") as dst:
+        for item in src.infolist():
+            body = src.read(item.filename)
+            if item.filename.startswith("xl/worksheets/"):
+                import re as _re
+                body = _re.sub(rb'<dimension ref="[^"]*"', b'<dimension ref="A1"', body)
+            dst.writestr(item, body)
+    return out.getvalue()
+
+
+UPSTOX_SUMMARY = [
+    ["UPSTOX SECURITIES PRIVATE LIMITED"], [], ["UCC", "XXXXXX"], ["Name", "Test Person"], ["PAN", "ABCDE1234F"],
+    ["Report Time Period", "16-10-2026 To 23-10-2026"], [],
+    ["Exchange", "Segment", "Company", "Balance Qty", "Balance Avg", "Balance Amt", "Scrip Code", "Instrument Type",
+     "Strike", "Expiry", "Buy Qty", "Buy Avg", "Buy Amt", "Sell Qty", "Sell Avg", "Sell Amt"],
+    ["FON", "FO", "NIFTY", "-260.0", "-37137.75", "-37137.75", "NIFTY", "European Put", "23000.0", "19-10-2026",
+     "0.0", "0.0", "0.0", "260.0", "-142.84", "37137.75"],
+    ["FON", "FO", "NIFTY", "0.0", "-10120.5", "-10120.5", "NIFTY", "European Call", "22950.0", "19-10-2026",
+     "650.0", "117.05", "76082.5", "650.0", "-132.62", "86203.0"],
+    ["FON", "FO", "BANKNIFTY", "0.0", "3712.5", "3712.5", "BANKNIFTY", "European Put", "54000.0", "27-10-2026",
+     "330.0", "96.35", "31797.0", "330.0", "-85.1", "28084.5"],
+]
+
+
+def test_upstox_trade_summary_with_a_wrong_sheet_size():
+    p = tt.parse_any(shrink_dimension(xlsx_bytes(UPSTOX_SUMMARY)))
+    assert p["kind"] == "contracts" and p["broker"] == "Upstox"
+    assert p["period"] == {"from": "2026-10-16", "to": "2026-10-23"}
+    assert [r["contract"] for r in p["rows"]] == ["NIFTY|2026-10-19|CE|22950", "BANKNIFTY|2026-10-27|PE|54000"]
+    assert p["not_closed"] == 1                                    # the one-sided 23000 PE row
+    rep = tr.build_report([p])
+    assert rep["money"]["gross"] == pytest.approx(10120.5 - 3712.5)
+    assert rep["period"]["from"] == "2026-10-16" and any("one side" in n for n in rep["notes"])
+    assert "ABCDE1234F" not in repr(rep) and "Test Person" not in repr(rep) and "ABCDE1234F" not in repr(p)
+
+
+def test_portfolio_import_reads_sheets_with_a_wrong_size_too():
+    import portfolio_import as pi
+    rows = [["Name", "Quantity", "Avg Price"], ["RELIANCE", 10, 1200], ["TCS", 5, 3000]]
+    out = pi.parse_holdings_file("holdings.xlsx", shrink_dimension(xlsx_bytes(rows)))
+    assert [r["input"] for r in out] == ["RELIANCE", "TCS"]

@@ -138,6 +138,9 @@ def _read_xlsx(data: bytes) -> list[list[object]]:
         raise HoldingsFileError("Couldn't open that spreadsheet. Try saving it again as .xlsx or CSV.")
     try:
         ws = wb.worksheets[0]
+        # Broker exports often declare a wrong sheet size (Upstox's says one
+        # row); read-only mode trusts it unless the dimensions are reset.
+        ws.reset_dimensions()
         rows = []
         for row in ws.iter_rows(max_col=MAX_COLUMNS, values_only=True):
             rows.append(list(row))
