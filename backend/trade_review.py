@@ -322,7 +322,7 @@ def contract_tables(C: pd.DataFrame, pnl_col: str) -> list[dict]:
     tables.append(_table("segment", "BY MARKET", seg, None, "Market"))
     und = C.assign(pnl=C[pnl_col]).groupby("underlying").agg(n=("pnl", "size"), pnl=("pnl", "sum"),
                                                               win=("pnl", lambda s: (s > 0).mean())).sort_values("pnl")
-    pick = pd.concat([und.head(6), und.tail(4)[und.tail(4).pnl > 0]])
+    pick = pd.concat([und.head(6), und.tail(4)[und.tail(4).pnl > 0]]).loc[~pd.concat([und.head(6), und.tail(4)[und.tail(4).pnl > 0]]).index.duplicated(keep="first")]
     tables.append(_table("underlying", "WORST AND BEST UNDERLYINGS", [
         {"label": k, "n": int(r.n), "pnl": round(float(r.pnl), 2), "win": round(float(r.win), 3)} for k, r in pick.iterrows()],
         f"{int((und.pnl > 0).sum())} of {len(und)} underlyings made money.", "Underlying"))

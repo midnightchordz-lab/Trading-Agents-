@@ -318,3 +318,15 @@ def test_share_card_never_carries_an_amount():
     s = rep["share"]
     assert s["lines"] and len(s["lines"]) <= 3
     assert "₹" not in repr(s) and s["win_rate"] == rep["money"]["win_rate"]
+
+
+def test_few_underlyings_are_not_listed_twice():
+    # With under ten underlyings the worst-6 and best-4 overlap; each must appear once
+    # (a repeat was a duplicate React key in the app).
+    fills = [fill(0, "Buy", 65, 100, "NIFTY|2026-05-07|CE|24000"), fill(10, "Sell", 65, 120, "NIFTY|2026-05-07|CE|24000"),
+             fill(20, "Buy", 30, 100, "BANKNIFTY|2026-05-07|PE|52000"), fill(30, "Sell", 30, 150, "BANKNIFTY|2026-05-07|PE|52000")]
+    rep = tr.build_report([{"format": "x", "broker": "x", "kind": "fills", "rows": fills}])
+    labels = [r["label"] for r in next(t for t in rep["tables"] if t["id"] == "underlying")["rows"]]
+    assert sorted(labels) == ["BANKNIFTY", "NIFTY"]
+    for t in rep["tables"]:
+        assert len({r["label"] for r in t["rows"]}) == len(t["rows"]), t["id"]
