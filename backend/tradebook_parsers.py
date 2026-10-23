@@ -85,8 +85,9 @@ def parse(lines: list[str]) -> dict:
         return {"format": kind, "broker": "Kotak Neo", "kind": "fills", "rows": parse_kotak_transactions(lines)}
     if kind == "kotak_gainloss":
         return {"format": kind, "broker": "Kotak Neo", "kind": "contracts", "rows": parse_kotak_gainloss(lines)}
-    raise TradebookError("This doesn't look like a supported statement. Supported for now: the Upstox trade "
-                         "report, and the Kotak Neo transaction statement or gain/loss statement.")
+    raise TradebookError("This PDF isn't a supported statement yet. PDFs supported: the Upstox trade report "
+                         "and the Kotak Neo transaction or gain/loss statement. Any broker's tradebook or P&L "
+                         "also works as .xlsx or CSV.")
 
 
 # ---------------------------------------------------------------------------

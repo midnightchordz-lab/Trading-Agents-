@@ -265,7 +265,8 @@ USER = {"id": "u1"}
 @pytest.fixture
 def fake_pdfs(monkeypatch):
     pages = {b"%PDF-upstox": UPSTOX, b"%PDF-ktx": KOTAK_TX, b"%PDF-kgl": KOTAK_GL, b"%PDF-other": ["hello"]}
-    monkeypatch.setattr(tr_routes.tp, "pdf_lines", lambda data: pages[data])
+    import tradebook_tabular
+    monkeypatch.setattr(tradebook_tabular, "pdf_lines", lambda data: pages[data])
 
 
 def test_endpoint_reviews_several_files(fake_pdfs):

@@ -125,8 +125,10 @@ def _summary(pnls: pd.Series) -> dict:
     }
 
 
-def position_tables(P: pd.DataFrame) -> tuple[list[dict], dict]:
-    """The behaviour tables, plus the raw facts the observations are built from."""
+def position_tables(P: pd.DataFrame, timed: bool = True) -> tuple[list[dict], dict]:
+    """The behaviour tables, plus the raw facts the observations are built from.
+    Without trade times (some spreadsheets carry only dates) the order of
+    trades within a day is unknown, so the timing tables are left out."""
     facts: dict = {}
     tables = []
     P = P.sort_values("start").reset_index(drop=True)
@@ -151,10 +153,13 @@ def position_tables(P: pd.DataFrame) -> tuple[list[dict], dict]:
                for k, r in D.groupby("b", observed=True).agg(n=("pnl", "size"), pnl=("pnl", "sum"),
                                                              win=("pnl", lambda s: (s > 0).mean())).iterrows()]
     tables.append(_table("per_day", "BY POSITIONS THAT DAY", per_day, "Each row counts days; win = share of green days.", "Day type"))
+    facts.update(per_day=per_day, days=int(len(D)), green_days=int((D.pnl > 0).sum()))
+    if not timed:
+        return _untimed_tables(P, tables, facts)
     nth = _group(P.assign(b=P.nth.clip(upper=5).map(lambda n: f"{n}{'st' if n == 1 else 'nd' if n == 2 else 'rd' if n == 3 else 'th'}{'+' if n == 5 else ''}")),
                  "b", ["1st", "2nd", "3rd", "4th", "5th+"])
     tables.append(_table("nth", "BY TRADE NUMBER IN THE DAY", nth, None, "Trade of the day"))
-    facts.update(per_day=per_day, nth=nth, days=int(len(D)), green_days=int((D.pnl > 0).sum()))
+    facts["nth"] = nth
 
     # After a loss
     prev_end = P.end.shift()
@@ -180,6 +185,11 @@ def position_tables(P: pd.DataFrame) -> tuple[list[dict], dict]:
     tables.append(_table("time", "BY ENTRY TIME", slot, None, "Entered"))
     facts["time"] = slot
 
+    return _untimed_tables(P, tables, facts)
+
+
+def _untimed_tables(P: pd.DataFrame, tables: list, facts: dict) -> tuple[list[dict], dict]:
+    D = P.groupby("day").agg(n=("pnl", "size"), pnl=("pnl", "sum"))
     # Days to expiry, index options
     idx = P[(P.segment == "index") & P.expiry.notna()]
     if len(idx) >= 5:
@@ -308,6 +318,7 @@ def build_report(parsed: list[dict]) -> dict:
     fo_fills = [f for f in fills if f["segment"] != "equity"]
     positions, still_open = build_positions(fo_fills) if fo_fills else ([], [])
     equity_rows = len(fills) - len(fo_fills)
+    timed = all(f.get("timed", True) for f in fo_fills)
 
     P = pd.DataFrame(positions)
     if len(P):
@@ -317,10 +328,11 @@ def build_report(parsed: list[dict]) -> dict:
 
     # Money: exact from a contract statement when there is one, else from fills.
     if len(C):
-        exact = True
+        C["charges"] = pd.to_numeric(C.charges)
+        exact = bool(C.charges.notna().all())
         C["month"] = pd.to_datetime(C.expiry).dt.strftime("%Y-%m")
         gross = float(C.gross_pnl.sum())
-        charges = float(C.charges.sum())
+        charges = float(C.charges.fillna(0).sum())
         net = float(C.net_pnl.sum())
         per = _summary(C.net_pnl)
         unit = "contracts"
@@ -334,7 +346,7 @@ def build_report(parsed: list[dict]) -> dict:
         unit = "positions"
         top = (P.pnl - P.charges.fillna(0)).nsmallest(10) if len(P) else pd.Series(dtype=float)
     money = {"gross": round(gross, 2), "charges": round(charges, 2), "net": round(net, 2),
-             "charges_known": bool(len(C)) or bool(exact), **per, "counted_in": unit}
+             "charges_known": bool(exact), **per, "counted_in": unit}
     top = top[top < 0]
     top_losers = float(top.sum()) if len(top) else None
 
@@ -342,7 +354,7 @@ def build_report(parsed: list[dict]) -> dict:
         P["start"] = pd.to_datetime(P.start)
         P["end"] = pd.to_datetime(P.end)
         if len(P) >= MIN_POSITIONS_FOR_HABITS:
-            t, facts = position_tables(P)
+            t, facts = position_tables(P, timed)
             tables += t
         if not len(C):
             P["month"] = P.start.dt.strftime("%Y-%m")
@@ -385,6 +397,13 @@ def build_report(parsed: list[dict]) -> dict:
         matched = len(set(C.contract) & set(P.contract))
         notes.append(f"Money figures come from the gain/loss statement ({len(C)} contracts); habits come from the "
                      f"{len(fills)} trades in the transaction file ({matched} contracts appear in both).")
+    if fo_fills and not timed:
+        notes.append("This file has trade dates but no times, so time of day, holding time and trades after a "
+                     "loss can't be shown. A tradebook with execution times adds them.")
+    lots = sum(p.get("lots_assumed", 0) for p in parsed)
+    if lots:
+        notes.append(f"{lots} commodity trades had no cash value, so quantities were read as lots and multiplied "
+                     "by the exchange lot size. Check the commodity figures against your broker's P&L.")
     if equity_rows:
         notes.append(f"{equity_rows} share/ETF trades were left out — this review covers F&O and commodities.")
 

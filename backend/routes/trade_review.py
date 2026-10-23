@@ -1,7 +1,8 @@
 """Trade Review — POST /api/trade-review.
 
-Takes up to three broker statement PDFs (e.g. a Kotak transaction statement
-plus the gain/loss statement for the same period), parses them in memory and
+Takes up to three broker statements — PDF, Excel (.xlsx) or CSV (e.g. a
+Kotak transaction statement plus the gain/loss statement for the same period,
+or a Zerodha tradebook), parses them in memory and
 returns the review. Nothing is stored: not the files, not the trades, not the
 report. Statements carry the holder's name and PAN; the parsers never read
 those into their output.
@@ -18,6 +19,7 @@ from starlette.datastructures import UploadFile
 
 import trade_review as tr
 import tradebook_parsers as tp
+import tradebook_tabular as ttab
 from core import logger
 from deps import get_current_user
 from limits import limit_trade_review, limit_trade_review_daily, limit_trade_review_global
@@ -33,7 +35,7 @@ _TIMEOUT = 120
 
 
 def _review(blobs: list[bytes]) -> dict:
-    parsed = [tp.parse(tp.pdf_lines(b)) for b in blobs]
+    parsed = [ttab.parse_any(b) for b in blobs]
     return tr.build_report(parsed)
 
 
@@ -63,8 +65,6 @@ async def trade_review(request: Request, user: dict = Depends(get_current_user))
             data = await u.read(tp.MAX_FILE_BYTES + 1)
             if len(data) > tp.MAX_FILE_BYTES:
                 raise HTTPException(status_code=413, detail=_TOO_BIG)
-            if not data.startswith(b"%PDF"):
-                raise HTTPException(status_code=400, detail="Please upload the PDF statements your broker gives you.")
             blobs.append(data)
     finally:
         await form.close()
@@ -78,8 +78,8 @@ async def trade_review(request: Request, user: dict = Depends(get_current_user))
         raise HTTPException(status_code=504, detail="That took too long. Try a shorter date range.")
     except Exception:
         logger.exception("trade review failed")
-        raise HTTPException(status_code=422, detail="Couldn't review those statements. Check they are the "
-                                                    "supported Upstox or Kotak Neo PDFs and try again.")
+        raise HTTPException(status_code=422, detail="Couldn't review those statements. Upload your broker's "
+                                                    "tradebook or P&L as PDF, .xlsx or CSV and try again.")
     finally:
         del blobs  # the statements are never kept
     logger.info(f"trade review: {len(report['sources'])} file(s), {report['positions']} positions, "

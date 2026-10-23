@@ -16,7 +16,7 @@ import { api, ReviewTable, TradeReview } from "@/src/api";
 import { trackEvent } from "@/src/firebase";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
 
-// Trade Review: the user's own broker statements (PDF) → how they actually
+// Trade Review: the user's own broker statements (PDF, Excel or CSV) → how they actually
 // trade. Parsed on the server in memory; the files, trades and report are not
 // stored anywhere (the report lives only in this screen's state). Everything
 // shown describes past trades — no suggestions, no buy/sell language.
@@ -47,7 +47,7 @@ export default function ReviewScreen() {
     let res: DocumentPicker.DocumentPickerResult;
     try {
       res = await DocumentPicker.getDocumentAsync({
-        type: "application/pdf",
+        type: "*/*",
         multiple: true,
         copyToCacheDirectory: true,
       });
@@ -108,11 +108,19 @@ export default function ReviewScreen() {
             lose on, by size, time of day, trades per day and after a loss. F&O
             and commodity options. Free.
           </Text>
-          <Text style={styles.small}>Supported now (PDF):</Text>
+          <Text style={styles.small}>
+            Your tradebook or P&L — PDF, Excel (.xlsx) or CSV:
+          </Text>
+          <Text style={styles.small}>
+            • Zerodha — Console → Reports → Tradebook (and P&L)
+          </Text>
           <Text style={styles.small}>• Upstox — Reports → Trade report</Text>
           <Text style={styles.small}>
-            • Kotak Neo — Reports → Transaction statement, plus the Gain/Loss
-            statement for exact charges
+            • Kotak Neo — Transaction statement, plus the Gain/Loss statement
+            for exact charges
+          </Text>
+          <Text style={styles.small}>
+            • Any other broker&apos;s tradebook as .xlsx or CSV
           </Text>
           <Text style={styles.small}>
             Add up to 3 files for the same account. Files are read once and not
@@ -141,7 +149,7 @@ export default function ReviewScreen() {
               style={styles.pickBtn}
             >
               <Text style={styles.pickText}>
-                {files.length ? "ADD ANOTHER PDF" : "CHOOSE PDF STATEMENTS"}
+                {files.length ? "ADD ANOTHER FILE" : "CHOOSE STATEMENTS"}
               </Text>
             </Pressable>
           ) : null}
