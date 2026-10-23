@@ -330,7 +330,7 @@ def test_daily_refresh_builds_every_group(fake_db, monkeypatch):
     monkeypatch.setenv("SCAN_UNIVERSE_CRYPTO", "BTC-USD")
     asked = []
     monkeypatch.setattr(scan_jobs, "fetch_daily_bars_sync", lambda sym: asked.append(sym) or bars_from(rising()))
-    asyncio.run(scan_jobs.refresh_daily(NOW))
+    asyncio.run(scan_jobs.refresh_daily(ist(2026, 10, 22, 16, 0)))  # after the NSE close
     assert asked == ["RELIANCE.NS", "TCS.NS", "AAPL", "BTC-USD"]
     assert [i["symbol"] for i in fake_db.scan_results.docs["us.near_52w_high"]["items"]] == ["AAPL"]
     assert fake_db.scan_results.docs["in.near_52w_high"]["kind"] == "daily"
@@ -415,7 +415,7 @@ def test_live_runs_before_the_daily_rebuild(fake_db, monkeypatch):
 def test_daily_results_name_their_session(fake_db, monkeypatch):
     monkeypatch.setenv("SCAN_UNIVERSE_IN", "RELIANCE")
     monkeypatch.setattr(scan_jobs, "fetch_daily_bars_sync", lambda sym: bars_from(rising()))
-    asyncio.run(scan_jobs.refresh_daily_group("in", ist(2026, 10, 23, 9, 18)))
+    asyncio.run(scan_jobs.refresh_daily_group("in", ist(2026, 10, 23, 8, 30)))  # before the open
     assert fake_db.scan_results.docs["in.near_52w_high"]["session_date"] == "2026-10-22"
     out = asyncio.run(scan_routes.get_scan("in.near_52w_high"))
     assert out["session_date"] == "2026-10-22"
@@ -460,3 +460,15 @@ def test_live_refresh_writes_provisional_trend_lists(fake_db, monkeypatch):
     asyncio.run(scan_jobs.refresh_daily_group("in", ist(2026, 10, 22, 16, 0)))
     final = fake_db.scan_results.docs["in.rsi_oversold"]
     assert final["provisional"] is False and final["session_date"] == "2026-10-22"
+
+
+def test_a_daily_rebuild_during_the_session_leaves_the_live_trend_lists_alone(fake_db, monkeypatch):
+    fake_db.scan_results.docs["in.rsi_oversold"] = {"_id": "in.rsi_oversold", "items": [{"symbol": "LIVE"}],
+                                                    "provisional": True, "source": "upstox"}
+    monkeypatch.setenv("SCAN_UNIVERSE_IN", "RELIANCE")
+    monkeypatch.setattr(scan_jobs, "fetch_daily_bars_sync", lambda sym: bars_from(falling(), last_volume=3_000_000))
+    asyncio.run(scan_jobs.refresh_daily_group("in", ist(2026, 10, 23, 9, 30)))     # NSE open
+    assert fake_db.scan_results.docs["in.rsi_oversold"]["provisional"] is True      # untouched
+    assert fake_db.scan_results.docs["in.volume_spike"]["session_date"] == "2026-10-22"
+    asyncio.run(scan_jobs.refresh_daily_group("in", ist(2026, 10, 23, 15, 50)))    # after the close
+    assert fake_db.scan_results.docs["in.rsi_oversold"]["provisional"] is False

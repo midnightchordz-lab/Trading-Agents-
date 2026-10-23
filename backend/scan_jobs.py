@@ -97,7 +97,15 @@ async def refresh_daily_group(group: str, now: datetime) -> None:
             )
         await asyncio.sleep(PER_ASSET_PAUSE)
     if rows:
-        await save_results(group, sc.run_scans(sc.DAILY_SCANS, rows), kind="daily", source="yahoo",
+        results = sc.run_scans(sc.DAILY_SCANS, rows)
+        if group == "in" and sc.session_fraction(now) is not None:
+            # Mid-session (a first deploy, or a restart before the close was
+            # processed) the trend lists are live, recomputed from today's
+            # price; yesterday's final values must not replace them. The
+            # post-close refresh writes their final values.
+            for s in sc.INTRADAY_TREND_SCANS:
+                results.pop(s.id, None)
+        await save_results(group, results, kind="daily", source="yahoo",
                            delayed=False, as_of=now.isoformat(), session_date=session.isoformat())
     await acquire_lease(now_utc())  # a full refresh can outlast one lease period
     logger.info(f"scanner: daily {group} refreshed for the {session} close ({len(rows)}/{len(symbols)} assets)")
