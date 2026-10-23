@@ -395,6 +395,18 @@ export type TradeReview = {
   observations: string[];
   tables: ReviewTable[];
   tax: { turnover: number; net_pnl_after_charges: number; charges: number; charges_exact: boolean; note: string };
+  what_if: { id: string; title: string; detail: string; actual: number; hypothetical: number; difference: number }[];
+  what_if_note: string;
+  share: {
+    period: { from: string | null; to: string | null };
+    win_rate: number | null;
+    profit_factor: number | null;
+    count: number;
+    counted_in: "positions" | "contracts";
+    active_days: number | null;
+    green_days: number | null;
+    lines: string[];
+  };
   open_positions: { contract: string; status: string }[];
   notes: string[];
   risk_line: string;

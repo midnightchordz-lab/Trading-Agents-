@@ -15,6 +15,11 @@ and every report ends with SEBI's F&O risk line. No AI call; pure arithmetic.
 Free for now (rate-limited). Pricing (free preview + paid full report) is a
 pending business decision.
 
+### Added after comparing with Vibe-Trading's Shadow Account
+1. **Winners vs losers · how long held** table + an observation when losers are held ≥1.3× longer (the disposition effect) — or the reverse.
+2. **Share my review** button → image (react-native-view-shot + expo-sharing, already in the app) built from `report.share`: win rate, ₹-won-per-₹1-lost ratio, counts, green days and up to 3 percentage lines. **Never a rupee amount** (tested).
+3. **Hindsight** card (`report.what_if`): the user's own positions recalculated, before charges — sizes capped at their median size; without re-entries within 30 min of a loss; only the first two positions of each day. Labelled hindsight, "not a forecast and not a suggestion"; wording tested for no advice terms.
+
 ## Supported statements (v1)
 | Broker | Statement | Kind | Notes |
 |---|---|---|---|
@@ -62,9 +67,10 @@ statement to the rupee, net within ₹4 rounding.
 
 ## Please verify (Emergent)
 1. `pip install -r backend/requirements.txt` (pdfplumber), restart backend.
-2. `cd backend && python -m pytest tests/test_trade_review.py tests/test_portfolio_health.py tests/test_chart_analysis.py tests/test_scanners.py tests/test_trade_review_sheets.py -n 0 -q` → 105 passed.
-3. App: the REVIEW tab appears between PORTFOLIO and ALERTS; the tab bar still fits on a small Android screen (6 tabs).
-4. The owner will test with their own statements on the phone. Do NOT ask for, upload or paste anyone's real statement in chat.
-5. Error paths: an old .xls → 400 asking for .xlsx/CSV; a sheet without the needed columns → 400 "Couldn't find the columns"; an unrelated PDF → 400 "doesn't look like a supported statement"; a password-protected PDF → 400 asking for one without a password.
+2. `cd backend && python -m pytest tests/test_trade_review.py tests/test_portfolio_health.py tests/test_chart_analysis.py tests/test_scanners.py tests/test_trade_review_sheets.py -n 0 -q` → 126 passed.
+3. App: SHARE MY REVIEW opens the image with no ₹ amounts; the share sheet opens on Android. The HINDSIGHT card shows under the observations.
+4. App: the REVIEW tab appears between PORTFOLIO and ALERTS; the tab bar still fits on a small Android screen (6 tabs).
+5. The owner will test with their own statements on the phone. Do NOT ask for, upload or paste anyone's real statement in chat.
+6. Error paths: an old .xls → 400 asking for .xlsx/CSV; a sheet without the needed columns → 400 "Couldn't find the columns"; an unrelated PDF → 400 "doesn't look like a supported statement"; a password-protected PDF → 400 asking for one without a password.
 
 Do not force-push or rewrite history.

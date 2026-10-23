@@ -53,6 +53,17 @@ def _pct(x: float) -> str:
     return f"{x * 100:.0f}%"
 
 
+def _dur(mins: float) -> str:
+    if mins < 1:
+        return "under a minute"
+    if mins < 60:
+        return f"{mins:.0f} min"
+    if mins < 24 * 60:
+        h, m = divmod(int(round(mins)), 60)
+        return f"{h} h {m} min" if m else f"{h} h"
+    return f"{mins / (24 * 60):.1f} days"
+
+
 # ---------------------------------------------------------------------------
 # Positions from fills
 # ---------------------------------------------------------------------------
@@ -185,6 +196,18 @@ def position_tables(P: pd.DataFrame, timed: bool = True) -> tuple[list[dict], di
     tables.append(_table("time", "BY ENTRY TIME", slot, None, "Entered"))
     facts["time"] = slot
 
+    # Winners vs losers: how long each was held (the disposition effect —
+    # holding losers longer than winners — shows up here).
+    W, L = P[P.pnl > 0], P[P.pnl <= 0]
+    if len(W) >= 3 and len(L) >= 3:
+        wm, lm = float(W.mins.median()), float(L.mins.median())
+        tables.append(_table("disposition", "WINNERS VS LOSERS · HOW LONG HELD", [
+            {"label": "Winning positions", "n": int(len(W)), "pnl": round(float(W.pnl.sum()), 2), "win": None,
+             "extra": f"median {_dur(wm)}"},
+            {"label": "Losing positions", "n": int(len(L)), "pnl": round(float(L.pnl.sum()), 2), "win": None,
+             "extra": f"median {_dur(lm)}"}], None, "Positions"))
+        facts["disposition"] = {"win_median": wm, "loss_median": lm}
+
     return _untimed_tables(P, tables, facts)
 
 
@@ -218,6 +241,79 @@ def _untimed_tables(P: pd.DataFrame, tables: list, facts: dict) -> tuple[list[di
         for d, r in pd.concat([worst, best[best.pnl > 0]]).iterrows()], None, "Day"))
     facts["worst_day"] = (worst.index[0], float(worst.pnl.iloc[0]), int(worst.n.iloc[0])) if len(worst) else None
     return tables, facts
+
+
+def what_ifs(P: pd.DataFrame, timed: bool) -> list[dict]:
+    """Hindsight on the user's own positions, before charges: the same trades
+    recalculated with one thing changed. Shown as what those choices cost or
+    earned in the past — never as a rule to follow."""
+    P = P.sort_values("start").reset_index(drop=True)
+    actual = float(P.pnl.sum())
+    out = []
+
+    def add(wid, title, detail, hyp):
+        if abs(hyp - actual) >= 1:
+            out.append({"id": wid, "title": title, "detail": detail, "actual": round(actual, 2),
+                        "hypothetical": round(hyp, 2), "difference": round(hyp - actual, 2)})
+
+    med = float(P["size"].median())
+    if med > 0:
+        scale = (med / P["size"]).clip(upper=1.0)
+        add("size_cap", "Positions no bigger than your usual size",
+            f"Every position larger than your median size ({_rupees(med).lstrip('+')}) scaled down to that size.",
+            float((P.pnl * scale).sum()))
+    if timed:
+        prev_end = P.end.shift()
+        gap = (P.start - prev_end).dt.total_seconds() / 60
+        quick = (P.pnl.shift() < 0) & gap.between(0, REENTRY_MINUTES) & (P.start.dt.date == prev_end.dt.date)
+        if quick.sum() >= 3:
+            add("no_quick_reentry", "Without the quick re-entries after a loss",
+                f"The {int(quick.sum())} positions opened within {REENTRY_MINUTES} minutes of a losing exit left out.",
+                float(P.pnl[~quick].sum()))
+        nth = P.groupby(P.start.dt.date).cumcount() + 1
+        if (nth > 2).sum() >= 3:
+            add("first_two", "Only the first two positions of each day",
+                f"The {int((nth > 2).sum())} positions taken after the second of the day left out.",
+                float(P.pnl[nth <= 2].sum()))
+    return out
+
+
+def share_summary(money: dict, facts: dict, period: dict, active_days, green_days) -> dict:
+    """What the shareable card shows: ratios and percentages only, never a
+    rupee amount (people share these; their P&L stays private)."""
+    lines = []
+    size = facts.get("size")
+    if size:
+        total = sum(r["pnl"] for r in size)
+        if total < 0 and size[-1]["pnl"] < 0 and size[-1]["pnl"] / total >= 0.5:
+            lines.append(f"Largest 25% of positions: {_pct(size[-1]['pnl'] / total)} of the loss")
+    al = facts.get("after_loss") or []
+    if len(al) == 2 and al[0]["n"] >= 5 and al[0]["win"] < al[1]["win"]:
+        lines.append(f"Trades within {REENTRY_MINUTES} min of a loss: {_pct(al[0]['win'])} winners vs {_pct(al[1]['win'])}")
+    nth = facts.get("nth") or []
+    if len(nth) >= 4 and nth[0]["win"] - nth[-1]["win"] >= 0.1:
+        lines.append(f"Win rate: {_pct(nth[0]['win'])} on the 1st trade of the day, {_pct(nth[-1]['win'])} on the {nth[-1]['label']}")
+    d = facts.get("disposition")
+    if d and d["win_median"] > 0 and d["loss_median"] >= 1.3 * d["win_median"]:
+        lines.append(f"Losers held {d['loss_median'] / d['win_median']:.1f}× longer than winners")
+    per_day = {r["label"]: r for r in facts.get("per_day", [])}
+    light = [per_day[k] for k in ("1 position", "2 positions") if k in per_day]
+    heavy = [per_day[k] for k in ("3–4 positions", "5+ positions") if k in per_day]
+    if light and heavy:
+        lw = sum(r["win"] * r["n"] for r in light) / sum(r["n"] for r in light)
+        hw = sum(r["win"] * r["n"] for r in heavy) / sum(r["n"] for r in heavy)
+        if lw - hw >= 0.1:
+            lines.append(f"Green days: {_pct(lw)} with 1–2 trades, {_pct(hw)} with 3 or more")
+    return {
+        "period": period,
+        "win_rate": money.get("win_rate"),
+        "profit_factor": money.get("profit_factor"),
+        "count": money.get("count"),
+        "counted_in": money.get("counted_in"),
+        "active_days": active_days,
+        "green_days": green_days,
+        "lines": lines[:3],
+    }
 
 
 def contract_tables(C: pd.DataFrame, pnl_col: str) -> list[dict]:
@@ -287,6 +383,14 @@ def observations(money: dict, facts: dict, top_losers: Optional[float], n_top: i
         if worst["pnl"] < 0 and worst["pnl"] / money["net"] >= 0.4:
             out.append(f"Positions held {worst['label'].lower()} made {_rupees(worst['pnl'])} "
                        f"({_pct(worst['win'])} winners) — the costliest holding time.")
+    d = facts.get("disposition")
+    if d and d["win_median"] > 0:
+        if d["loss_median"] >= 1.3 * d["win_median"] and d["loss_median"] - d["win_median"] >= 5:
+            out.append(f"Losing positions were held about {d['loss_median'] / d['win_median']:.1f}× as long as winning "
+                       f"ones (median {_dur(d['loss_median'])} against {_dur(d['win_median'])}).")
+        elif d["win_median"] >= 1.3 * d["loss_median"] and d["win_median"] - d["loss_median"] >= 5:
+            out.append(f"Winning positions were held longer than losing ones (median {_dur(d['win_median'])} "
+                       f"against {_dur(d['loss_median'])}).")
     t = facts.get("time") or []
     if t and money.get("net", 0) < 0:
         worst = min(t, key=lambda r: r["pnl"])
@@ -321,6 +425,7 @@ def build_report(parsed: list[dict]) -> dict:
     timed = all(f.get("timed", True) for f in fo_fills)
 
     P = pd.DataFrame(positions)
+    whatif: list = []
     if len(P):
         P["charges"] = pd.to_numeric(P.charges)  # all-None (Upstox) would otherwise be dtype object
     C = pd.DataFrame(contracts)
@@ -356,6 +461,7 @@ def build_report(parsed: list[dict]) -> dict:
         if len(P) >= MIN_POSITIONS_FOR_HABITS:
             t, facts = position_tables(P, timed)
             tables += t
+            whatif = what_ifs(P, timed)
         if not len(C):
             P["month"] = P.start.dt.strftime("%Y-%m")
             tables = contract_tables(P.assign(gross_pnl=P.pnl), "gross_pnl") + tables
@@ -427,6 +533,10 @@ def build_report(parsed: list[dict]) -> dict:
         "observations": obs,
         "tables": tables,
         "tax": tax,
+        "what_if": whatif,
+        "what_if_note": "Hindsight on your own trades, before charges: the same positions recalculated with one "
+                        "thing changed. It shows what past choices cost or earned — not a forecast and not a suggestion.",
+        "share": share_summary(money, facts, period, facts.get("days"), facts.get("green_days")),
         "open_positions": still_open[:20],
         "notes": notes,
         "risk_line": SEBI_FO_LINE,

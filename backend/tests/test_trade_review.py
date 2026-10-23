@@ -287,3 +287,34 @@ def test_endpoint_needs_a_file(fake_pdfs):
     with pytest.raises(HTTPException) as e:
         asyncio.run(tr_routes.trade_review(multipart([]), USER))
     assert e.value.status_code == 400
+
+
+# --- winners vs losers, hindsight, the share card ------------------------------------
+
+def test_losers_held_longer_is_reported():
+    rep = tr.build_report([{"format": "x", "broker": "x", "kind": "fills", "rows": habit_fills()}])
+    rows = {r["label"]: r for r in next(t for t in rep["tables"] if t["id"] == "disposition")["rows"]}
+    assert rows["Winning positions"]["extra"] == "median 20 min" and rows["Losing positions"]["extra"] == "median 1 h 10 min"
+    assert any("held about 3.5× as long" in o for o in rep["observations"])
+
+
+def test_what_if_recalculates_own_trades_only():
+    rep = tr.build_report([{"format": "x", "broker": "x", "kind": "fills", "rows": habit_fills()}])
+    w = {x["id"]: x for x in rep["what_if"]}
+    actual = 10 * (650 - 2 * 6500 - 26000)
+    # Each day: a small winner, two losers re-entered 10 minutes after a loss, and one more loser.
+    assert w["no_quick_reentry"]["hypothetical"] == pytest.approx(10 * (650 - 6500))
+    assert w["first_two"]["hypothetical"] == pytest.approx(10 * (650 - 6500))
+    # Median size is 65,000 (650 × 100), so the 2,600-lot trades are scaled to a quarter.
+    assert w["size_cap"]["hypothetical"] == pytest.approx(10 * (650 - 6500 - 6500 - 6500))
+    assert all(x["actual"] == pytest.approx(actual) for x in rep["what_if"])
+    for x in rep["what_if"]:
+        assert not ADVICE.search(x["title"] + " " + x["detail"]), x
+    assert "not a suggestion" in rep["what_if_note"]
+
+
+def test_share_card_never_carries_an_amount():
+    rep = tr.build_report([{"format": "x", "broker": "x", "kind": "fills", "rows": habit_fills()}])
+    s = rep["share"]
+    assert s["lines"] and len(s["lines"]) <= 3
+    assert "₹" not in repr(s) and s["win_rate"] == rep["money"]["win_rate"]

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   View,
   Text,
@@ -7,9 +7,12 @@ import {
   ActivityIndicator,
   StyleSheet,
   Alert,
+  Modal,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as DocumentPicker from "expo-document-picker";
+import * as Sharing from "expo-sharing";
+import ViewShot from "react-native-view-shot";
 
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
 import { api, ReviewTable, TradeReview } from "@/src/api";
@@ -187,8 +190,86 @@ export default function ReviewScreen() {
 
 function Report({ r }: { r: TradeReview }) {
   const m = r.money;
+  const [shareOpen, setShareOpen] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [shareErr, setShareErr] = useState<string | null>(null);
+  const shotRef = useRef<React.ElementRef<typeof ViewShot>>(null);
+
+  const doShare = async () => {
+    try {
+      setSharing(true);
+      setShareErr(null);
+      const uri = await shotRef.current?.capture?.();
+      if (!uri) throw new Error("capture failed");
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: "image/png",
+          dialogTitle: "My trade review",
+        });
+        trackEvent("trade_review", { shared: 1 });
+      } else {
+        setShareErr(
+          "Sharing isn't available here — open the app on your phone to share.",
+        );
+      }
+    } catch {
+      setShareErr("Couldn't make the image. Please try again.");
+    } finally {
+      setSharing(false);
+    }
+  };
+
   return (
     <>
+      <Pressable
+        testID="review-share"
+        onPress={() => {
+          setShareErr(null);
+          setShareOpen(true);
+        }}
+        style={styles.pickBtn}
+      >
+        <Text style={styles.pickText}>SHARE MY REVIEW (NO AMOUNTS)</Text>
+      </Pressable>
+      <View style={{ height: spacing.md }} />
+      <Modal
+        visible={shareOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShareOpen(false)}
+      >
+        <View style={styles.backdrop}>
+          <ViewShot
+            ref={shotRef}
+            options={{ format: "png", quality: 1 }}
+            style={{ backgroundColor: colors.surface }}
+          >
+            <ShareCard s={r.share} />
+          </ViewShot>
+          {shareErr ? <Text style={styles.shareErr}>{shareErr}</Text> : null}
+          <View style={styles.modalBtns}>
+            <Pressable
+              onPress={() => setShareOpen(false)}
+              style={[styles.modalBtn, styles.modalGhost]}
+            >
+              <Text style={styles.modalGhostText}>CLOSE</Text>
+            </Pressable>
+            <Pressable
+              testID="review-share-go"
+              onPress={doShare}
+              disabled={sharing}
+              style={[styles.modalBtn, { backgroundColor: colors.brand }]}
+            >
+              {sharing ? (
+                <ActivityIndicator color={colors.onSurfaceInverse} />
+              ) : (
+                <Text style={styles.modalGoText}>SHARE</Text>
+              )}
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
       <View testID="review-summary" style={styles.card}>
         <Text style={styles.cardTitle}>
           RESULT{r.period.from ? ` · ${r.period.from} → ${r.period.to}` : ""}
@@ -255,6 +336,35 @@ function Report({ r }: { r: TradeReview }) {
         </View>
       ) : null}
 
+      {r.what_if.length ? (
+        <View testID="review-whatif" style={styles.card}>
+          <Text style={styles.cardTitle}>
+            HINDSIGHT · YOUR OWN TRADES, RECALCULATED
+          </Text>
+          {r.what_if.map((w) => (
+            <View key={w.id} style={styles.whatIf}>
+              <Text style={styles.tdLabel}>{w.title}</Text>
+              <Text style={styles.tdExtra}>{w.detail}</Text>
+              <View style={styles.whatIfNums}>
+                <Text style={styles.small}>
+                  Actual{" "}
+                  <Text style={{ color: tone(w.actual) }}>
+                    {rupees(w.actual)}
+                  </Text>
+                </Text>
+                <Text style={styles.small}>
+                  Recalculated{" "}
+                  <Text style={{ color: tone(w.hypothetical) }}>
+                    {rupees(w.hypothetical)}
+                  </Text>
+                </Text>
+              </View>
+            </View>
+          ))}
+          <Text style={styles.small}>{r.what_if_note}</Text>
+        </View>
+      ) : null}
+
       {r.tables.map((t) => (
         <TableCard key={t.id} t={t} />
       ))}
@@ -303,6 +413,50 @@ function Report({ r }: { r: TradeReview }) {
       ) : null}
       <Text style={styles.note}>{r.risk_line}</Text>
     </>
+  );
+}
+
+// The image people share: ratios and percentages only — no rupee amount ever
+// appears on it, so nobody's P&L leaves their phone by accident.
+function ShareCard({ s }: { s: TradeReview["share"] }) {
+  return (
+    <View style={styles.shareCard}>
+      <Text style={styles.shareBrand}>TRADINGAGENTS · TRADE REVIEW</Text>
+      {s.period.from ? (
+        <Text style={styles.shareSub}>
+          {s.period.from} → {s.period.to}
+        </Text>
+      ) : null}
+      <View style={styles.shareStats}>
+        <View style={styles.shareStat}>
+          <Text style={styles.shareNum}>{pct(s.win_rate)}</Text>
+          <Text style={styles.shareLabel}>WIN RATE</Text>
+        </View>
+        <View style={styles.shareStat}>
+          <Text style={styles.shareNum}>
+            {s.profit_factor != null ? s.profit_factor.toFixed(2) : "—"}
+          </Text>
+          <Text style={styles.shareLabel}>WON PER 1 LOST</Text>
+        </View>
+        <View style={styles.shareStat}>
+          <Text style={styles.shareNum}>{s.count}</Text>
+          <Text style={styles.shareLabel}>{s.counted_in.toUpperCase()}</Text>
+        </View>
+      </View>
+      {s.active_days ? (
+        <Text style={styles.shareSub}>
+          {s.green_days} green days of {s.active_days}
+        </Text>
+      ) : null}
+      {s.lines.map((l, i) => (
+        <Text key={i} style={styles.shareLine}>
+          • {l}
+        </Text>
+      ))}
+      <Text style={styles.shareFoot}>
+        From my own broker statements · not advice
+      </Text>
+    </View>
   );
 }
 
@@ -528,6 +682,98 @@ const styles = StyleSheet.create({
     fontFamily: fonts.monoBold,
     fontSize: 12,
     color: colors.onSurface,
+  },
+  whatIf: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.divider,
+  },
+  whatIfNums: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 2,
+  },
+  backdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.md,
+    padding: spacing.lg,
+  },
+  shareErr: {
+    fontFamily: fonts.mono,
+    fontSize: 11,
+    color: colors.onSurfaceInverse,
+    textAlign: "center",
+  },
+  modalBtns: { flexDirection: "row", gap: spacing.md, width: 320 },
+  modalBtn: {
+    flex: 1,
+    height: 48,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalGhost: { borderWidth: 1, borderColor: colors.onSurfaceInverse },
+  modalGhostText: {
+    fontFamily: fonts.monoBold,
+    fontSize: 12,
+    color: colors.onSurfaceInverse,
+  },
+  modalGoText: {
+    fontFamily: fonts.monoBold,
+    fontSize: 12,
+    color: colors.onSurfaceInverse,
+  },
+  shareCard: {
+    width: 320,
+    padding: spacing.lg,
+    backgroundColor: colors.surface,
+    borderWidth: BORDER,
+    borderColor: colors.borderStrong,
+  },
+  shareBrand: {
+    fontFamily: fonts.monoBold,
+    fontSize: 12,
+    letterSpacing: 1,
+    color: colors.brand,
+  },
+  shareSub: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    color: colors.onSurfaceTertiary,
+    marginTop: 4,
+  },
+  shareStats: {
+    flexDirection: "row",
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  shareStat: { flex: 1 },
+  shareNum: {
+    fontFamily: fonts.monoBold,
+    fontSize: 24,
+    color: colors.onSurface,
+  },
+  shareLabel: {
+    fontFamily: fonts.monoBold,
+    fontSize: 8,
+    color: colors.onSurfaceTertiary,
+    letterSpacing: 0.5,
+  },
+  shareLine: {
+    fontFamily: fonts.mono,
+    fontSize: 11,
+    lineHeight: 16,
+    color: colors.onSurface,
+    marginTop: 6,
+  },
+  shareFoot: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.onSurfaceTertiary,
+    marginTop: spacing.md,
   },
   note: {
     fontFamily: fonts.mono,
