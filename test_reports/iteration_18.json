@@ -1,0 +1,26 @@
+{
+  "summary": "Two-currency (USD/INR) wallet feature verified end-to-end. Backend: 61/61 pass across test_two_currency.py (47) + test_wallet.py (14), independently confirming all 7 acceptance criteria (backward compat, currency resolution, cross-currency pack rejection, INR balance math, first-topup locking, existing-balance protection, /wallet/balance shape, ₹ vs $ 402 messages, IAP credit-amount resolution and INR/USD wallet crediting). Frontend: signed a brand-new account into the web preview, tab-agents navigated to WalletCard which correctly rendered testid=currency-choice with 'Choose the currency for your wallet — this is set once.' + testid=currency-USD and testid=currency-INR buttons (topup-5/10/25 correctly absent). Tapping currency-INR switched the pack row to testid=topup-99/199/499 and the price note to '₹20.00 each' with the balance symbol flipping to ₹0.00 — all rendered from backend-supplied currency_options, no hardcoded amounts in the app. Regression hunt for the currency-lock-upsert 'missing balance' bug: deps.get_wallet_balance uses .get('balance') or 0.0 (line 150), the auth-session wallet merge uses .get('balance', 0) (routes/auth_routes.py:88,91), and create_topup_order's upsert now includes $setOnInsert: {balance: 0.0} (routes/payments.py:235) — every reader is defensive, no KeyError paths left. Did NOT complete any live Razorpay payment (LIVE keys, per spec). Restored AUTH_DEBUG_RETURN_OTP=false and cleaned test users. NO issues found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_two_currency.py",
+    "/app/backend/tests/test_wallet.py",
+    "/app/test_reports/pytest/two_currency.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Deliberate deviation flagged in the request: credit_wallet_once (routes/payments.py:117) hardcodes currency=wal.CURRENCY ('USD') on wallet_ledger rows even for an INR Razorpay payment. The payments row records the true currency, but if the ledger is ever used for reporting/reconciliation this one field will read wrong. Left untouched per spec instruction; consider switching to order.get('currency') in a follow-up."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (61/61 tests_two_currency+wallet)", "frontend": "100% on the exercised chooser + INR-pack flow"},
+  "seed_data_creation": "Three test users created via OTP flow (testcur*); all cleaned up.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "AUTH_DEBUG_RETURN_OTP was flipped to true then back to false during this run — confirm it's still false before any auth test. OTP verify endpoint's body field is 'otp' (NOT 'code'). Web login screen prints the OTP under 'DEV MODE — code: XXXXXX' when the debug flag is on; scrape it from body innerText rather than reusing an API-returned debug_otp (tapping TRANSMIT CODE issues a fresh code, invalidating the earlier one).",
+  "rca_of_issue": "N/A — no bugs surfaced."
+}

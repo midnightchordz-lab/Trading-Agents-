@@ -135,13 +135,36 @@ export const SOFT_CATEGORY: Record<string, { bg: string; fg: string }> = {
 export type Decision = "BUY" | "SELL" | "HOLD";
 export type Sentiment = "bullish" | "bearish" | "neutral" | null | undefined;
 
+// What the user sees. The verdict's stored enum stays BUY / SELL / HOLD —
+// the backend's re-check cache, price alerts and builds already on phones all
+// read it — but the app shows a market outlook, never a buy/sell call (in
+// India a public buy/sell call is SEBI Research Analyst activity).
+export function outlookLabel(decision?: string): string {
+  switch ((decision || "").toUpperCase()) {
+    case "BUY":
+    case "BULLISH":
+      return "BULLISH";
+    case "SELL":
+    case "BEARISH":
+      return "BEARISH";
+    case "HOLD":
+    case "NEUTRAL":
+      return "NEUTRAL";
+    default:
+      return (decision || "").toUpperCase();
+  }
+}
+
 export function verdictColors(decision?: string): { bg: string; fg: string } {
   switch ((decision || "").toUpperCase()) {
     case "BUY":
+    case "BULLISH":
       return { bg: colors.success, fg: colors.onSuccess };
     case "SELL":
+    case "BEARISH":
       return { bg: colors.error, fg: colors.onError };
     case "HOLD":
+    case "NEUTRAL":
       return { bg: colors.warning, fg: colors.onWarning };
     default:
       return { bg: colors.surfaceInverse, fg: colors.onSurfaceInverse };

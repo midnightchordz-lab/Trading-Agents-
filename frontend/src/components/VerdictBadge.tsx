@@ -1,6 +1,6 @@
 import React from "react";
 import { View, Text, StyleSheet } from "react-native";
-import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
+import { colors, fonts, spacing, BORDER, outlookLabel, verdictColors } from "@/src/theme";
 import { useTranslation } from "react-i18next";
 
 // Big edge-to-edge verdict block for the Report screen.
@@ -15,8 +15,8 @@ export function VerdictBlock({
   const { bg, fg } = verdictColors(decision);
   return (
     <View testID="verdict-block" style={[styles.block, { backgroundColor: bg }]}>
-      <Text style={[styles.blockLabel, { color: fg }]}>PORTFOLIO MANAGER VERDICT</Text>
-      <Text style={[styles.blockDecision, { color: fg }]}>{decision.toUpperCase()}</Text>
+      <Text style={[styles.blockLabel, { color: fg }]}>DESK OUTLOOK</Text>
+      <Text style={[styles.blockDecision, { color: fg }]}>{outlookLabel(decision)}</Text>
       <View style={styles.confRow}>
         <Text style={[styles.confLabel, { color: fg }]}>{t("verdict.confidence")}</Text>
         <Text style={[styles.confValue, { color: fg }]}>{confidence}%</Text>
@@ -33,7 +33,7 @@ export function VerdictTag({ decision, small }: { decision: string; small?: bool
   const { bg, fg } = verdictColors(decision);
   return (
     <View testID={`verdict-tag-${decision}`} style={[styles.tag, { backgroundColor: bg }, small && styles.tagSmall]}>
-      <Text style={[styles.tagText, { color: fg }, small && styles.tagTextSmall]}>{decision.toUpperCase()}</Text>
+      <Text style={[styles.tagText, { color: fg }, small && styles.tagTextSmall]}>{outlookLabel(decision)}</Text>
     </View>
   );
 }

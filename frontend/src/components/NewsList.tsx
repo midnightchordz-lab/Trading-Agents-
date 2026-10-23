@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, Image, ActivityIndicator, StyleSheet, Linking } from "react-native";
+import { View, Text, Pressable, Image, ActivityIndicator, StyleSheet } from "react-native";
 import * as Haptics from "expo-haptics";
 import { Newspaper, ArrowUpRight } from "phosphor-react-native";
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
 import { api, NewsItem } from "@/src/api";
+import { openExternalUrl } from "@/src/utils/openExternalUrl";
 
 const SENTIMENT_STYLE: Record<string, { label: string; bg: string; fg: string }> = {
   BULLISH: { label: "BULLISH", bg: colors.success, fg: colors.onSuccess },
@@ -56,7 +57,8 @@ export function NewsList({ symbol }: { symbol: string }) {
 
   const open = (url: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Linking.openURL(url).catch(() => {});
+    // Headline links come from Yahoo, so the scheme is checked before opening.
+    openExternalUrl(url);
   };
 
   return (

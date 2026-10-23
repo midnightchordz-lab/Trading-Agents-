@@ -1,4 +1,4 @@
-import { Stack } from "expo-router";
+import { Stack, usePathname } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect, useState } from "react";
 import { LogBox } from "react-native";
@@ -14,6 +14,8 @@ import { AlertsProvider } from "@/src/alerts";
 import { initLanguage } from "@/src/i18n";
 import { useAuthGate, AuthContext } from "@/src/auth";
 import { LoginScreen } from "@/src/components/LoginScreen";
+import { ConsentScreen } from "@/src/components/ConsentScreen";
+import { setTelemetryUser, trackScreen } from "@/src/firebase";
 
 // Login is required before any screen renders — set to false to make it
 // optional again without removing the mechanism.
@@ -43,6 +45,17 @@ export default function RootLayout() {
 
   const ready = (iconsLoaded || iconsError) && (fontsLoaded || fontsError) && langReady;
   const { checking: authChecking, user, refresh: refreshAuth, signOut } = useAuthGate();
+  const pathname = usePathname();
+  const consented = user?.consent_given === true;
+
+  // Analytics, and the account id on crash reports, only after consent.
+  useEffect(() => {
+    if (!authChecking) setTelemetryUser(user?.id ?? null, consented);
+  }, [authChecking, user?.id, consented]);
+
+  useEffect(() => {
+    if (consented) trackScreen(pathname);
+  }, [consented, pathname]);
 
   useEffect(() => {
     initLanguage().finally(() => setLangReady(true));
@@ -69,6 +82,20 @@ export default function RootLayout() {
     );
   }
 
+  // Signed in, but hasn't agreed to the current privacy notice yet — shown
+  // once, before anything else renders. The backend blocks /analyze with
+  // `consent_required` until this is done, so skipping it isn't an option.
+  if (user && user.consent_given === false) {
+    return (
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <SafeAreaProvider>
+          <StatusBar style="dark" />
+          <ConsentScreen onAgreed={refreshAuth} />
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    );
+  }
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
@@ -81,6 +108,9 @@ export default function RootLayout() {
                   <Stack.Screen name="(tabs)" />
                   <Stack.Screen name="analysis/[id]" />
                   <Stack.Screen name="compare" />
+                  <Stack.Screen name="scans" />
+                  <Stack.Screen name="chart" />
+                  <Stack.Screen name="health" />
                 </Stack>
               </AlertsProvider>
             </WatchlistProvider>

@@ -15,17 +15,19 @@ website(s)"), which is out of our control at runtime.
 
 No credentials, amounts or balances are ever trusted from the client.
 """
+import asyncio
 import hashlib
 import hmac
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import httpx
 from dotenv import load_dotenv
 
-import wallet as wal
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -37,39 +39,97 @@ KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 
 
+# Result of the startup credential probe: None until it has run, True/False
+# after. Exposed (without any secret) by GET /api/pay/health, because the
+# failure this catches — a deployed container carrying a rotated-out key pair —
+# is otherwise invisible until a real customer taps top-up and gets a 502.
+CREDENTIALS_OK: Optional[bool] = None
+
+
 def payments_configured() -> bool:
     return bool(KEY_ID and KEY_SECRET)
+
+
+def key_tail() -> str:
+    """Last 4 chars of the PUBLIC key id, to tell one deployed environment's
+    key from another's. The full key id is already sent to clients."""
+    return KEY_ID[-4:] if KEY_ID else ""
+
+
+def key_id_malformed() -> bool:
+    """A Razorpay key id ALWAYS starts `rzp_live_` or `rzp_test_`. Anything
+    else means the wrong value was put in this variable — which really
+    happened: the key SECRET was pasted into RAZORPAY_KEY_ID in a deployment
+    secrets panel, and the only symptom was "Authentication failed" on every
+    top-up, indistinguishable from an expired key. Cheap to detect, so it is
+    detected instead of diagnosed again."""
+    return bool(KEY_ID) and not KEY_ID.startswith(("rzp_live_", "rzp_test_"))
 
 
 def is_live_mode() -> bool:
     return KEY_ID.startswith("rzp_live_")
 
 
-class RazorpayError(Exception):
-    """Carries Razorpay's own error description so callers can log or surface
-    something more useful than "400 Bad Request"."""
+class RazorpayError(RuntimeError):
+    """Carries Razorpay's own description so failures are diagnosable from the
+    logs (and so the app can show the customer something actionable) instead of
+    a bare 'Client error 400'."""
 
-    def __init__(self, description: str, status_code: int = 0):
-        super().__init__(description)
-        self.description = description
+    def __init__(self, status_code: int, description: str, code: str = ""):
         self.status_code = status_code
+        self.description = description
+        self.code = code
+        super().__init__(f"razorpay {status_code} {code}: {description}")
 
 
-async def razorpay_request(method: str, path: str, **kwargs) -> dict:
-    async with httpx.AsyncClient(base_url=RAZORPAY_API, auth=(KEY_ID, KEY_SECRET), timeout=20) as c:
-        r = await c.request(method, path, **kwargs)
-        if r.is_error:
-            # Razorpay's own description is the only thing that makes these
-            # failures diagnosable ("customer contact is required", "website
-            # does not match registered website(s)", …).
-            detail = ""
-            try:
-                detail = (r.json().get("error") or {}).get("description") or ""
-            except Exception:
-                detail = r.text[:200]
-            logger.error(f"razorpay {method} {path} -> {r.status_code}: {detail}")
-            raise RazorpayError(detail or f"HTTP {r.status_code}", r.status_code)
-        return r.json()
+def is_credential_failure(error: "RazorpayError") -> bool:
+    """Razorpay refusing our KEYS, as opposed to refusing the request.
+
+    Two different messages mean the same thing, and the second one is the
+    reason this function exists: a key pair that has been REGENERATED reports
+    "The api key provided by you has expired and cannot be used", not
+    "Authentication failed", so matching only the latter let a retired key
+    surface to customers as a raw 502 with Razorpay's wording."""
+    text = (error.description or "").lower()
+    return error.status_code in (401, 403) or "api key" in text or "authentication failed" in text
+
+
+def is_rate_limited(error: "RazorpayError") -> bool:
+    """Razorpay throttling, which it reports as a 400 saying "Too many
+    requests" rather than a 429. The most common failure in our logs by far,
+    and the one thing here that is NOT the customer's fault."""
+    return error.status_code == 429 or "too many requests" in (error.description or "").lower()
+
+
+async def razorpay_request(method: str, path: str, retries: int = 1, **kwargs) -> dict:
+    """One retry on throttling only. Razorpay's rate limit is short-lived, so a
+    single 700ms wait turns most of those failures into a normal success
+    instead of an error the user has to react to. Nothing else is retried: a
+    rejected field would fail identically, and a payment must never be created
+    twice because we guessed the first attempt didn't land."""
+    attempt = 0
+    while True:
+        async with httpx.AsyncClient(base_url=RAZORPAY_API, auth=(KEY_ID, KEY_SECRET), timeout=20) as c:
+            r = await c.request(method, path, **kwargs)
+        if r.status_code < 400:
+            return r.json()
+        try:
+            err = (r.json() or {}).get("error", {}) or {}
+        except Exception:
+            err = {}
+        error = RazorpayError(
+            r.status_code,
+            # `r.text` as the fallback: two failures in our logs printed an
+            # EMPTY description, which told us nothing about what went wrong.
+            err.get("description") or f"{r.status_code} {r.reason_phrase}: {r.text[:200]}".strip(),
+            err.get("code") or "",
+        )
+        if attempt < retries and is_rate_limited(error):
+            attempt += 1
+            logger.warning(f"razorpay throttled on {method} {path}; retrying in 0.7s")
+            await asyncio.sleep(0.7)
+            continue
+        raise error
 
 
 async def fetch_payment(payment_id: str) -> dict:
@@ -79,16 +139,26 @@ async def fetch_payment(payment_id: str) -> dict:
 LINK_TTL_SECONDS = 60 * 60
 
 
-async def create_payment_link(*, amount: float, reference_id: str, notes: dict, callback_url: str, description: str, customer: dict) -> dict:
+def link_expiry_iso(link: dict) -> str:
+    """When the link Razorpay just created stops being payable, as an ISO
+    string. Read back from Razorpay's own response rather than recomputed, so a
+    reused link can never be one Razorpay has already expired."""
+    expire_by = link.get("expire_by") or (int(time.time()) + LINK_TTL_SECONDS)
+    return datetime.fromtimestamp(int(expire_by), tz=timezone.utc).isoformat()
+
+
+async def create_payment_link(*, amount: float, currency: str, reference_id: str, notes: dict, callback_url: str, description: str, customer: dict) -> dict:
     """A one-time, Razorpay-hosted payment page. Amount goes in the smallest
     currency unit. callback_method must be "get" whenever callback_url is set,
-    and this account requires customer email + contact on every link."""
+    and this account requires customer email + contact on every link. Currency
+    is the account's own locked currency (USD or INR) — never a client-chosen
+    value per call, and it's what determines whether UPI shows at all."""
     return await razorpay_request(
         "POST",
         "/payment_links",
         json={
             "amount": int(round(amount * 100)),
-            "currency": wal.CURRENCY,
+            "currency": currency,
             "accept_partial": False,
             "description": description,
             "reference_id": reference_id,
@@ -136,14 +206,47 @@ def verify_webhook_signature(raw_body: bytes, supplied: str) -> bool:
     return hmac.compare_digest(expected, supplied)
 
 
-def result_html(message: str, ok: bool) -> str:
+def result_html(message: str, ok: bool, return_url: str | None = None) -> str:
+    """The page the customer lands on after paying.
+
+    The button is always the app-green, on a failed payment too: it is the way
+    back, not a status, and a red "get me out of here" reads like a warning.
+
+    It used to say "You can close this and return to the app" and give them
+    nothing to tap. That sentence is not a way back: the payment opens in the
+    system browser (a Chrome Custom Tab on Android, which is what makes the
+    UPI hand-off possible), and an Android Custom Tab CANNOT be closed by the
+    app — expo-web-browser's `dismissBrowser` is iOS-only. So the customer was
+    left staring at a confirmation with only the browser's own small ✕ to find.
+
+    Now there is a button. `window.close()` is tried first because the web flow
+    opens this in a script-opened popup, where it works; when it doesn't (a
+    Custom Tab was not opened by script), the deep link the app supplied takes
+    over and Android brings the app back to the front. The link is rendered as
+    a real `href` too, so it still works with JavaScript disabled, and it is
+    validated server-side — see `safe_return_url`.
+    """
     from html import escape
 
     colour = "#AEFA3C" if ok else "#FF6B6B"
+    if return_url:
+        target = escape(return_url, quote=True)
+        action = f"""<p><a id="back" href="{target}"
+onclick="try{{window.close()}}catch(e){{}};return true"
+style="display:inline-block;margin-top:20px;padding:14px 28px;border-radius:12px;
+background:#AEFA3C;color:#05070B;font-weight:700;font-size:16px;text-decoration:none;
+min-width:200px;min-height:48px;box-sizing:border-box">Return to the app</a></p>
+<p style="color:#66755A;font-size:12px;margin-top:14px">Or close this tab with the ✕ above.</p>"""
+    else:
+        action = """<p><button onclick="window.close()"
+style="margin-top:20px;padding:14px 28px;border-radius:12px;border:0;background:#AEFA3C;
+color:#05070B;font-weight:700;font-size:16px;min-width:200px;min-height:48px">Close</button></p>
+<p style="color:#66755A;font-size:12px;margin-top:14px">Or close this tab with the ✕ above and
+return to the app.</p>"""
     return f"""<!doctype html>
 <html><head><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>body{{margin:0;background:#05070B;color:#EEF7E0;font:15px -apple-system,Arial,sans-serif;
 display:flex;align-items:center;justify-content:center;height:100vh;padding:24px;text-align:center}}
 strong{{color:{colour}}}</style></head>
 <body><div><p><strong>{escape(message)}</strong></p>
-<p style="color:#66755A;font-size:13px">You can close this and return to the app.</p></div></body></html>"""
+{action}</div></body></html>"""

@@ -1,5 +1,4 @@
 """Unit tests for the verdict grounding gate (pure function, no server needed)."""
-import importlib.util
 import os
 import sys
 
@@ -8,10 +7,7 @@ sys.path.insert(0, HERE)
 os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
 os.environ.setdefault("DB_NAME", "test")
 
-spec = importlib.util.spec_from_file_location("server", os.path.join(HERE, "server.py"))
-server = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(server)
-ground_verdict = server.ground_verdict
+from pipeline import ground_verdict  # noqa: E402
 
 Q = {"price": 15.0, "fiftyTwoWeekLow": 6.6, "fiftyTwoWeekHigh": 19.2, "currency": "INR", "dayLow": 14.8, "dayHigh": 15.3}
 

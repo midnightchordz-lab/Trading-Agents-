@@ -6,27 +6,36 @@ import {
   Pressable,
   StyleSheet,
   Alert,
+  AppState,
   Platform,
   Modal,
   ActivityIndicator,
   KeyboardAvoidingView,
 } from "react-native";
-import { WebView } from "react-native-webview";
+import * as WebBrowser from "expo-web-browser";
+import { openExternalUrl } from "@/src/utils/openExternalUrl";
 import { useFocusEffect } from "expo-router";
 import { colors, fonts, spacing, BORDER, TERMINAL } from "@/src/theme";
-import { api, WalletBalance } from "@/src/api";
+import { api, IapPack, WalletBalance } from "@/src/api";
+import { trackEvent } from "@/src/firebase";
 import { getWalletDeviceId } from "@/src/wallet";
+import { useAuth } from "@/src/auth";
+import { buyIapPack, IapState, isUserCancelled, prepareIap } from "@/src/iap";
 
 // Real Razorpay top-ups. The app never sees the key secret and never credits
 // anything itself: it asks the backend for a Razorpay-hosted payment link,
 // opens it, then polls the backend, which verifies with Razorpay before
 // crediting.
 
+const IS_IOS = Platform.OS === "ios";
+
 export function WalletCard() {
+  const { user } = useAuth();
+  const [iap, setIap] = useState<IapState | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [wallet, setWallet] = useState<WalletBalance | null>(null);
   const [busy, setBusy] = useState(false);
-  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
   // Razorpay requires both an email and a phone number on every payment link,
   // but an account only has the one it signed in with — so the missing one is
   // asked for here, once.
@@ -35,12 +44,25 @@ export function WalletCard() {
   const [phoneInput, setPhoneInput] = useState("");
   const [contactError, setContactError] = useState<string | null>(null);
   const pendingOrder = useRef<string | null>(null);
+  // Two things can start the poll — the browser closing, and the app coming
+  // back to the foreground — and on Android both can happen for one payment.
+  const settling = useRef(false);
+  // Why the balance is missing, when it is. Distinguishes "we couldn't load
+  // it" from "payments are off", which the card used to conflate.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const refresh = useCallback(async (id: string) => {
     try {
       setWallet(await api.getWalletBalance(id));
-    } catch {
-      // supplementary display; fail quietly
+      setLoadError(null);
+    } catch (e: any) {
+      // NOT silent. Failing quietly here is what produced a card that said
+      // "payments aren't switched on yet" on a deployed build where payments
+      // were in fact configured — the balance call had simply failed, and a
+      // null wallet reads exactly like an unconfigured one. Now the card says
+      // what happened, with the status code, and offers a retry.
+      const status = e?.status ? ` (HTTP ${e.status})` : "";
+      setLoadError(`${e?.message || "no response from the server"}${status}`);
     }
   }, []);
 
@@ -67,6 +89,7 @@ export function WalletCard() {
         for (let i = 0; i < 12; i++) {
           const res = await api.getPaymentStatus(orderId);
           if (res.status === "captured") {
+            trackEvent("wallet_topup", { method: "razorpay" });
             if (deviceId) await refresh(deviceId);
             Alert.alert("Wallet topped up", `Your balance is now ${wallet?.symbol || "$"}${res.balance.toFixed(2)}.`);
             return;
@@ -88,6 +111,30 @@ export function WalletCard() {
     [deviceId, refresh, wallet?.symbol]
   );
 
+  // Coming back from the payment page is an APP FOREGROUND event, not a
+  // navigation one — so `useFocusEffect` above never fires for it and the
+  // balance stayed stale. It matters most on Android: the app cannot close a
+  // Chrome Custom Tab (expo-web-browser's dismissBrowser is iOS-only), so the
+  // customer returns by tapping the deep-link button on the confirmation page,
+  // which leaves the tab open behind us and `openBrowserAsync` unresolved.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      const order = pendingOrder.current;
+      if (order && !settling.current) {
+        // Claimed here rather than inside `settle`, so the two triggers can
+        // never both poll the same order and both announce it.
+        settling.current = true;
+        settle(order).finally(() => {
+          settling.current = false;
+        });
+      } else if (!order && deviceId) {
+        refresh(deviceId);
+      }
+    });
+    return () => sub.remove();
+  }, [settle, refresh, deviceId]);
+
   const topUp = async (amount: number, contact?: { email?: string; phone?: string }) => {
     if (!deviceId) return;
     setBusy(true);
@@ -101,14 +148,39 @@ export function WalletCard() {
         // The popup is a separate window, so poll from here.
         settle(order.order_id);
       } else {
-        setCheckoutUrl(order.checkout_url);
+        // The system browser, NOT an in-app WebView: UPI / Google Pay pay by
+        // handing off to the UPI app via an app intent, which a WebView can't
+        // launch — so Razorpay hides those methods entirely inside one. A
+        // Custom Tab / Safari can hand off, so the UPI options appear.
         setBusy(false);
+        try {
+          await WebBrowser.openBrowserAsync(order.checkout_url, { showTitle: true });
+        } catch {
+          await openExternalUrl(order.checkout_url);
+        }
+        // Resolves when the browser is dismissed; the payment may still be
+        // settling at Razorpay, which is what the polling is for.
+        settle(order.order_id);
       }
     } catch (e: any) {
       setBusy(false);
       const msg: string = e?.message || "Try again.";
       if (msg.startsWith("contact_required:")) {
         setNeedContact({ fields: msg.split(":")[1].split(","), amount });
+        return;
+      }
+      if (msg.startsWith("contact_invalid:")) {
+        // The number or email they typed is what payments refused, so the
+        // sheet stays open with the reason on the field — not an alert that
+        // dismisses the one thing they need to change.
+        const [, field, ...rest] = msg.split(":");
+        setNeedContact({ fields: [field === "contact" ? "phone" : field], amount });
+        setContactError(rest.join(":").trim() || "That detail was refused — check it and try again.");
+        return;
+      }
+      if (msg.startsWith("busy:")) {
+        // Payments throttled us. Nothing is wrong with what they did.
+        Alert.alert("One moment", msg.slice("busy:".length).trim());
         return;
       }
       Alert.alert("Couldn't start checkout", msg);
@@ -126,8 +198,17 @@ export function WalletCard() {
       contact.email = emailInput.trim();
     }
     if (needContact.fields.includes("phone")) {
-      if (phoneInput.replace(/\D/g, "").length < 8) {
+      const digits = phoneInput.replace(/\D/g, "");
+      if (digits.length < 8) {
         setContactError("Enter your phone number with country code, e.g. +1…");
+        return;
+      }
+      // Mirrors the server's rule so a made-up number is caught before the
+      // round trip. Payments refuse numbers like 9999999999, and that refusal
+      // used to come back as an error with no mention of the number.
+      const national = digits.slice(-10);
+      if (new Set(national).size <= 2) {
+        setContactError("Payments won't accept a made-up number. Enter your real mobile number.");
         return;
       }
       contact.phone = phoneInput.trim();
@@ -136,16 +217,77 @@ export function WalletCard() {
     topUp(needContact.amount, contact);
   };
 
-  const closeCheckout = () => {
-    setCheckoutUrl(null);
-    const orderId = pendingOrder.current;
-    if (orderId) settle(orderId);
+  // INR / USD, for anyone whose wallet no money has reached yet — whatever
+  // they signed in with. The device's time zone picks the default (INR in
+  // India), but that is a guess: VPNs, a phone set to UTC, or a wallet locked
+  // by a checkout opened on an older build all landed Indian users in USD,
+  // and a USD payment page cannot offer UPI / Google Pay.
+  const changeCurrency = async (code: string) => {
+    if (!deviceId || !wallet || code === wallet.currency) return;
+    setSwitching(true);
+    try {
+      await api.setWalletCurrency(deviceId, code);
+      await refresh(deviceId);
+    } catch (e: any) {
+      Alert.alert("Couldn't switch currency", e?.message || "Try again.");
+    } finally {
+      setSwitching(false);
+    }
   };
+  const currencyChoices =
+    !IS_IOS && wallet?.currency_changeable && wallet?.payments_live ? wallet.currency_options || [] : [];
 
   const symbol = wallet?.symbol || "$";
   const price = wallet?.prices?.full_analysis;
   const packs = wallet?.packs || [];
   const freeCredits = wallet?.free_credits_remaining ?? 0;
+  const launchFree = wallet?.launch_free_active === true;
+
+  // iOS must sell through Apple; StoreKit is prepared only once an account is
+  // known, because RevenueCat's App User ID is what decides whose wallet a
+  // real payment credits.
+  useEffect(() => {
+    if (!IS_IOS || launchFree || !user?.id) return;
+    let cancelled = false;
+    prepareIap(user.id, wallet?.currency)
+      .then((s) => !cancelled && setIap(s))
+      .catch(() => !cancelled && setIap({ available: false, packs: [], reason: "error" }));
+    return () => {
+      cancelled = true;
+    };
+  }, [launchFree, user?.id, wallet?.currency]);
+
+  // Apple takes the money, then RevenueCat's signed webhook tells our backend
+  // to credit — so the only honest way to know it landed is to watch the
+  // server balance. Nothing is ever added client-side.
+  const buyWithApple = async (pack: IapPack) => {
+    if (!deviceId) return;
+    const before = wallet?.balance ?? 0;
+    setBusy(true);
+    try {
+      await buyIapPack(pack.product_id);
+      for (let i = 0; i < 12; i++) {
+        await new Promise((r) => setTimeout(r, 2500));
+        const fresh = await api.getWalletBalance(deviceId);
+        setWallet(fresh);
+        if (fresh.balance > before + 0.001) {
+          trackEvent("wallet_topup", { method: "app_store", value: pack.amount, currency: "USD" });
+          Alert.alert("Wallet topped up", `Your balance is now ${fresh.symbol}${fresh.balance.toFixed(2)}.`);
+          return;
+        }
+      }
+      Alert.alert(
+        "Purchase confirmed",
+        "Apple has your payment. Your balance will appear here within a minute — pull to refresh."
+      );
+    } catch (e: unknown) {
+      if (!isUserCancelled(e)) {
+        Alert.alert("Purchase didn't complete", (e as Error)?.message || "Nothing was charged. You can try again.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <View testID="wallet-card" style={styles.card}>
@@ -156,39 +298,130 @@ export function WalletCard() {
         </Text>
       </View>
 
-      {price ? (
+      {launchFree ? (
+        <Text style={styles.priceNote}>
+          {wallet?.launch_free_daily_remaining != null
+            ? `Free during launch — ${wallet.launch_free_daily_remaining} of ${wallet.launch_free_daily_cap ?? 10} analyses left today.`
+            : "Every analysis is free during launch — no payment needed."}
+        </Text>
+      ) : loadError ? (
+        <View testID="wallet-load-error">
+          <Text style={styles.priceNote}>{`Couldn't load your balance — ${loadError}`}</Text>
+          <Pressable
+            testID="wallet-retry"
+            onPress={() => deviceId && refresh(deviceId)}
+            style={styles.topUpBtn}
+          >
+            <Text style={styles.topUpText}>RETRY</Text>
+          </Pressable>
+        </View>
+      ) : price ? (
         <Text style={styles.priceNote}>
           {freeCredits > 0
             ? `${freeCredits} free ${freeCredits === 1 ? "analysis" : "analyses"} left — no payment needed yet. After that, ${symbol}${price.toFixed(2)} each.`
             : `Full analysis: ${symbol}${price.toFixed(2)} · re-checking an unchanged verdict is free`}
         </Text>
       ) : (
-        <Text style={styles.priceNote}>Usage-based pricing isn&apos;t active in this build yet.</Text>
+        // No prices in the payload means this app is talking to a server that
+        // predates usage-based pricing — which only happens when a build and
+        // its backend are out of step. Saying so beats "isn't active in this
+        // build yet", which read like a decision rather than a mismatch.
+        <Text testID="wallet-unconfigured" style={styles.priceNote}>
+          Top-ups are unavailable right now. Your balance and free analyses still work.
+        </Text>
       )}
 
-      <View style={styles.topUpRow}>
-        {packs.map((amt) => (
-          <Pressable
-            key={amt}
-            disabled={busy || !wallet?.payments_live}
-            onPress={() => topUp(amt)}
-            style={[styles.topUpBtn, (busy || !wallet?.payments_live) && styles.topUpBtnDisabled]}
-          >
-            <Text style={styles.topUpText}>{`+${symbol}${amt.toFixed(0)}`}</Text>
-          </Pressable>
-        ))}
-      </View>
+      {launchFree ? (
+        // No top-up buttons at all while the launch window is open: an
+        // external purchase path for digital content is the thing Apple
+        // rejects, even when nothing is actually being charged.
+        <View testID="launch-free-banner" style={styles.launchFreeBox}>
+          <Text style={styles.launchFreeText}>FREE DURING LAUNCH</Text>
+        </View>
+      ) : IS_IOS ? (
+        // Apple only. A Razorpay button must never render here, configured or
+        // not — guideline 3.1.1.
+        iap?.available ? (
+          <View style={styles.topUpRow}>
+            {iap.packs.map((pack) => (
+              <Pressable
+                key={pack.product_id}
+                testID={`iap-topup-${pack.amount}`}
+                disabled={busy}
+                onPress={() => buyWithApple(pack)}
+                style={[styles.topUpBtn, busy && styles.topUpBtnDisabled]}
+              >
+                <Text style={styles.topUpText}>{`+${symbol}${pack.amount.toFixed(0)}`}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : (
+          <View testID="iap-unavailable" style={styles.topUpRow}>
+            <Text style={styles.priceNote}>
+              {iap?.reason === "needs_native_build"
+                ? "App Store purchases need the installed build — they can't run in Expo Go."
+                : "App Store purchases aren't switched on yet."}
+            </Text>
+          </View>
+        )
+      ) : (
+        <>
+          {currencyChoices.length > 1 ? (
+            <View testID="currency-choice" style={styles.topUpRow}>
+              {currencyChoices.map((opt) => {
+                const active = opt.code === wallet?.currency;
+                return (
+                  <Pressable
+                    key={opt.code}
+                    testID={`currency-${opt.code}`}
+                    disabled={busy || switching}
+                    onPress={() => changeCurrency(opt.code)}
+                    style={[
+                      styles.topUpBtn,
+                      active && styles.currencyActive,
+                      (busy || switching) && styles.topUpBtnDisabled,
+                    ]}
+                  >
+                    <Text style={[styles.topUpText, active && styles.currencyActiveText]}>
+                      {opt.code === "INR" ? `${opt.symbol} INR · UPI / cards` : `${opt.symbol} USD · cards`}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
+          <View style={styles.topUpRow}>
+            {packs.map((amt) => (
+              <Pressable
+                key={amt}
+                testID={`topup-${amt}`}
+                disabled={busy || switching || !wallet?.payments_live}
+                onPress={() => topUp(amt)}
+                style={[styles.topUpBtn, (busy || switching || !wallet?.payments_live) && styles.topUpBtnDisabled]}
+              >
+                <Text style={styles.topUpText}>{`+${symbol}${amt.toFixed(0)}`}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </>
+      )}
       {busy ? (
         <View style={styles.busyRow}>
           <ActivityIndicator size="small" color={colors.onSurfaceTertiary} />
           <Text style={styles.busyText}>Confirming payment…</Text>
         </View>
       ) : null}
-      <Text style={styles.placeholderNote}>
-        {wallet?.payments_live
-          ? "Secure payment page hosted by Razorpay."
-          : "Payments aren't switched on yet."}
-      </Text>
+      {launchFree ? null : price || wallet?.payments_live ? (
+        <Text style={styles.placeholderNote}>
+          {IS_IOS
+            ? iap?.available
+              ? "Purchased securely through the App Store."
+              : "Purchases are handled by the App Store."
+            : wallet?.payments_live
+              ? "Secure payment page hosted by Razorpay."
+              : "Top-ups are unavailable right now — everything else works as normal."}
+        </Text>
+      ) : null}
 
       <Modal visible={!!needContact} animationType="slide" transparent onRequestClose={() => setNeedContact(null)}>
         <KeyboardAvoidingView
@@ -248,18 +481,6 @@ export function WalletCard() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
-
-      <Modal visible={!!checkoutUrl} animationType="slide" onRequestClose={closeCheckout}>
-        <View style={styles.modalRoot}>
-          <View style={styles.modalBar}>
-            <Text style={styles.modalTitle}>SECURE CHECKOUT</Text>
-            <Pressable onPress={closeCheckout} hitSlop={12}>
-              <Text style={styles.modalClose}>CLOSE</Text>
-            </Pressable>
-          </View>
-          {checkoutUrl ? <WebView source={{ uri: checkoutUrl }} style={{ flex: 1 }} /> : null}
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -280,6 +501,8 @@ const styles = StyleSheet.create({
   topUpRow: { flexDirection: "row", gap: spacing.sm, paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
   topUpBtn: { flex: 1, borderWidth: 1, borderColor: colors.border, paddingVertical: spacing.sm, alignItems: "center", minHeight: 44, justifyContent: "center" },
   topUpBtnDisabled: { opacity: 0.45 },
+  currencyActive: { backgroundColor: colors.brand, borderColor: colors.brand },
+  currencyActiveText: { color: colors.onSurfaceInverse },
   topUpText: { fontFamily: fonts.monoBold, fontSize: 12, color: colors.onSurface },
   busyRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
   busyText: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary },
@@ -291,7 +514,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
-  modalRoot: { flex: 1, backgroundColor: TERMINAL.bg },
   contactBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.55)" },
   contactCard: {
     backgroundColor: colors.surface,
@@ -313,6 +535,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.onSurface,
   },
+  launchFreeBox: {
+    marginTop: spacing.md,
+    borderWidth: BORDER,
+    borderColor: colors.borderStrong,
+    backgroundColor: TERMINAL.bg,
+    paddingVertical: spacing.md,
+    alignItems: "center",
+  },
+  launchFreeText: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1.5, color: TERMINAL.lime },
   contactError: { fontFamily: fonts.mono, fontSize: 11, color: colors.error, marginTop: spacing.sm },
   contactBtn: {    marginTop: spacing.md,
     backgroundColor: colors.surfaceInverse,
@@ -328,15 +559,4 @@ const styles = StyleSheet.create({
     textAlign: "center",
     paddingVertical: spacing.md,
   },
-  modalBar: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xl,
-    paddingBottom: spacing.md,
-    backgroundColor: TERMINAL.panel,
-  },
-  modalTitle: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1, color: TERMINAL.textBright },
-  modalClose: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1, color: TERMINAL.lime },
 });

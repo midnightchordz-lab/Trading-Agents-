@@ -29,7 +29,7 @@ export function AgentMessage({
   const body = (
     <View
       testID={`agent-message-${message.tag}`}
-      style={[styles.card, { borderLeftWidth: 5, borderLeftColor: accent }, isDecision && styles.decisionCard]}
+      style={[styles.card, { borderStartWidth: 5, borderStartColor: accent }, isDecision && styles.decisionCard]}
     >
       <View style={styles.headerRow}>
         <View style={styles.tagBox}>

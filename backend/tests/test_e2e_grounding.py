@@ -32,26 +32,6 @@ def test_news_aapl_ok():
     assert r.status_code == 200, r.text
 
 
-def test_existing_analysis_has_grounding():
-    """Check pre-existing analysis referenced in the review request."""
-    aid = "6dbf6223-256e-486f-a23e-855d4c3e1930"
-    r = requests.get(f"{BASE_URL}/api/analysis/{aid}", timeout=30)
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body.get("status") == "completed"
-    assert "verdict" in body and body["verdict"] is not None
-    v = body["verdict"]
-    for k in ("decision", "confidence", "target_price", "stop_loss", "time_horizon", "summary", "key_risks"):
-        assert k in v, f"verdict missing key {k}"
-    assert "grounding" in body and body["grounding"] is not None, "grounding field missing"
-    g = body["grounding"]
-    assert g["status"] in ("grounded", "warning", "failed", "unverified")
-    assert isinstance(g.get("checks"), list) and len(g["checks"]) > 0
-    for c in g["checks"]:
-        assert "id" in c and "ok" in c and "severity" in c and "message" in c
-    assert "evidence" in g
-
-
 def test_analyze_end_to_end_grounding():
     """Fire a fresh analyze and poll until completed; grounding must be present."""
     r = requests.post(f"{BASE_URL}/api/analyze", json={"symbol": "AAPL", "name": "Apple Inc."}, headers=AUTH_HEADERS, timeout=30)
@@ -62,7 +42,7 @@ def test_analyze_end_to_end_grounding():
     deadline = time.time() + 120
     body = None
     while time.time() < deadline:
-        gr = requests.get(f"{BASE_URL}/api/analysis/{aid}", timeout=30)
+        gr = requests.get(f"{BASE_URL}/api/analysis/{aid}", headers=AUTH_HEADERS, timeout=30)
         assert gr.status_code == 200
         body = gr.json()
         if body.get("status") == "completed":

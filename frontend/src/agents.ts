@@ -26,12 +26,12 @@ export const AGENT_ROSTER: AgentDef[] = [
   { tag: "FUNDAMENTALS_ANALYST", name: "Fundamentals Analyst", team: "ANALYST TEAM", blurb: "Weighs valuation, growth, margins and balance-sheet strength.", icon: "Scales" },
   { tag: "SENTIMENT_ANALYST", name: "Sentiment Analyst", team: "ANALYST TEAM", blurb: "Gauges crowd mood from social chatter and retail flow.", icon: "ChatCircle" },
   { tag: "NEWS_ANALYST", name: "News Analyst", team: "ANALYST TEAM", blurb: "Tracks headlines, catalysts and macro conditions.", icon: "Newspaper" },
-  { tag: "BULL_RESEARCHER", name: "Bull Researcher", team: "RESEARCH TEAM", blurb: "Builds the strongest case to BUY and rebuts the bear.", icon: "TrendUp" },
-  { tag: "BEAR_RESEARCHER", name: "Bear Researcher", team: "RESEARCH TEAM", blurb: "Builds the strongest case to SELL and rebuts the bull.", icon: "TrendDown" },
+  { tag: "BULL_RESEARCHER", name: "Bull Researcher", team: "RESEARCH TEAM", blurb: "Builds the strongest bullish case and rebuts the bear.", icon: "TrendUp" },
+  { tag: "BEAR_RESEARCHER", name: "Bear Researcher", team: "RESEARCH TEAM", blurb: "Builds the strongest bearish case and rebuts the bull.", icon: "TrendDown" },
   { tag: "RESEARCH_MANAGER", name: "Research Manager", team: "RESEARCH TEAM", blurb: "Judges the debate and sets the recommended stance.", icon: "Gavel" },
   { tag: "TRADER", name: "Trader", team: "EXECUTION", blurb: "Turns research into an entry, target and stop-loss plan.", icon: "Lightning" },
   { tag: "RISK_MANAGER", name: "Risk Manager", team: "EXECUTION", blurb: "Stress-tests volatility, liquidity and position sizing.", icon: "ShieldWarning" },
-  { tag: "PORTFOLIO_MANAGER", name: "Portfolio Manager", team: "EXECUTION", blurb: "Makes the final BUY / SELL / HOLD call for the book.", icon: "Briefcase" },
+  { tag: "PORTFOLIO_MANAGER", name: "Portfolio Manager", team: "EXECUTION", blurb: "Sets the desk's final Bullish / Neutral / Bearish outlook.", icon: "Briefcase" },
 ];
 
 export const PIPELINE_STEPS = [

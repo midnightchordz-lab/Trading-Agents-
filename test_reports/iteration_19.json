@@ -1,0 +1,33 @@
+{
+  "summary": "DPDP consent gate + account deletion verified end-to-end. Backend: full pytest suite 402 passed / 9 skipped / 0 failed (baseline was 399/9/0 — I added 2 new scope tests in tests/test_consent_scope.py + one baseline-run consent test executes twice, so up from 399, nothing broken). All 15 tests in tests/test_consent.py pass individually (mk_user/blocked-fresh, agreed:false-rejected-and-not-stored, missing-agreed=422, unblocking, anonymous-untouched, admin-not-gated, deletion-invalidates-token). Independently confirmed all six acceptance criteria: (1) fresh user has consent_given false in /api/auth/me and /api/analyze returns 403 detail='consent_required'; (2) POST /api/consent {agreed:false} => 400 AND no consent field written; missing agreed => 422 AND no consent written; (3) POST {agreed:true} => 200, /auth/me flips consent_given true, /api/analyze no longer 403; (4) anonymous /api/analyze is never 403 consent_required; (5) DELETE /api/account removes users+wallets doc and the pre-deletion token returns 401 on /auth/me, /history, /analyze; (6) older-version and agreed:false consent records do NOT count. Scope check (test_consent_scope.py): grep + live requests confirm the gate exists ONLY in routes/analysis.py — /api/wallet/balance, /api/pay/order, /api/pay/status/*, /api/pay/iap/config, /api/auth/me, /api/history, /api/analysis/*, /api/portfolio/optimize and every market endpoint (/search, /quote, /chart, /news, /trending, /markets, /ohlc) do not 403 consent_required for a fresh non-consented signed-in account. Frontend (Expo web preview, 390x844): signed in with a brand-new email via OTP. The ConsentScreen renders immediately after sign-in with heading 'BEFORE YOU CONTINUE' and all five sections (WHAT WE COLLECT / WHY WE COLLECT IT / WHAT WE DON'T DO / WHO ELSE SEES IT / YOUR CHOICES) plus testID-marked Privacy Policy and Terms links. testid=consent-checkbox starts UNCHECKED; tapping testid=consent-continue while unchecked triggered ZERO POST /api/consent requests and left the screen in place (verified via page.on('request') sniffer + heading still visible). After ticking the checkbox and tapping continue, exactly one POST /api/consent fired and the tabs replaced the consent screen. After a full page reload with the same session token the consent screen did NOT reappear and the tabs loaded directly — 'shown once' behaviour confirmed. AC #4 (pre-consent /analyze not stuck) is architecturally satisfied: _layout.tsx renders ConsentScreen whenever user.consent_given === false, so the Analyze tab is unreachable until consent is granted — there is no path to hit the 403. Restored AUTH_DEBUG_RETURN_OTP=false and restarted backend before finishing. NO issues found; agrees with main agent's own findings.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_consent.py",
+    "/app/backend/tests/test_consent_scope.py",
+    "/app/test_reports/pytest/iteration_19_consent.xml",
+    "/app/test_reports/pytest/iteration_19_scope.xml",
+    "/app/test_reports/pytest/iteration_19_full.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Deviation flagged in the request note is correct and safer: routes/analysis.py:94 gates on is_admin(user) specifically, not admin_bypass — a launch-free daily promotion must not silently switch a legal gate off for an ordinary end-user. Approved.",
+    "deps.is_admin(user) OR's ADMIN_IDENTIFIERS with the legacy ADMIN_PHONES allowlist (deps.py:91-93) — both paths correctly reach the same 'not gated' branch. Verified live via test_consent.py::TestAdminIsNotGated which is unskipped in this env.",
+    "auth_routes.py:255 computes consent_given as `bool(consent.get('agreed')) and consent.get('version') == CONSENT_VERSION` — mirrors the gate in analysis.py:96 exactly, so a stale-version consent shows the screen again on version bump. Correct."
+  ],
+  "updated_files": [
+    "/app/backend/.env (AUTH_DEBUG_RETURN_OTP flipped to true during FE test, then restored to false)",
+    "/app/backend/tests/test_consent_scope.py (new — regression cover for 'consent gate only on /analyze')"
+  ],
+  "success_rate": {"backend": "100% (402/402 executed, 9 pre-existing skips unrelated)", "frontend": "100% on the consent screen once-only flow + gate-before-tabs + no-reappear-on-reload"},
+  "seed_data_creation": "Fresh OTP-signed account consent-<uuid>@example.com used for the FE test; also mk_user seeded users via test_consent_scope.py. All cleaned up by module teardowns (regex ^TEST_scope- / ^TEST_consent-).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "AUTH_DEBUG_RETURN_OTP was flipped to true then back to false during this run — confirm it's still false before any auth test (grep '^AUTH_DEBUG_RETURN_OTP' /app/backend/.env). OTP verify body field is `otp` not `code`. To rerun the FE consent test, use a NEW random email each time — an account that already consented will legitimately skip the screen. Scope regression lives in tests/test_consent_scope.py.",
+  "rca_of_issue": "N/A — no bugs surfaced. All six acceptance criteria in the spec are met by the implementation exactly as main agent claims, including the deliberate is_admin (not admin_bypass) deviation, which is the correct call — a launch-free promotion must not implicitly disable a legal-consent gate."
+}

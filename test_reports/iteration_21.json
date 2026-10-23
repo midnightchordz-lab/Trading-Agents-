@@ -1,0 +1,37 @@
+{
+  "summary": "Identity-display fix verified end-to-end. Backend tests/test_identity_display.py 8/8 PASSED in isolation (identity_type_for / identity_for correctly return 'phone' + phone number for accounts with no verified email evidence, 'email' + email for Google/email-OTP accounts; /auth/me for a phone signup returns identity_type='phone', identity=phone, email=null even when billing_email is set; /auth/me for an email signup returns identity_type='email', identity=email; the OTP-verify response itself carries the same identity payload the app renders from; migrate_unverified_billing_email moves the stray users.email to billing_email for phone accounts with NO google_sub/apple_sub/identity_type='email', preserves a Google account's verified email, preserves an email-OTP account's email, does NOT overwrite an existing billing_email, is idempotent). Real reported account 638b2999-2866-47a6-bd37-22e80453bc4d verified via tests/test_iter21_real_account_check.py: DB state {phone: +918291026526, email: None, billing_email: lloydmasih1976@gmail.com, identity_type: phone} — /auth/me returns identity='+918291026526', identity_type='phone', email=null. The startup migration has already moved this user's stray email to billing_email as expected. Frontend (mobile viewport 390x844, expo web preview): AUTH_DEBUG_RETURN_OTP flipped true + backend restarted, ran OTP-based UI sign-in twice — once with a random +9198XXXXXXXX phone and once with an iter21-<hex>@example.com email. Consent screen accepted with testID='consent-checkbox' + testID='consent-continue'. Navigated to the AGENTS tab and asserted testID='account-identity' text: (a) phone case = '+919835851483' matches the phone that signed in, (b) email case = 'iter21-310d752c@example.com' matches the email — the exact acceptance criteria in the review request. Screenshots at /tmp/iter21_phone_ok.png and /tmp/iter21_email_ok.png. No red screen, no console errors of substance (only 'Animated: useNativeDriver not supported' RN-Web boilerplate and a benign 'props.pointerEvents is deprecated' from a third-party lib). AUTH_DEBUG_RETURN_OTP restored to false, backend restarted, confirmed. Full backend regression: 519 passed / 44 xdist-flaky failed / 9 skipped in the -n2 --dist loadscope run — but every failing file re-run serially (-n 0) passes cleanly (114/114 across test_identity_display, test_portfolio_api, test_refactor_regression, test_security_fixes_iter16/21, test_wallet_razorpay_admin) — matches the review-request warning that Yahoo/LLM/Razorpay e2e are load-flaky under xdist. Total sequential pass across the suite matches the 562/9 baseline plus this session's 8 new identity tests + 1 real-account probe.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_identity_display.py",
+    "/app/backend/tests/test_iter21_real_account_check.py",
+    "/app/test_reports/pytest/iteration_21_identity.xml",
+    "/app/test_reports/pytest/iteration_21_rerun.xml",
+    "/app/test_reports/pytest/iteration_21_full.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/auth_routes.identity_type_for is conservative in the RIGHT direction: an account with a phone AND a legacy stray email is treated as 'phone' unless google_sub/apple_sub/identity_type explicitly says email — that is what actually fixes lloydmasih1976@gmail.com bleeding onto +918291026526's card, because the pre-fix /pay/order was the only writer that could have set users.email on a phone signup and it could never have verified it.",
+    "server.py::migrate_unverified_billing_email is idempotent by construction (it only touches rows where users.email is set AND identity_type != 'email' AND google_sub/apple_sub are unset — after the first pass, users.email is None so the second pass is a no-op) — matches the test that runs it twice inside one asyncio.run(). The one-loop constraint is genuine and correctly documented in the test.",
+    "AccountCard.tsx line 19 keeps `user.identity || user.phone || user.email || 'Signed in'` as a defensive fallback — reasonable because /auth/me pre-populates identity, but a very old cached SessionUser from before this deploy would still fall back to phone/email locally. Not a bug; note only.",
+    "api.ts SessionUser exposes identity_type as `'phone' | 'email'` — matches the two values the backend actually emits."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter21_real_account_check.py (new — asserts /auth/me on the real reported user id returns phone)",
+    "/app/backend/.env (AUTH_DEBUG_RETURN_OTP flipped to true during the FE test then restored to false — confirmed on disk)"
+  ],
+  "success_rate": {
+    "backend": "100% on identity_display (8/8) + 100% on real-account probe (1/1); full suite 519/563 under xdist load, 100% when re-run serially — all 44 xdist failures are the known Yahoo/LLM/Razorpay load-flakiness the review request warned about",
+    "frontend": "100% — phone-case account-identity == phone and email-case account-identity == email, both directly observed on the AGENTS tab"
+  },
+  "seed_data_creation": "Two seed users created via UI-OTP sign-in (phone +919835851483 and email iter21-310d752c@example.com) plus otp_requests rows for +919817368867 / +919849989886 / +919861166792 during earlier attempts. All cleaned up post-run (users, wallets, otp_requests) — 1 iter21 email, 4 iter21 phones, 5 otp_requests deleted; TEST_ident rows are auto-cleaned by test_identity_display.teardown_module.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "AUTH_DEBUG_RETURN_OTP is back at false, backend restarted, verified on disk. Twilio is unreliable for unverified numbers — but AUTH_DEBUG_RETURN_OTP=true makes /api/auth/otp/request return debug_otp AND the login screen renders 'DEV MODE — code: XXXXXX' inline, so a full UI OTP flow works without needing Twilio to actually deliver. Consent screen testIDs are 'consent-checkbox' + 'consent-continue' (not 'consent-agree'). Bottom tab bar renders text tabs — 'AGENTS' clicks reliably via page.get_by_text('AGENTS', exact=True). Injecting a session token into localStorage does NOT skip login on this app — expo-secure-store on web uses a different key namespace; use the UI OTP flow.",
+  "rca_of_issue": "Original bug: signing in with +91829… showed lloydmasih1976@gmail.com on the ACCOUNT card. Cause: legacy POST /api/pay/order wrote the email the user typed for their Razorpay receipt directly onto users.email, and AccountCard rendered `user.email || user.phone` — so any unverified email overrode the actual sign-in identity. Fix (verified): (1) backend now records identity_type on new accounts and exposes both identity_type + identity on /auth/me and /auth/otp/verify; (2) resolver defaults to 'phone' unless google_sub/apple_sub/identity_type='email' says otherwise, so a legacy row with a stray email still resolves to its phone; (3) startup migration moves users.email → billing_email for phone accounts with no verified-email evidence (log confirmed 'moved 3 unverified emails' on preview DB, including the reported user); (4) AccountCard now renders user.identity. Reproduction of the ORIGINAL bug is no longer possible on this codebase — the reported user id now returns identity='+918291026526' from /auth/me."
+}

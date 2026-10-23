@@ -1,0 +1,38 @@
+{
+  "summary": "Verified the 'Return to the app' fix end-to-end. Wrote 12 new integration tests in tests/test_return_url_persistence.py covering the gap E1 flagged (return_url wire-persistence + reuse-path update) plus the callback-with-no-params and regression assertions. All 12 new tests pass. The pre-existing 35 unit tests in tests/test_payment_return_button.py all still pass. Full backend suite: 829 passed, 2 failed, 9 skipped in 189s. Both failures are non-issues: test_analyze_spends_free_credit_and_cache_does_not is the parallel-runner flaky documented by E1 (re-ran alone → passes), and one of my own regression tests was fragile against another module mutating the shared auth_helper user — fixed by clearing billing fields before the assertion. Frontend static review of api.ts and WalletCard.tsx passed: RETURN_URL = '' on web, return_url spread into the /pay/order body on native, AppState 'active' listener present, settling ref guards double-poll, refresh(deviceId) fallback when no order is pending. All Razorpay LIVE payment links created by tests were cancelled (verified 10 links → 200/400 from Razorpay).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_return_url_persistence.py",
+    "/app/test_reports/pytest/iteration_26_full.xml"
+  ],
+  "action_items": [
+    "No action required for this fix — return_url plumbing works end-to-end. All 12 new tests pass alongside the 35 existing ones."
+  ],
+  "critical_code_review_comments": [
+    "routes/payments.py:613 correctly updates the stored return_url on the reuse path — verified live with two consecutive /pay/order calls yielding the same plink_ id but rewritten return_url. Nothing to change.",
+    "safe_return_url pipeline in routes/payments.py:81 → razorpay_pay.result_html:209 degrades cleanly: an https/javascript URL is dropped, the page shows the <button onclick=window.close()> variant, and the rejected URL never appears in HTML — confirmed in test_unsafe_return_url_is_dropped_but_order_succeeds and TestCallbackBodyless.",
+    "Frontend api.ts: RETURN_URL correctly gated on Platform.OS === 'web' (line 27) and spread into the POST body only when non-empty (line 350). Web path stays clean.",
+    "WalletCard.tsx AppState listener (lines 117-133) correctly claims `settling.current = true` BEFORE awaiting settle(), so the browser-close trigger and the foreground trigger cannot both fire poll for the same order. Also falls back to refresh(deviceId) when no order is pending, which is the balance-refresh-on-foreground behaviour E1 called out. No issues."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_return_url_persistence.py (new; 12 tests)"
+  ],
+  "success_rate": {
+    "backend": "99.8% (829/831 passed; 2 known-flaky/order-dependent, both resolved by isolation and my test's own fix)",
+    "frontend": "N/A (static review only, per E1 instruction — no browser automation)"
+  },
+  "seed_data_creation": "None persistent. Test fixture cleans up its own payments docs on module teardown and cancels every Razorpay payment link it created via POST /payment_links/{id}/cancel. Verified: 10 lingering LIVE payment links in DB were cancelled (some already cancelled → 400, others → 200). No payment charges possible.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The new tests use LIVE Razorpay keys; the module teardown cancels every payment link it created. If you re-run test_return_url_persistence.py.py yourself, note it creates up to 4 real (₹0-until-paid) payment links per run — the fixture cancels them, but if the fixture ever crashes mid-run, sweep any stragglers with the snippet used at the end of iteration 26 (find db.payments where status='created' and POST /payment_links/{id}/cancel). Also: the shared auth_helper user is mutated by other tests in parallel runs (billing_phone gets set), so any test asserting contact_required MUST unset those fields first — see test_contact_required_still_raised_without_email_or_phone for the pattern.",
+  "rca_of_issue": "N/A — this iteration verified a fix that was already implemented. No new bugs. Only fragility uncovered was in my own regression assertion (auth_helper user mutation), which is fixed."
+}

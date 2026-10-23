@@ -3,6 +3,7 @@ import { View, Text, Pressable, StyleSheet, Platform, ActivityIndicator } from "
 import { WebView } from "react-native-webview";
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
 import { api, OhlcData, Verdict } from "@/src/api";
+import { scriptJson } from "@/src/utils/scriptJson";
 
 // Fallback chart for symbols the free TradingView widget is not licensed to
 // display (NSE / BSE). Uses TradingView's open-source Lightweight Charts
@@ -28,7 +29,7 @@ function buildHtml(
   livePrice: number | null | undefined,
   levelsLabel?: string | null,
 ): string {
-  const payload = JSON.stringify({
+  const payload = scriptJson({
     bars: data.bars,
     intraday: data.range === "1D" || data.range === "1W",
     levelsLabel: levelsLabel || "",
@@ -67,7 +68,15 @@ function buildHtml(
   .lbl{position:absolute;left:6px;font-size:10px;color:#3F3F55;z-index:2;pointer-events:none}
   .wrap{position:relative}
 </style>
-<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+<!-- integrity computed against the real file with openssl dgst -sha384 and
+     confirmed stable across refetches. The chart engine is third-party code
+     loaded from a CDN, and the iframe sandbox is what stops it reaching our
+     origin; this is what stops a swapped CDN file running at all. If the
+     version above is ever bumped, the hash MUST be regenerated or the chart
+     will refuse to load. -->
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"
+        integrity="sha384-stKllnUqA9AD0gsKCuUtf5XlqAW7PwIgDagoNsTWkjkBmJ/GZ/uHTgEBxdLV2VSK"
+        crossorigin="anonymous"></script>
 </head><body>
 <div class="wrap"><div class="lbl" id="l0"></div><div id="main"></div></div>
 <div class="wrap"><div class="lbl">RSI 14</div><div id="rsi"></div></div>
@@ -111,9 +120,9 @@ function buildHtml(
     var L = P.levels, isHold = L.decision === 'HOLD';
     var pfx = P.levelsLabel ? P.levelsLabel + ' ' : '';
     var entryColor = L.decision === 'BUY' ? C.buy : (L.decision === 'SELL' ? C.sell : C.hold);
-    if (L.entry != null) candles.createPriceLine({price:L.entry, color:entryColor, lineWidth:2, lineStyle:0, axisLabelVisible:true, title: isHold ? 'HOLD' : L.decision + ' ENTRY'});
-    if (L.target != null) candles.createPriceLine({price:L.target, color:C.buy, lineWidth:2, lineStyle:2, axisLabelVisible:true, title:pfx + 'TARGET'});
-    if (L.stop != null) candles.createPriceLine({price:L.stop, color:C.sell, lineWidth:2, lineStyle:2, axisLabelVisible:true, title:pfx + 'STOP LOSS'});
+    if (L.entry != null) candles.createPriceLine({price:L.entry, color:entryColor, lineWidth:2, lineStyle:0, axisLabelVisible:true, title: isHold ? 'NEUTRAL' : (L.decision === 'BUY' ? 'BULLISH' : 'BEARISH') + ' · REF'});
+    if (L.target != null) candles.createPriceLine({price:L.target, color:C.buy, lineWidth:2, lineStyle:2, axisLabelVisible:true, title:pfx + 'OUTLOOK'});
+    if (L.stop != null) candles.createPriceLine({price:L.stop, color:C.sell, lineWidth:2, lineStyle:2, axisLabelVisible:true, title:pfx + 'INVALIDATION'});
   }
 
   var rsiChart = LightweightCharts.createChart(document.getElementById('rsi'), Object.assign({height:subH}, common));
@@ -198,7 +207,11 @@ export function LightweightChart({ symbol, height = 380, levels, livePrice, leve
             React.createElement("iframe", {
               srcDoc: html,
               style: { border: 0, width: "100%", height: "100%", display: "block" },
-              sandbox: "allow-scripts allow-same-origin",
+              // NO allow-same-origin: srcDoc would otherwise inherit the app's
+              // own origin, handing third-party chart code (and the CDN script
+              // it loads) read access to the session token in localStorage.
+              // allow-scripts alone runs the chart in an opaque origin.
+              sandbox: "allow-scripts",
               title: `Chart ${symbol}`,
             })
           ) : (
@@ -239,7 +252,7 @@ const styles = StyleSheet.create({
   headerText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1, color: colors.onSurfaceInverse },
   headerSymbol: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurfaceInverse, maxWidth: "60%" },
   ranges: { height: 36, flexDirection: "row", borderBottomWidth: BORDER, borderBottomColor: colors.borderStrong },
-  rangeBtn: { flex: 1, alignItems: "center", justifyContent: "center", borderRightWidth: 1, borderRightColor: colors.border },
+  rangeBtn: { flex: 1, alignItems: "center", justifyContent: "center", borderEndWidth: 1, borderEndColor: colors.border },
   rangeBtnActive: { backgroundColor: colors.brand },
   rangeText: { fontFamily: fonts.monoBold, fontSize: 11, color: colors.onSurface },
   rangeTextActive: { color: colors.onSurfaceInverse },

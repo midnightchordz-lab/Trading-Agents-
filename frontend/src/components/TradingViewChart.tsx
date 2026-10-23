@@ -5,6 +5,7 @@ import { colors, fonts, spacing, BORDER } from "@/src/theme";
 import { DEFAULT_STUDIES, STUDIES_OVERRIDES, toTradingViewSymbol, widgetSupports, TvTheme } from "@/src/tv";
 import { LightweightChart } from "@/src/components/LightweightChart";
 import type { Verdict } from "@/src/api";
+import { scriptJson } from "@/src/utils/scriptJson";
 
 type Props = {
   /** Yahoo-style symbol from the backend (RELIANCE.NS, BTC-USD, GC=F, AAPL). */
@@ -71,7 +72,7 @@ function buildHtml(opts: {
   <div id="tv"></div>
   <script src="https://s3.tradingview.com/tv.js"></script>
   <script>
-    try { new TradingView.widget(${JSON.stringify(config)}); }
+    try { new TradingView.widget(${scriptJson(config)}); }
     catch (e) { document.body.innerHTML = '<p style="font-family:monospace;padding:12px">Chart failed to load.</p>'; }
   </script>
 </body>
@@ -128,7 +129,10 @@ export function TradingViewChart({
           React.createElement("iframe", {
             srcDoc: html,
             style: { border: 0, width: "100%", height: "100%", display: "block" },
-            sandbox: "allow-scripts allow-same-origin allow-popups",
+            // NO allow-same-origin — see LightweightChart: with it, the
+            // TradingView bundle runs on our own origin and can read the
+            // session token out of localStorage.
+            sandbox: "allow-scripts allow-popups",
             onLoad: () => setLoading(false),
             title: `TradingView ${tvSymbol}`,
           })

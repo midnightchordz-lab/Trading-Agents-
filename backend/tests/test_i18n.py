@@ -1,5 +1,4 @@
 """Unit tests for language_directive() — the only pipeline-touching piece of i18n."""
-import importlib.util
 import os
 import sys
 
@@ -20,11 +19,11 @@ sys.modules.setdefault("emergentintegrations", types.ModuleType("emergentintegra
 sys.modules.setdefault("emergentintegrations.llm", types.ModuleType("emergentintegrations.llm"))
 sys.modules["emergentintegrations.llm.chat"] = _stub_llm
 
-spec = importlib.util.spec_from_file_location("server", os.path.join(HERE, "server.py"))
-server = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(server)
-language_directive = server.language_directive
-SUPPORTED_LANGUAGES = server.SUPPORTED_LANGUAGES
+import pipeline  # noqa: E402
+from routes.analysis import AnalyzeRequest  # noqa: E402
+
+language_directive = pipeline.language_directive
+SUPPORTED_LANGUAGES = pipeline.SUPPORTED_LANGUAGES
 
 
 def test_english_is_a_true_noop():
@@ -56,26 +55,32 @@ def test_directive_protects_json_keys_and_enums():
     for lang in ("hi", "es", "zh"):
         d = language_directive(lang)
         assert "English" in d  # instructs keys/enums to stay English
-        assert "BUY" in d and "SELL" in d and "HOLD" in d
+        assert "BULLISH" in d and "NEUTRAL" in d and "BEARISH" in d
 
 
 def test_supported_languages_set():
-    assert set(SUPPORTED_LANGUAGES.keys()) == {"en", "hi", "es", "zh"}
+    assert set(SUPPORTED_LANGUAGES.keys()) == {"en", "hi", "es", "zh", "ar"}
+
+
+def test_arabic_directive_names_the_language_and_protects_keys():
+    directive = language_directive("ar")
+    assert "Arabic" in directive
+    assert "Keep every JSON KEY in English" in directive
 
 
 def test_system_prompt_constants_never_mutated():
-    original_pm_sys = server.PM_SYS
+    original_pm_sys = pipeline.PM_SYS
     language_directive("hi")
     language_directive("zh")
-    assert server.PM_SYS == original_pm_sys
-    assert "Respond in" not in server.PM_SYS
+    assert pipeline.PM_SYS == original_pm_sys
+    assert "Respond in" not in pipeline.PM_SYS
 
 
 def test_analyze_request_defaults_to_english():
-    req = server.AnalyzeRequest(symbol="AAPL")
+    req = AnalyzeRequest(symbol="AAPL")
     assert req.language == "en"
 
 
 def test_analyze_request_accepts_supported_language():
-    req = server.AnalyzeRequest(symbol="AAPL", language="hi")
+    req = AnalyzeRequest(symbol="AAPL", language="hi")
     assert req.language == "hi"

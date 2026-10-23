@@ -15,10 +15,11 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import { MagnifyingGlass, X, ArrowRight, CaretRight, Star, ArrowsLeftRight } from "phosphor-react-native";
+import { MagnifyingGlass, X, ArrowRight, CaretRight, Star, ArrowsLeftRight, Pulse, ImageSquare } from "phosphor-react-native";
 
 import { colors, fonts, spacing, BORDER, changeColor, accentAt, CATEGORY_COLORS, accents, CTA_GRADIENT } from "@/src/theme";
 import { api, Quote, SearchResult, WalletBalance } from "@/src/api";
+import { trackEvent } from "@/src/firebase";
 import { getWalletDeviceId } from "@/src/wallet";
 import { useTranslation } from "react-i18next";
 import { getCurrentLanguage } from "@/src/i18n";
@@ -154,11 +155,15 @@ export default function AnalyzeScreen() {
       setSubmitting(true);
       try {
         const res = await api.analyze(sym, nm, getCurrentLanguage(), await getWalletDeviceId());
+        trackEvent("analysis_started", { source: "analyze" });
         router.push(`/analysis/${res.id}`);
       } catch (e: any) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        if (e?.message?.toLowerCase().includes("insufficient balance")) {
-          Alert.alert("Add funds to continue", e.message);
+        const msg: string = e?.message || "Something went wrong. Try again.";
+        if (msg.toLowerCase().includes("insufficient balance")) {
+          Alert.alert("Add funds to continue", msg);
+        } else {
+          Alert.alert("Couldn't start the analysis", msg);
         }
       } finally {
         setSubmitting(false);
@@ -176,6 +181,8 @@ export default function AnalyzeScreen() {
   const freeCredits = wallet?.free_credits_remaining ?? 0;
   const needsFunds =
     !!wallet?.enforcement_enabled && analysisPrice > 0 && (wallet?.balance ?? 0) < analysisPrice;
+  // Only set while the launch-free window is open.
+  const launchFreeLeft = wallet?.launch_free_active ? wallet?.launch_free_daily_remaining ?? null : null;
 
   const refreshWallet = useCallback(async () => {
     try {
@@ -185,15 +192,19 @@ export default function AnalyzeScreen() {
     }
   }, []);
 
+  // Fetched on mount (not only after picking a ticker) so the launch-free
+  // countdown is visible before anyone spends a run. The focus effect below
+  // covers every later change (a top-up, a spent run).
   useEffect(() => {
-    if (selected) refreshWallet();
-  }, [selected, refreshWallet]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    refreshWallet();
+  }, [refreshWallet]);
 
   // Picking up a top-up made on the Agents tab.
   useFocusEffect(
     useCallback(() => {
-      if (selected) refreshWallet();
-    }, [selected, refreshWallet])
+      refreshWallet();
+    }, [refreshWallet])
   );
 
   const showResults = !selected && query.trim().length > 0 && (results.length > 0 || searching);
@@ -245,6 +256,14 @@ export default function AnalyzeScreen() {
             </Pressable>
           ) : null}
         </View>
+
+        {/* Launch-free countdown — sits with the ticker input so people see
+            what's left before they spend a run, not after. */}
+        {launchFreeLeft != null ? (
+          <Text testID="launch-free-countdown" style={styles.launchFreeCountdown}>
+            {`FREE DURING LAUNCH · ${launchFreeLeft} OF ${wallet?.launch_free_daily_cap ?? 10} FREE TODAY`}
+          </Text>
+        ) : null}
 
         {showResults ? (
           <View style={styles.resultsBox}>
@@ -351,6 +370,26 @@ export default function AnalyzeScreen() {
               </View>
             ) : null}
 
+            {/* Scanners entry */}
+            <Pressable testID="open-scans" onPress={() => router.push("/scans")} style={styles.scansRow}>
+              <Pulse size={18} color={colors.onSurface} weight="bold" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.scansTitle}>MARKET SCANS</Text>
+                <Text style={styles.scansSub}>Top movers, 52-week highs, RSI and more · free</Text>
+              </View>
+              <CaretRight size={16} color={colors.onSurface} weight="bold" />
+            </Pressable>
+
+            {/* Chart screenshot entry — its own button, separate from scans */}
+            <Pressable testID="open-chart" onPress={() => router.push("/chart")} style={styles.scansRow}>
+              <ImageSquare size={18} color={colors.onSurface} weight="bold" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.scansTitle}>ANALYSE A CHART</Text>
+                <Text style={styles.scansSub}>Upload a screenshot from any app · the desk checks it against live data</Text>
+              </View>
+              <CaretRight size={16} color={colors.onSurface} weight="bold" />
+            </Pressable>
+
             {/* Browse markets */}
             <View style={styles.section}>
               <Text style={styles.sectionLabel}>{selected ? t("analyze.or_pick_another") : t("analyze.browse_markets")}</Text>
@@ -442,6 +481,10 @@ export default function AnalyzeScreen() {
               <Text testID="low-balance-note" style={styles.lowBalanceNote}>
                 {`Balance ${wallet?.symbol || "$"}${(wallet?.balance ?? 0).toFixed(2)} — add funds on the Agents tab to run this.`}
               </Text>
+            ) : launchFreeLeft != null ? (
+              <Text testID="launch-free-cta-note" style={styles.freeCreditsNote}>
+                {`${launchFreeLeft} of ${wallet?.launch_free_daily_cap ?? 10} free today`}
+              </Text>
             ) : freeCredits > 0 ? (
               <Text testID="free-credits-note" style={styles.freeCreditsNote}>
                 {`${freeCredits} free ${freeCredits === 1 ? "analysis" : "analyses"} left`}
@@ -480,6 +523,13 @@ export default function AnalyzeScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
+  launchFreeCountdown: {
+    fontFamily: fonts.monoBold,
+    fontSize: 10.5,
+    letterSpacing: 1,
+    color: colors.onSurfaceTertiary,
+    marginTop: spacing.sm,
+  },
   header: {
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.md,
@@ -548,8 +598,8 @@ const styles = StyleSheet.create({
     borderWidth: BORDER,
     borderColor: colors.borderStrong,
     backgroundColor: colors.surface,
-    paddingLeft: spacing.md,
-    paddingRight: spacing.sm,
+    paddingStart: spacing.md,
+    paddingEnd: spacing.sm,
     height: 54,
     flexShrink: 0,
   },
@@ -557,6 +607,17 @@ const styles = StyleSheet.create({
   watchSymbol: { fontFamily: fonts.monoBold, fontSize: 13, color: colors.onSurface },
   watchName: { fontFamily: fonts.mono, fontSize: 9, color: colors.onSurfaceTertiary, marginTop: 2 },
   watchRemove: { padding: 4 },
+  scansRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    borderWidth: BORDER,
+    borderColor: colors.borderStrong,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  scansTitle: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1.5, color: colors.onSurface },
+  scansSub: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurfaceTertiary, marginTop: 2 },
   sectionLabel: {
     fontFamily: fonts.monoBold,
     fontSize: 11,

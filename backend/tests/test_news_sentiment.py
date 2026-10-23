@@ -4,7 +4,7 @@ import sys
 import requests
 
 sys.path.insert(0, "/app/backend")
-from server import classify_headline_keyword  # noqa: E402
+from market_data import classify_headline_keyword  # noqa: E402
 
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:

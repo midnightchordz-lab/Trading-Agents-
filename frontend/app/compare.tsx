@@ -7,8 +7,9 @@ import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import { MagnifyingGlass, X, ArrowsLeftRight } from "phosphor-react-native";
 
-import { colors, fonts, spacing, BORDER, verdictColors, changeColor, CTA_GRADIENT } from "@/src/theme";
+import { colors, fonts, spacing, BORDER, outlookLabel, verdictColors, changeColor, CTA_GRADIENT } from "@/src/theme";
 import { api, Analysis, SearchResult } from "@/src/api";
+import { trackEvent } from "@/src/firebase";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
 
 type Sel = { symbol: string; name: string };
@@ -152,7 +153,7 @@ function ResultColumn({ data, fallback }: { data: Analysis | null; fallback: Sel
           const { bg, fg } = verdictColors(v.decision);
           return (
             <View style={[styles.colVerdict, { backgroundColor: bg }]}>
-              <Text style={[styles.colDecision, { color: fg }]}>{v.decision}</Text>
+              <Text style={[styles.colDecision, { color: fg }]}>{outlookLabel(v.decision)}</Text>
               <Text style={[styles.colConf, { color: fg }]}>{v.confidence}% CONF</Text>
             </View>
           );
@@ -170,7 +171,7 @@ function ResultColumn({ data, fallback }: { data: Analysis | null; fallback: Sel
           <Text style={styles.colMetaValue} numberOfLines={1}>
             {v.time_horizon}
           </Text>
-          <Text style={[styles.colMetaLabel, { marginTop: spacing.sm }]}>TARGET</Text>
+          <Text style={[styles.colMetaLabel, { marginTop: spacing.sm }]}>OUTLOOK LEVEL</Text>
           <Text style={styles.colMetaValue}>
             {v.target_price != null ? (q?.currency && q.currency !== "USD" ? "" : "$") + v.target_price : "—"}
           </Text>
@@ -232,6 +233,7 @@ export default function CompareScreen() {
       ]);
       setIdA(ra.id);
       setIdB(rb.id);
+      trackEvent("compare_started");
     } catch {
       setComparing(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);

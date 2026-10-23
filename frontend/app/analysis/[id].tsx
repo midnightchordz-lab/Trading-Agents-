@@ -18,7 +18,7 @@ import { TradingViewChart } from "@/src/components/TradingViewChart";
 import { VerdictLevels } from "@/src/components/VerdictLevels";
 import { FearGreedGauge } from "@/src/components/FearGreedGauge";
 import { GroundingBadge } from "@/src/components/GroundingBadge";
-import { PositionSizer } from "@/src/components/PositionSizer";
+import { ChartCheckCard } from "@/src/components/ChartCheckCard";
 import { TimeframesCard, HORIZON_LABEL } from "@/src/components/TimeframesCard";
 import { NewsList } from "@/src/components/NewsList";
 import { rangeToInterval, widgetSupports } from "@/src/tv";
@@ -87,7 +87,7 @@ export default function AnalysisScreen() {
   // reasoned and must never move after the fact — only the "current price"
   // reference shown alongside them should keep ticking while someone sits
   // on this screen reading. Scoped to QuoteCard and the chart's live-price
-  // line only; VerdictLevels, PositionSizer, and ShareCard intentionally
+  // line only; VerdictLevels and ShareCard intentionally
   // keep reading the untouched original snapshot (analysis.quote).
   const [liveQuote, setLiveQuote] = useState<Quote | null>(null);
   const liveFailures = useRef(0);
@@ -280,7 +280,7 @@ export default function AnalysisScreen() {
               style={[styles.segBtn, i === 0 && styles.segDivider, active && styles.segActive]}
             >
               <Text style={[styles.segText, { color: active ? colors.onSurfaceInverse : colors.onSurface }]}>
-                {t === "debate" ? "LIVE DEBATE" : "VERDICT"}
+                {t === "debate" ? "LIVE DEBATE" : "OUTLOOK"}
               </Text>
             </Pressable>
           );
@@ -455,7 +455,12 @@ function VerdictView({
 
       {analysis.grounding ? <GroundingBadge grounding={analysis.grounding} /> : null}
 
-      <PositionSizer verdict={verdict} quote={analysis.quote} grounding={analysis.grounding} />
+      {analysis.chart_check?.length ? <ChartCheckCard rows={analysis.chart_check} /> : null}
+
+      {/* PositionSizer is hidden: computing a share quantity against the
+          desk's levels reads as sizing a trade for the user, which an
+          outlook must not do. The component is kept for a possible return
+          behind a SEBI-registered partner. */}
 
       {analysis.timeframes ? (
         <TimeframesCard
@@ -486,11 +491,11 @@ function VerdictView({
 
       <View style={styles.statsGrid}>
         <View style={styles.statCell}>
-          <Text style={styles.statLabel}>TARGET</Text>
+          <Text style={styles.statLabel}>OUTLOOK LEVEL</Text>
           <Text style={styles.statValue}>{money(verdict.target_price, currency)}</Text>
         </View>
         <View style={[styles.statCell, styles.statCellMid]}>
-          <Text style={styles.statLabel}>STOP-LOSS</Text>
+          <Text style={styles.statLabel}>INVALIDATION</Text>
           <Text style={styles.statValue}>{money(verdict.stop_loss, currency)}</Text>
         </View>
         <View style={styles.statCell}>
@@ -520,7 +525,7 @@ function VerdictView({
 
       <Pressable testID="open-share-button" onPress={onShare} style={styles.shareVerdictBtn}>
         <ShareNetwork size={18} color={colors.onSurfaceInverse} weight="bold" />
-        <Text style={styles.shareVerdictText}>SHARE THIS VERDICT</Text>
+        <Text style={styles.shareVerdictText}>SHARE THIS OUTLOOK</Text>
       </Pressable>
 
       {analysis.debate ? (
@@ -688,7 +693,7 @@ function TvSection({
 
 function DebateArg({ tag, color, text }: { tag: string; color: string; text: string }) {
   return (
-    <View style={[styles.debateArg, { borderLeftWidth: 6, borderLeftColor: color }]}>
+    <View style={[styles.debateArg, { borderStartWidth: 6, borderStartColor: color }]}>
       <View style={styles.debateArgHead}>
         <View style={[styles.debateDot, { backgroundColor: color }]} />
         <Text style={styles.debateArgTag}>[ {tag} ]</Text>
@@ -723,7 +728,7 @@ const styles = StyleSheet.create({
 
   segment: { flexDirection: "row", borderBottomWidth: BORDER, borderBottomColor: colors.borderStrong },
   segBtn: { flex: 1, height: 44, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
-  segDivider: { borderRightWidth: BORDER, borderRightColor: colors.borderStrong },
+  segDivider: { borderEndWidth: BORDER, borderEndColor: colors.borderStrong },
   segActive: { backgroundColor: colors.brand },
   segText: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1 },
 
@@ -751,7 +756,7 @@ const styles = StyleSheet.create({
 
   statsGrid: { flexDirection: "row", borderWidth: BORDER, borderTopWidth: 0, borderColor: colors.borderStrong },
   statCell: { flex: 1, padding: spacing.md },
-  statCellMid: { borderLeftWidth: BORDER, borderRightWidth: BORDER, borderColor: colors.borderStrong },
+  statCellMid: { borderStartWidth: BORDER, borderEndWidth: BORDER, borderColor: colors.borderStrong },
   statLabel: { fontFamily: fonts.mono, fontSize: 9, color: colors.onSurfaceTertiary, letterSpacing: 0.5 },
   statValue: { fontFamily: fonts.monoBold, fontSize: 14, color: colors.onSurface, marginTop: 4 },
 
@@ -764,7 +769,7 @@ const styles = StyleSheet.create({
   },
   rangeBtn: { flex: 1, height: 38, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
   rangeBarStacked: { borderTopWidth: 0 },
-  rangeDivider: { borderLeftWidth: 1.5, borderLeftColor: colors.border },
+  rangeDivider: { borderStartWidth: 1.5, borderStartColor: colors.border },
   rangeActive: { backgroundColor: colors.brand },
   rangeText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1 },
 

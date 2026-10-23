@@ -95,7 +95,7 @@ def _run_analysis_for(symbol, name):
     assert r.status_code == 200, r.text
     aid = r.json().get("id") or r.json().get("analysis_id")
     for _ in range(60):
-        g = requests.get(f"{BASE_URL}/api/analysis/{aid}", timeout=30)
+        g = requests.get(f"{BASE_URL}/api/analysis/{aid}", headers=AUTH_HEADERS, timeout=30)
         if g.status_code == 200 and g.json().get("status") == "completed":
             return g.json()
         time.sleep(3)

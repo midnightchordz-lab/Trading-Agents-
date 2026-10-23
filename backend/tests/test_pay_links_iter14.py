@@ -53,6 +53,7 @@ def _mk_user(phone=None, email=None):
         "email": email if email is not None else f"{uid}@example.com",
         "google_sub": None,
         "apple_sub": None,
+        "consent": {"agreed": True, "agreed_at": "2026-01-01T00:00:00+00:00", "version": "1.1"},
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     tok = au.create_session_token(uid, JWT_SECRET)
@@ -140,7 +141,11 @@ class TestOrderShape:
                                json={"amount": 5, "phone": "+15550009999"}, timeout=20)
             assert r1.status_code == 200, r1.text
             u = _db.users.find_one({"id": uid})
-            assert u["phone"] == "+15550009999"
+            # Unverified contact is stored separately and must NEVER overwrite
+            # the verified sign-in identity — that write was an admin-escalation
+            # path (any user could claim the owner's phone).
+            assert u.get("billing_phone") == "+15550009999"
+            assert u.get("phone") is None
             # No contact in body — must still succeed.
             r2 = requests.post(f"{BASE_URL}/api/pay/order", headers=h,
                                json={"amount": 25}, timeout=20)

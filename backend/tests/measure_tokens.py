@@ -8,7 +8,8 @@ import tiktoken
 from motor.motor_asyncio import AsyncIOMotorClient
 
 sys.path.insert(0, "/app/backend")
-import server as S  # noqa: E402
+import market_data as MD  # noqa: E402
+import pipeline as S  # noqa: E402
 
 ENC = tiktoken.get_encoding("o200k_base")
 
@@ -98,10 +99,10 @@ async def main(symbol="NVDA"):
     print(f"AVG INPUT / CALL   : {tot_in // len(calls)}")
 
     # news sentiment call
-    items = await asyncio.to_thread(S.fetch_news_sync, doc["symbol"])
+    items = await asyncio.to_thread(MD.fetch_news_sync, doc["symbol"])
     listing = "\n".join(f"{i+1}. {x['title']}" for i, x in enumerate(items))
     ns_user = f"Asset: {doc['symbol']}\nHeadlines:\n{listing}\n\nReturn {len(items)} labels as a JSON array."
-    print(f"\nNEWS SENTIMENT CALL: input {n(S.NEWS_SENTIMENT_SYS) + n(ns_user)} tokens "
+    print(f"\nNEWS SENTIMENT CALL: input {n(MD.NEWS_SENTIMENT_SYS) + n(ns_user)} tokens "
           f"({len(items)} headlines), output ~{len(items) * 4} tokens")
 
 

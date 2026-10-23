@@ -14,7 +14,7 @@ export type PriceAlert = {
   id: string;
   symbol: string;
   name: string;
-  label: string; // "TARGET" | "STOP LOSS" | "PRICE"
+  label: string; // "OUTLOOK LEVEL" | "INVALIDATION" | "PRICE" (older alerts: "TARGET" | "STOP LOSS")
   price: number;
   direction: "above" | "below";
   currency?: string;

@@ -10,10 +10,12 @@ real provider credentials (an SMS/email provider, a Google OAuth client ID,
 an Apple Sign In configuration) that only the app owner can provision — see
 the integration notes in the accompanying spec. The functions below that
 stand in for those (`send_otp_stub`, `verify_google_id_token_stub`,
-`verify_apple_id_token_stub`) are explicit placeholders.
+`verify_google_id_token_stub`) are explicit placeholders; Apple tokens are
+verified for real in `verify_apple_id_token`.
 """
 from __future__ import annotations
 
+import json
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -42,14 +44,76 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _PHONE_RE = re.compile(r"^\+?[1-9]\d{7,14}$")  # loose E.164-ish check
 
 
+_DISPOSABLE_EMAIL_DOMAINS = {
+    # Starter list of well-known throwaway providers, used to raise the cost
+    # of free-credit farming via one-time addresses. NOT exhaustive and NOT
+    # maintained — a real deployment should swap this for a live
+    # disposable-domain service rather than trust a static set in source.
+    "mailinator.com", "10minutemail.com", "guerrillamail.com", "tempmail.com",
+    "temp-mail.org", "yopmail.com", "throwawaymail.com", "trashmail.com",
+    "getnada.com", "sharklasers.com", "dispostable.com",
+}
+
+
+def canonical_email(raw: str) -> Optional[str]:
+    """The canonical form of an email, for MATCHING only.
+
+    Same Gmail rule `normalize_identifier` applies (dots and +tags collapsed,
+    because `a.b+tag@gmail.com` and `ab@gmail.com` are one real inbox), but
+    this returns a value for a disposable domain too — `normalize_identifier`
+    answers (None, None) for those, which is right for sign-in but useless for
+    "have I seen this inbox before".
+
+    Kept separate rather than changing `normalize_identifier`, whose return
+    value the OTP path, the admin allowlist and several tests depend on.
+    """
+    email = (raw or "").strip().lower()
+    if not _EMAIL_RE.match(email):
+        return None
+    local, _, domain = email.partition("@")
+    if domain in ("gmail.com", "googlemail.com"):
+        local = local.split("+", 1)[0].replace(".", "")
+        if not local:
+            return None
+        return f"{local}@gmail.com"
+    return email
+
+
+def is_disposable_email(raw: str) -> bool:
+    """A throwaway inbox, which costs nothing to create and is therefore the
+    cheapest way to farm signup credits. Only ever used to WITHHOLD CREDITS,
+    never to refuse a sign-in: the list is a static starter set and a false
+    positive must not lock a real person out of their account."""
+    email = (raw or "").strip().lower()
+    _, _, domain = email.partition("@")
+    return bool(domain) and domain in _DISPOSABLE_EMAIL_DOMAINS
+
+
 def normalize_identifier(raw: str) -> tuple[Optional[IdentifierType], Optional[str]]:
     """Detects whether raw looks like an email or a phone number and
-    normalizes it. Returns (None, None) if it looks like neither."""
+    normalizes it. Returns (None, None) if it looks like neither.
+
+    Gmail canonicalization closes the cheapest free-credit farming path:
+    `a.b+tag@gmail.com` and `ab@gmail.com` are the SAME real inbox, but were
+    treated as different accounts, each claiming a fresh signup bonus.
+    Collapsing them means one inbox is one account. Only applied to
+    Gmail/Googlemail, because dot-insensitivity is a Gmail-specific
+    behaviour — doing it globally would merge genuinely distinct addresses
+    at other providers."""
     value = (raw or "").strip()
     if not value:
         return None, None
     if _EMAIL_RE.match(value):
-        return "email", value.lower()
+        email = value.lower()
+        local, _, domain = email.partition("@")
+        if domain in _DISPOSABLE_EMAIL_DOMAINS:
+            return None, None
+        if domain in ("gmail.com", "googlemail.com"):
+            local = local.split("+", 1)[0].replace(".", "")
+            if not local:
+                return None, None
+            email = f"{local}@gmail.com"
+        return "email", email
     digits_and_plus = re.sub(r"[\s\-()]", "", value)
     if _PHONE_RE.match(digits_and_plus):
         return "phone", digits_and_plus
@@ -166,8 +230,51 @@ def verify_google_id_token_stub(id_token: str, expected_audience: str) -> Option
     return None
 
 
-def verify_apple_id_token_stub(identity_token: str, expected_audience: str) -> Optional[dict]:
-    """PLACEHOLDER. Real verification needs your own Apple Sign In
-    configuration (Services ID as expected_audience) and network access to
-    Apple's public JWKS endpoint. Returns None until wired."""
-    return None
+def verify_apple_id_token(identity_token: str, expected_audience, jwks: list) -> Optional[dict]:
+    """Verifies a real Sign in with Apple identity token against Apple's
+    published public keys. `jwks` is Apple's JWKS response (the list under
+    its "keys" field) — fetched separately by the caller (see
+    fetch_apple_jwks in server.py), since this function has no network
+    access itself and is fully testable with a synthetic JWKS + token pair.
+
+    `expected_audience` is a LIST of acceptable audiences (a single string is
+    still accepted). It has to be a list because the same app produces
+    different `aud` values: a native iOS sign-in carries the app's BUNDLE
+    IDENTIFIER, while the same sign-in performed inside Expo Go carries
+    `host.exp.Exponent`. Only these exact values pass — PyJWT rejects anything
+    not in the list, so widening it is the only way in.
+
+    Returns {"sub": ..., "email": ...} on success, None on any verification
+    failure — a malformed token, a tampered signature, an expired token, or
+    a wrong audience are all treated the same way: reject, don't
+    authenticate. Never raises."""
+    audiences = [expected_audience] if isinstance(expected_audience, str) else list(expected_audience or [])
+    if not audiences:
+        # No configured audience means every token would be checked against
+        # nothing. Refuse rather than authenticate.
+        return None
+    try:
+        unverified_header = jwt.get_unverified_header(identity_token)
+    except Exception:
+        return None
+    kid = unverified_header.get("kid")
+    if not kid:
+        return None
+    matching_key = next((k for k in jwks if isinstance(k, dict) and k.get("kid") == kid), None)
+    if not matching_key:
+        return None
+    try:
+        public_key = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(matching_key))
+        payload = jwt.decode(
+            identity_token,
+            key=public_key,
+            algorithms=["RS256"],
+            audience=audiences,
+            issuer="https://appleid.apple.com",
+        )
+    except jwt.PyJWTError:
+        return None
+    sub = payload.get("sub")
+    if not sub:
+        return None
+    return {"sub": sub, "email": payload.get("email")}

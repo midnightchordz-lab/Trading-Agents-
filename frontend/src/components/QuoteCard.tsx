@@ -49,8 +49,19 @@ export function QuoteCard({ quote, showRanges = false }: { quote: Quote; showRan
 
   const usingChart = showRanges && range !== "1M" && !!chart && chart.points.length > 1;
   const points = usingChart ? chart!.points : quote.sparkline;
-  const dispPct = usingChart ? chart!.changePercent : quote.changePercent;
-  const dispChange = usingChart ? chart!.change : quote.change;
+  // The quote's change is the 1-day move. On the 1M tab the card shows the
+  // quote's own 1-month sparkline, so measure that window instead (first
+  // close to last, the same way the chart endpoint does for 1W / 1Y).
+  const spark = quote.sparkline || [];
+  const monthBase = spark.length > 1 ? spark[0] : null;
+  const monthLast = spark.length > 1 ? spark[spark.length - 1] : null;
+  const onMonthTab = showRanges && range === "1M" && monthBase != null && monthLast != null && monthBase > 0;
+  const dispPct = usingChart
+    ? chart!.changePercent
+    : onMonthTab
+      ? ((monthLast! - monthBase!) / monthBase!) * 100
+      : quote.changePercent;
+  const dispChange = usingChart ? chart!.change : onMonthTab ? monthLast! - monthBase! : quote.change;
   const up = (dispPct ?? 0) >= 0;
   const cColor = changeColor(dispPct);
 
@@ -179,6 +190,7 @@ const styles = StyleSheet.create({
     width: 3,
     height: 10,
     backgroundColor: colors.onSurface,
+    // Physical, matching the physical `left: %` the marker is positioned with.
     marginLeft: -1.5,
   },
   rangeRow: {
@@ -189,7 +201,7 @@ const styles = StyleSheet.create({
     borderColor: colors.borderStrong,
   },
   rangeChip: { flex: 1, paddingVertical: spacing.sm, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
-  rangeDivider: { borderRightWidth: 1.5, borderRightColor: colors.borderStrong },
+  rangeDivider: { borderEndWidth: 1.5, borderEndColor: colors.borderStrong },
   rangeActive: { backgroundColor: colors.brand },
   rangeText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1 },
   statsRow: {
@@ -199,8 +211,8 @@ const styles = StyleSheet.create({
   },
   stat: { flex: 1, padding: spacing.sm, paddingVertical: spacing.md },
   statMid: {
-    borderLeftWidth: BORDER,
-    borderRightWidth: BORDER,
+    borderStartWidth: BORDER,
+    borderEndWidth: BORDER,
     borderColor: colors.borderStrong,
   },
   statLabel: { fontFamily: fonts.mono, fontSize: 9, color: colors.onSurfaceTertiary, letterSpacing: 0.5 },

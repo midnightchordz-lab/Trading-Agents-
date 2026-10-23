@@ -25,7 +25,7 @@ def _start_and_poll(lang=None, timeout=180):
     deadline = time.time() + timeout
     doc = None
     while time.time() < deadline:
-        g = requests.get(f"{BASE_URL}/api/analysis/{aid}", timeout=15)
+        g = requests.get(f"{BASE_URL}/api/analysis/{aid}", headers=AUTH_HEADERS, timeout=15)
         assert g.status_code == 200
         doc = g.json()
         if doc.get("status") == "completed":
