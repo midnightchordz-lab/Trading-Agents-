@@ -144,3 +144,4 @@ watchfiles==1.2.0
 websockets==16.1.1
 yarl==1.24.5
 zipp==4.1.0
+pdfplumber==0.11.7

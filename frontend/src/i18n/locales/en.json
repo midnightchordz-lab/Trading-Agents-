@@ -18,7 +18,8 @@
     "history": "History",
     "alerts": "Alerts",
     "agents": "Agents",
-    "portfolio": "Portfolio"
+    "portfolio": "Portfolio",
+    "review": "Review"
   },
   "analyze": {
     "title": "TradingAgents",

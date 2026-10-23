@@ -57,6 +57,10 @@ CHART_READ_GLOBAL_PER_MIN = rl.env_int("RL_CHART_READ_GLOBAL_PER_MIN", 30)
 # the benchmark, so it is bounded per account and across the deployment.
 HEALTH_CHECK_PER_MIN = rl.env_int("RL_HEALTH_CHECK_PER_MIN", 3)
 HEALTH_CHECK_GLOBAL_PER_MIN = rl.env_int("RL_HEALTH_CHECK_GLOBAL_PER_MIN", 20)
+# Trade review parses up to three PDFs per request — CPU-heavy, so tight.
+TRADE_REVIEW_PER_MIN = rl.env_int("RL_TRADE_REVIEW_PER_MIN", 3)
+TRADE_REVIEW_PER_DAY = rl.env_int("RL_TRADE_REVIEW_PER_DAY", 20)
+TRADE_REVIEW_GLOBAL_PER_MIN = rl.env_int("RL_TRADE_REVIEW_GLOBAL_PER_MIN", 10)
 
 
 class PerIp:
@@ -132,6 +136,14 @@ limit_health_check = PerUser("health_check", HEALTH_CHECK_PER_MIN)
 
 async def limit_health_check_global() -> None:
     await rl.global_enforce("health_check_global", HEALTH_CHECK_GLOBAL_PER_MIN, 60)
+
+
+limit_trade_review = PerUser("trade_review", TRADE_REVIEW_PER_MIN)
+limit_trade_review_daily = PerUser("trade_review_day", TRADE_REVIEW_PER_DAY, 86400)
+
+
+async def limit_trade_review_global() -> None:
+    await rl.global_enforce("trade_review_global", TRADE_REVIEW_GLOBAL_PER_MIN, 60)
 
 
 async def limit_portfolio_import_global() -> None:

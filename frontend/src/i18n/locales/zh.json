@@ -18,7 +18,8 @@
     "history": "历史",
     "alerts": "提醒",
     "agents": "智能体",
-    "portfolio": "投资组合"
+    "portfolio": "投资组合",
+    "review": "复盘"
   },
   "analyze": {
     "title": "TradingAgents",

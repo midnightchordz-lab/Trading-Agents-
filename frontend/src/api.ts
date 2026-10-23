@@ -368,6 +368,38 @@ export type HealthReport = {
   observations: string[];
 };
 
+export type ReviewRow = { label: string; n: number; pnl: number; win: number | null; extra?: string };
+export type ReviewTable = { id: string; title: string; label: string; note: string | null; rows: ReviewRow[] };
+export type TradeReview = {
+  period: { from: string | null; to: string | null };
+  sources: { broker: string; format: string; kind: "fills" | "contracts"; rows: number }[];
+  money: {
+    gross: number;
+    charges: number;
+    net: number;
+    charges_known: boolean;
+    count: number;
+    win_rate: number | null;
+    avg_win: number | null;
+    avg_loss: number | null;
+    gross_profit: number;
+    gross_loss: number;
+    profit_factor: number | null;
+    counted_in: "positions" | "contracts";
+  };
+  positions: number;
+  contracts: number;
+  underlyings: number;
+  active_days: number | null;
+  green_days: number | null;
+  observations: string[];
+  tables: ReviewTable[];
+  tax: { turnover: number; net_pnl_after_charges: number; charges: number; charges_exact: boolean; note: string };
+  open_positions: { contract: string; status: string }[];
+  notes: string[];
+  risk_line: string;
+};
+
 export type Analysis = {
   id: string;
   symbol: string;
@@ -489,6 +521,16 @@ export const api = {
     cash: number;
     targets?: Partial<Record<HealthBucket, number>> | null;
   }) => j<HealthReport>(`/portfolio/health`, { method: "POST", body: JSON.stringify(body) }),
+  /** Up to three broker statement PDFs; parsed in memory, nothing stored. */
+  tradeReview: (assets: { uri: string; name: string; file: Blob | null }[]) => {
+    const form = new FormData();
+    for (const asset of assets) {
+      // Same web/native split as portfolioImport.
+      if (asset.file) form.append("files", asset.file, asset.name);
+      else form.append("files", new FsFile(asset.uri) as unknown as Blob, asset.name);
+    }
+    return j<TradeReview>(`/trade-review`, { method: "POST", body: form });
+  },
   chartRead: (asset: { uri: string; name: string; file: Blob | null }) => {
     const form = new FormData();
     if (asset.file) {

@@ -79,7 +79,8 @@ type EventName =
   | "portfolio_imported"
   | "wallet_topup"
   | "chart_read"
-  | "health_check";
+  | "health_check"
+  | "trade_review";
 
 export function trackEvent(name: EventName, params?: Record<string, string | number>): void {
   safely(({ analytics }) => analytics.logEvent(analytics.getAnalytics(), name, params));

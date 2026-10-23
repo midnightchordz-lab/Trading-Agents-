@@ -19,11 +19,11 @@ import razorpay_pay as rzp
 from core import client, db, logger, now_iso
 from email_repair import apply_email_repair, find_email_repair_candidates
 import scan_jobs
-from routes import analysis, auth_routes, chart, health, market, payments, portfolio, scans
+from routes import analysis, auth_routes, chart, health, market, payments, portfolio, scans, trade_review
 
 app = FastAPI()
 
-for module in (market, analysis, auth_routes, payments, portfolio, scans, chart, health):
+for module in (market, analysis, auth_routes, payments, portfolio, scans, chart, health, trade_review):
     app.include_router(module.api_router)
 
 
