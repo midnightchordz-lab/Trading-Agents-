@@ -41,8 +41,11 @@ async def list_scans():
     docs = {d["_id"]: d async for d in db.scan_results.find({}, {"items": 1, "as_of": 1, "source": 1, "delayed": 1,
                                                                     "note": 1, "session_date": 1,
                                                                     "provisional": 1})}
+    vix = await db.scan_meta.find_one({"_id": "india_vix"})
     return {
         "india_market_open": sc.session_fraction(datetime.now(timezone.utc)) is not None,
+        # {value, change_pct, as_of, source, delayed}, or None before the first fetch.
+        "india_vix": {k: v for k, v in vix.items() if k != "_id"} if vix else None,
         "scans": [_meta(entry, docs.get(sid)) for sid, entry in catalog.items()],
     }
 

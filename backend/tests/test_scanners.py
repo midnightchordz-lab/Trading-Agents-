@@ -273,7 +273,9 @@ def fake_db(monkeypatch):
     monkeypatch.setattr(scan_routes, "db", db)
     monkeypatch.setenv("SCAN_UNIVERSE_IN", "RELIANCE TCS")
     monkeypatch.setattr(scan_jobs, "PER_ASSET_PAUSE", 0)
-    scan_jobs._state.update(last_daily=0.0, last_live=0.0, last_live_source=None)
+    scan_jobs._state.update(last_daily=0.0, last_live=0.0, last_live_source=None, last_vix=0.0, last_vix_source=None)
+    # No test reaches the network for India VIX unless it says so.
+    monkeypatch.setattr(upstox_feed, "fetch_india_vix", lambda: {"price": 12.5, "prev_close": 12.0})
     snap = sc.daily_snapshot(bars_from([100.0] * 260))
     for s in ("RELIANCE", "TCS"):
         db.scan_snapshots.docs[f"in:{s}"] = {"_id": f"in:{s}", "group": "in", "symbol": s, "snap": snap}
@@ -334,6 +336,8 @@ def test_daily_refresh_builds_every_group(fake_db, monkeypatch):
     assert asked == ["RELIANCE.NS", "TCS.NS", "AAPL", "BTC-USD"]
     assert [i["symbol"] for i in fake_db.scan_results.docs["us.near_52w_high"]["items"]] == ["AAPL"]
     assert fake_db.scan_results.docs["in.near_52w_high"]["kind"] == "daily"
+    # Chart patterns are computed in the same pass, from the same closes.
+    assert "in.pat_hammer" in fake_db.scan_results.docs and "us.pat_sar_up" in fake_db.scan_results.docs
 
 
 # --- API -----------------------------------------------------------------------
@@ -472,3 +476,90 @@ def test_a_daily_rebuild_during_the_session_leaves_the_live_trend_lists_alone(fa
     assert fake_db.scan_results.docs["in.volume_spike"]["session_date"] == "2026-10-22"
     asyncio.run(scan_jobs.refresh_daily_group("in", ist(2026, 10, 23, 15, 50)))    # after the close
     assert fake_db.scan_results.docs["in.rsi_oversold"]["provisional"] is False
+
+
+# --- chart patterns ----------------------------------------------------------------
+
+def _ohlc_bars(rows, start=DAY0):
+    return [{"time": start + i * 86400, "open": o, "high": h, "low": l, "close": c, "volume": 1_000_000}
+            for i, (o, h, l, c) in enumerate(rows)]
+
+
+def test_snapshot_carries_the_patterns_and_a_hammer_is_listed():
+    closes = [100 + 0.1 * i for i in range(250)] + [125 - 2 * i for i in range(9)]
+    rows = [(c, c * 1.003, c * 0.997, c) for c in closes]
+    last = closes[-1] - 1
+    rows.append((last, last + 0.1, last - 4, last + 0.05))          # small body, long lower shadow, after a fall
+    snap = sc.daily_snapshot(_ohlc_bars(rows))
+    assert snap["patterns"]["candle"] == "hammer"
+    res = sc.run_scans(sc.PATTERN_SCANS, {"X": snap})
+    assert [i["symbol"] for i in res["pat_hammer"]] == ["X"] and res["pat_shooting_star"] == []
+
+
+def test_pattern_scans_skip_rows_without_patterns():
+    res = sc.run_scans(sc.PATTERN_SCANS, {"OLD": {"price": 1, "change_pct": 0}})
+    assert all(v == [] for v in res.values())
+
+
+def test_catalog_lists_patterns_for_every_market_and_never_advises():
+    cat = [c for c in sc.scan_catalog() if c["kind"] == "pattern"]
+    assert len(cat) == 3 * len(sc.PATTERN_SCANS)
+    for c in cat:
+        text = (c["title"] + " " + c["description"]).lower()
+        assert not any(w in text for w in ("buy", "sell", "recommend", "should", "bullish", "bearish", "target")), c
+
+
+def test_patterns_are_not_recomputed_live():
+    # Intraday, only the trend scans move with the live price; a candle is
+    # only a candle once the session has closed.
+    assert not {s.id for s in sc.PATTERN_SCANS} & {s.id for s in sc.INTRADAY_TREND_SCANS}
+
+
+# --- India VIX -------------------------------------------------------------------
+
+def test_vix_comes_from_upstox_and_shows_in_the_api(fake_db):
+    asyncio.run(scan_jobs.refresh_vix(NOW))
+    doc = fake_db.scan_meta.docs["india_vix"]
+    assert doc["value"] == 12.5 and doc["change_pct"] == pytest.approx(4.17) and doc["source"] == "upstox"
+    out = asyncio.run(scan_routes.list_scans())
+    assert out["india_vix"]["value"] == 12.5 and "_id" not in out["india_vix"]
+
+
+def test_vix_falls_back_to_yahoo_and_throttles_itself(fake_db, monkeypatch):
+    def boom():
+        raise upstox_feed.UpstoxUnavailable("down")
+    monkeypatch.setattr(upstox_feed, "fetch_india_vix", boom)
+    asked = []
+    monkeypatch.setattr(scan_jobs, "fetch_quote_sync", lambda sym: asked.append(sym) or {"price": 14.0, "previousClose": 14.0})
+    asyncio.run(scan_jobs.refresh_vix(NOW))
+    doc = fake_db.scan_meta.docs["india_vix"]
+    assert asked == ["^INDIAVIX"] and doc["source"] == "yahoo" and doc["delayed"] is True and doc["change_pct"] == 0
+    asyncio.run(scan_jobs.refresh_vix(NOW + timedelta(minutes=5)))
+    assert asked == ["^INDIAVIX"]                                 # Yahoo at most every 15 minutes
+    asyncio.run(scan_jobs.refresh_vix(NOW + timedelta(minutes=5), force=True))
+    assert len(asked) == 2
+
+
+def test_a_vix_failure_keeps_the_last_value(fake_db, monkeypatch):
+    fake_db.scan_meta.docs["india_vix"] = {"_id": "india_vix", "value": 11.0}
+
+    def boom(*a):
+        raise RuntimeError("network")
+    monkeypatch.setattr(upstox_feed, "fetch_india_vix", lambda: (_ for _ in ()).throw(upstox_feed.UpstoxUnavailable("x")))
+    monkeypatch.setattr(scan_jobs, "fetch_quote_sync", boom)
+    asyncio.run(scan_jobs.refresh_vix(NOW))
+    assert fake_db.scan_meta.docs["india_vix"]["value"] == 11.0
+
+
+def test_the_india_close_takes_the_closing_vix(fake_db, monkeypatch):
+    monkeypatch.setenv("SCAN_UNIVERSE_IN", "RELIANCE")
+    monkeypatch.setattr(scan_jobs, "fetch_daily_bars_sync", lambda sym: bars_from(rising()))
+    asyncio.run(scan_jobs.refresh_daily_group("in", ist(2026, 10, 23, 15, 50)))
+    assert fake_db.scan_meta.docs["india_vix"]["as_of"] == ist(2026, 10, 23, 15, 50).isoformat()
+
+
+def test_vix_index_quote_is_parsed_by_instrument_token():
+    payload = {"status": "success", "data": {"NSE_INDEX:India VIX": {
+        "instrument_token": upstox_feed.INDIA_VIX_KEY, "last_price": 13.2, "net_change": -0.4}}}
+    q = upstox_feed.parse_quotes(payload, {upstox_feed.INDIA_VIX_KEY: "INDIA VIX"})["INDIA VIX"]
+    assert q["price"] == 13.2 and q["prev_close"] == pytest.approx(13.6)

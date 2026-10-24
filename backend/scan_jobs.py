@@ -35,7 +35,8 @@ STALE_TRADE_SECONDS = 20 * 60   # no trade this long "in session" = holiday / ha
 PER_ASSET_PAUSE = 0.3           # be gentle with Yahoo
 
 _owner = uuid.uuid4().hex
-_state = {"last_live": 0.0, "last_live_source": None}
+_state = {"last_live": 0.0, "last_live_source": None, "last_vix": 0.0, "last_vix_source": None}
+VIX_YAHOO_SYMBOL = "^INDIAVIX"
 
 
 def enabled() -> bool:
@@ -97,7 +98,7 @@ async def refresh_daily_group(group: str, now: datetime) -> None:
             )
         await asyncio.sleep(PER_ASSET_PAUSE)
     if rows:
-        results = sc.run_scans(sc.DAILY_SCANS, rows)
+        results = sc.run_scans(sc.CLOSE_SCANS, rows)
         if group == "in" and sc.session_fraction(now) is not None:
             # Mid-session (a first deploy, or a restart before the close was
             # processed) the trend lists are live, recomputed from today's
@@ -107,6 +108,8 @@ async def refresh_daily_group(group: str, now: datetime) -> None:
                 results.pop(s.id, None)
         await save_results(group, results, kind="daily", source="yahoo",
                            delayed=False, as_of=now.isoformat(), session_date=session.isoformat())
+    if group == "in" and sc.session_fraction(now) is None:
+        await refresh_vix(now, force=True)   # the closing value
     await acquire_lease(now_utc())  # a full refresh can outlast one lease period
     logger.info(f"scanner: daily {group} refreshed for the {session} close ({len(rows)}/{len(symbols)} assets)")
 
@@ -182,6 +185,44 @@ async def refresh_live(now: datetime, fraction: float) -> None:
     _state.update(last_live=now.timestamp(), last_live_source=source)
 
 
+def _vix_quote() -> tuple[dict, str, bool]:
+    """India VIX from Upstox, else Yahoo's delayed quote."""
+    try:
+        q = upstox_feed.fetch_india_vix()
+        return {"price": q["price"], "prev_close": q.get("prev_close")}, "upstox", False
+    except upstox_feed.UpstoxUnavailable as e:
+        if upstox_feed.configured():
+            logger.warning(f"scanner: India VIX from Upstox failed, using Yahoo (delayed): {e}")
+    q = fetch_quote_sync(VIX_YAHOO_SYMBOL)
+    return {"price": q.get("price"), "prev_close": q.get("previousClose")}, "yahoo", True
+
+
+async def refresh_vix(now: datetime, *, force: bool = False) -> None:
+    """Store India VIX in scan_meta for the Scans screen's tile. In session
+    it follows the live cadence (Yahoo at most every 15 minutes); `force`
+    takes the closing value after the close. A failure keeps the last value."""
+    gap = YAHOO_LIVE_SECONDS if _state["last_vix_source"] == "yahoo" else LIVE_SECONDS
+    if not force and now.timestamp() - _state["last_vix"] < gap:
+        return
+    _state["last_vix"] = now.timestamp()
+    try:
+        q, source, delayed = await asyncio.to_thread(_vix_quote)
+    except Exception as e:
+        logger.warning(f"scanner: India VIX unavailable: {e}")
+        return
+    price, prev = q.get("price"), q.get("prev_close")
+    if not price:
+        return
+    _state["last_vix_source"] = source
+    await db.scan_meta.update_one(
+        {"_id": "india_vix"},
+        {"$set": {"value": round(float(price), 2),
+                  "change_pct": round((float(price) / float(prev) - 1) * 100, 2) if prev else None,
+                  "as_of": now.isoformat(), "source": source, "delayed": delayed}},
+        upsert=True,
+    )
+
+
 async def tick(now: datetime) -> None:
     # Live first: a process waking up mid-session must not hold live data
     # back behind a 2-3 minute daily rebuild.
@@ -191,6 +232,7 @@ async def tick(now: datetime) -> None:
         # itself holds the Yahoo fallback to one pass per YAHOO_LIVE_SECONDS.
         if now.timestamp() - _state["last_live"] >= LIVE_SECONDS:
             await refresh_live(now, fraction)
+        await refresh_vix(now)
     await refresh_due_daily(now)
 
 

@@ -6,7 +6,7 @@ import * as Haptics from "expo-haptics";
 import { CaretDown, CaretRight } from "phosphor-react-native";
 
 import { colors, fonts, spacing, BORDER, changeColor } from "@/src/theme";
-import { api, ScanItem, ScanMeta } from "@/src/api";
+import { api, IndiaVix, ScanItem, ScanMeta } from "@/src/api";
 import { trackEvent } from "@/src/firebase";
 import { getWalletDeviceId } from "@/src/wallet";
 import { getCurrentLanguage } from "@/src/i18n";
@@ -59,12 +59,20 @@ function freshness(s: ScanMeta, marketOpen: boolean): { text: string; tone: stri
   return { text: `UPDATED ${timeLabel(s.as_of)}`, tone: colors.onSurfaceTertiary };
 }
 
+function vixFreshness(v: IndiaVix, marketOpen: boolean): { text: string; tone: string } {
+  const recent = Date.now() - new Date(v.as_of).getTime() < LIVE_FRESH_MS;
+  if (marketOpen && recent && !v.delayed) return { text: "LIVE", tone: colors.success };
+  if (marketOpen && v.delayed) return { text: `15-MIN DELAYED · ${timeLabel(v.as_of)}`, tone: colors.warning };
+  return { text: `AS OF ${timeLabel(v.as_of)}`, tone: colors.onSurfaceTertiary };
+}
+
 export default function ScansScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const [group, setGroup] = useState<Group>("in");
   const [scans, setScans] = useState<ScanMeta[] | null>(null);
   const [marketOpen, setMarketOpen] = useState(false);
+  const [vix, setVix] = useState<IndiaVix | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
@@ -90,6 +98,7 @@ export default function ScansScreen() {
       const res = await api.scans();
       setScans(res.scans);
       setMarketOpen(res.india_market_open);
+      setVix(res.india_vix ?? null);
       setError(null);
       if (openRef.current) loadItems(openRef.current);
     } catch (e: any) {
@@ -146,6 +155,8 @@ export default function ScansScreen() {
           : "TREND · FROM CLOSING PRICES",
       rows: visible.filter((s) => s.kind === "daily"),
     },
+    // Patterns need a finished candle, so they always describe the last close.
+    { title: "CHART PATTERNS · FROM THE LAST CLOSE", rows: visible.filter((s) => s.kind === "pattern") },
   ].filter((s) => s.rows.length > 0);
 
   return (
@@ -179,6 +190,27 @@ export default function ScansScreen() {
           <Text testID="scans-error" style={styles.note}>
             {error}
           </Text>
+        ) : null}
+
+        {group === "in" && vix ? (
+          <View testID="india-vix" style={styles.vix}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.vixLabel}>INDIA VIX</Text>
+              <Text style={styles.cardDesc}>Expected NSE volatility over the next 30 days. Higher means bigger expected swings.</Text>
+              {(() => {
+                const f = vixFreshness(vix, marketOpen);
+                return <Text style={[styles.fresh, { color: f.tone }]}>{f.text}</Text>;
+              })()}
+            </View>
+            <View style={{ alignItems: "flex-end" }}>
+              <Text style={styles.vixValue}>{vix.value.toFixed(2)}</Text>
+              {vix.change_pct != null ? (
+                <Text style={[styles.itemChange, { color: colors.onSurfaceTertiary }]}>
+                  {`${vix.change_pct >= 0 ? "+" : ""}${vix.change_pct.toFixed(2)}%`}
+                </Text>
+              ) : null}
+            </View>
+          </View>
         ) : null}
 
         {sections.map((sec) => (
@@ -277,5 +309,8 @@ const styles = StyleSheet.create({
   itemPrice: { fontFamily: fonts.monoBold, fontSize: 13, color: colors.onSurface },
   itemChange: { fontFamily: fonts.mono, fontSize: 11, marginTop: 2 },
   note: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurfaceTertiary, padding: spacing.md },
+  vix: { flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, borderWidth: BORDER, borderColor: colors.borderStrong, marginBottom: spacing.xl },
+  vixLabel: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1.5, color: colors.onSurface },
+  vixValue: { fontFamily: fonts.display, fontSize: 24, color: colors.onSurface },
   footer: { fontFamily: fonts.mono, fontSize: 10, color: colors.onSurfaceTertiary, lineHeight: 15 },
 });

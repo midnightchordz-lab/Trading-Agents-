@@ -263,11 +263,20 @@ export type CurrencyOption = {
 
 /** One scanner: a factual filter, refreshed in the background. `as_of` is
  *  when its list was computed; `delayed` means 15-minute delayed data. */
+/** India VIX, the NSE's index of expected 30-day volatility. */
+export type IndiaVix = {
+  value: number;
+  change_pct: number | null;
+  as_of: string;
+  source: "upstox" | "yahoo";
+  delayed: boolean;
+};
+
 export type ScanMeta = {
   id: string;
   group: "in" | "us" | "crypto";
   market: string;
-  kind: "live" | "daily";
+  kind: "live" | "daily" | "pattern";
   title: string;
   description: string;
   count: number;
@@ -524,7 +533,7 @@ export const api = {
     }
     return j<ImportResult>(`/portfolio/import`, { method: "POST", body: form });
   },
-  scans: () => j<{ india_market_open: boolean; scans: ScanMeta[] }>(`/scans`),
+  scans: () => j<{ india_market_open: boolean; india_vix?: IndiaVix | null; scans: ScanMeta[] }>(`/scans`),
   scan: (id: string) => j<ScanMeta & { items: ScanItem[] }>(`/scans/${encodeURIComponent(id)}`),
   trending: () => j<{ results: Quote[] }>(`/trending`),
   markets: (category: string) => j<{ results: Quote[] }>(`/markets/${category}`),

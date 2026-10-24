@@ -23,6 +23,7 @@ from core import logger
 
 QUOTES_URL = "https://api.upstox.com/v2/market-quote/quotes"
 INSTRUMENTS_URL = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+INDIA_VIX_KEY = "NSE_INDEX|India VIX"
 MAX_PER_REQUEST = 500          # Upstox: full quotes for up to 500 instruments per call
 INSTRUMENTS_TTL = 24 * 3600    # the instrument list changes rarely; refetch daily
 
@@ -121,12 +122,24 @@ def parse_quotes(payload: dict, key_to_symbol: dict[str, str]) -> dict[str, dict
 
 def fetch_quotes(symbols: list[str]) -> dict[str, dict]:
     """Live quotes for NSE symbols. Raises UpstoxUnavailable on any failure."""
-    tok = token()
-    if not tok:
+    if not token():
         raise UpstoxUnavailable("UPSTOX_ANALYTICS_TOKEN is not set")
     keys = instrument_keys(symbols)
     if not keys:
         raise UpstoxUnavailable("none of the symbols resolved to an Upstox instrument")
+    return _fetch_keys(keys)
+
+
+def fetch_india_vix() -> dict:
+    """India VIX {price, prev_close, ...}. Raises UpstoxUnavailable on any failure."""
+    return _fetch_keys({"INDIA VIX": INDIA_VIX_KEY})["INDIA VIX"]
+
+
+def _fetch_keys(keys: dict[str, str]) -> dict[str, dict]:
+    """Full quotes for {name: instrument_key}, keyed back by name."""
+    tok = token()
+    if not tok:
+        raise UpstoxUnavailable("UPSTOX_ANALYTICS_TOKEN is not set")
     key_to_symbol = {v: k for k, v in keys.items()}
     headers = {"Authorization": f"Bearer {tok}", "Accept": "application/json"}
     out: dict[str, dict] = {}

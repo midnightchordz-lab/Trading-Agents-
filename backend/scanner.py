@@ -5,6 +5,9 @@ Two kinds, because they need data of different freshness:
 - DAILY scans (52-week high/low, RSI, MACD crossovers, unusual volume) are
   computed from daily closing bars. They describe the trend, so a refresh after
   each close is correct for them all next day.
+- PATTERN scans (shooting star / hammer, Bollinger squeeze breaks, W-bottom
+  and M-top, Parabolic SAR flips, Heikin-Ashi turns — see patterns.py) are
+  computed with the daily scans, from completed daily candles only.
 - LIVE scans (India only: today's gainers/losers, volume surge, new 52-week
   high) use live quotes during the NSE session — Upstox when available, Yahoo
   (15-minute delayed, and labelled so) when it isn't.
@@ -21,6 +24,7 @@ from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 import indicators as ind
+import patterns as pt
 
 IST = timezone(timedelta(hours=5, minutes=30))
 NSE_OPEN = (9, 15)
@@ -126,6 +130,7 @@ def daily_snapshot(bars: list[dict], tz=IST) -> Optional[dict]:
     if len(bars) < 30:
         return None
     closes = [float(b["close"]) for b in bars]
+    opens = [float(b.get("open") or b["close"]) for b in bars]
     highs = [float(b.get("high") or b["close"]) for b in bars]
     lows = [float(b.get("low") or b["close"]) for b in bars]
     vols = [float(b.get("volume") or 0) for b in bars]
@@ -149,6 +154,8 @@ def daily_snapshot(bars: list[dict], tz=IST) -> Optional[dict]:
         # Completed closes, so the trend scans can be recomputed during the
         # session with today's live price as a provisional close.
         "closes": [round(c, 4) for c in closes[-300:]],
+        # Chart patterns on the last completed candle (patterns.detect).
+        "patterns": pt.detect(opens[-260:], highs[-260:], lows[-260:], closes[-260:]),
     }
 
 
@@ -193,6 +200,52 @@ DAILY_SCANS = [
          lambda s: s["volume_ratio"] is not None and s["volume_ratio"] >= 2,
          lambda s: s["volume_ratio"], lambda s: f"{s['volume_ratio']:.1f}× avg volume"),
 ]
+
+
+def _pat(name: str, value: str) -> Callable[[dict], bool]:
+    return lambda s: (s.get("patterns") or {}).get(name) == value
+
+
+def _move(s: dict) -> str:
+    return f"{s['change_pct']:+.1f}% on the day" if s.get("change_pct") is not None else "pattern formed"
+
+
+# Descriptions say what the shape is; none says what to do about it.
+PATTERN_SCANS = [
+    Scan("pat_shooting_star", "Shooting star",
+         "Last session: a small body with a long upper shadow, after a rise over the previous week.", "pattern",
+         _pat("candle", "shooting_star"), lambda s: s["change_pct"] or 0, _move),
+    Scan("pat_hammer", "Hammer",
+         "Last session: a small body with a long lower shadow, after a fall over the previous week.", "pattern",
+         _pat("candle", "hammer"), lambda s: s["change_pct"] or 0, _move),
+    Scan("pat_bb_break_up", "Bollinger breakout up",
+         "Closed above its upper Bollinger band (20-day, 2 std dev) after an unusually narrow, quiet spell.", "pattern",
+         _pat("bb_break", "up"), lambda s: s["change_pct"] or 0, _move),
+    Scan("pat_bb_break_down", "Bollinger breakdown",
+         "Closed below its lower Bollinger band (20-day, 2 std dev) after an unusually narrow, quiet spell.", "pattern",
+         _pat("bb_break", "down"), lambda s: s["change_pct"] or 0, _move, descending=False),
+    Scan("pat_w_bottom", "W-bottom (double low)",
+         "Two lows within the last 30 sessions, the second less extreme, and the price back above its 20-day average.",
+         "pattern", _pat("bb_shape", "w_bottom"), lambda s: s["change_pct"] or 0, _move),
+    Scan("pat_m_top", "M-top (double high)",
+         "Two highs within the last 30 sessions, the second less extreme, and the price back below its 20-day average.",
+         "pattern", _pat("bb_shape", "m_top"), lambda s: s["change_pct"] or 0, _move, descending=False),
+    Scan("pat_sar_up", "Parabolic SAR flipped up",
+         "The Parabolic SAR trend indicator switched to an uptrend reading on the last session.", "pattern",
+         _pat("sar_flip", "up"), lambda s: s["change_pct"] or 0, _move),
+    Scan("pat_sar_down", "Parabolic SAR flipped down",
+         "The Parabolic SAR trend indicator switched to a downtrend reading on the last session.", "pattern",
+         _pat("sar_flip", "down"), lambda s: s["change_pct"] or 0, _move, descending=False),
+    Scan("pat_ha_up", "Heikin-Ashi turned up",
+         "Smoothed (Heikin-Ashi) candles turned rising after 3 or more falling sessions.", "pattern",
+         _pat("ha_turn", "up"), lambda s: s["change_pct"] or 0, _move),
+    Scan("pat_ha_down", "Heikin-Ashi turned down",
+         "Smoothed (Heikin-Ashi) candles turned falling after 3 or more rising sessions.", "pattern",
+         _pat("ha_turn", "down"), lambda s: s["change_pct"] or 0, _move, descending=False),
+]
+
+# Everything the post-close refresh computes from completed candles.
+CLOSE_SCANS = DAILY_SCANS + PATTERN_SCANS
 
 
 def _item(symbol: str, snap: dict, label: str) -> dict:
@@ -326,5 +379,8 @@ def scan_catalog() -> list[dict]:
     for g, name in groups.items():
         for sc in DAILY_SCANS:
             cat.append({"id": f"{g}.{sc.id}", "group": g, "market": name, "kind": "daily",
+                        "title": sc.title, "description": sc.description})
+        for sc in PATTERN_SCANS:
+            cat.append({"id": f"{g}.{sc.id}", "group": g, "market": name, "kind": "pattern",
                         "title": sc.title, "description": sc.description})
     return cat
