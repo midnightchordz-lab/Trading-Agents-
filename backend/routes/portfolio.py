@@ -128,12 +128,9 @@ async def portfolio_optimize(body: PortfolioOptimizeRequest):
             detail="Couldn't optimize this portfolio — try different holdings or another objective.",
         )
 
+    # How the user's weights compare with the model's — descriptive labels
+    # only; no share counts to buy (see portfolio_optimizer's docstring).
     actions = pfopt.classify_actions(current_weights, result["weights"])
-    alloc, leftover = ({}, total_value)
-    try:
-        alloc, leftover = pfopt.discrete_allocation(result["weights"], current_prices, total_value)
-    except Exception as e:
-        logger.warning(f"discrete allocation failed: {e}")
 
     return {
         "objective": objective,
@@ -144,8 +141,6 @@ async def portfolio_optimize(body: PortfolioOptimizeRequest):
         "current_weights": {k: round(v, 4) for k, v in current_weights.items()},
         "suggested_weights": {k: round(v, 4) for k, v in result["weights"].items()},
         "actions": actions,
-        "suggested_shares": alloc,
-        "leftover_cash": round(leftover, 2),
         "expected_return": result["expected_return"],
         "volatility": result["volatility"],
         "sharpe": result["sharpe"],

@@ -65,23 +65,20 @@ def test_hold_and_missing_target_produce_no_view():
     assert set(conf.keys()) == {"C"}
 
 
-def test_classify_actions_sell_when_suggested_near_zero():
-    actions = pfopt.classify_actions({"A": 0.3}, {"A": 0.0, "B": 0.5})
+def test_classify_actions_describes_model_weights():
+    actions = pfopt.classify_actions({"A": 0.3, "C": 0.5}, {"A": 0.0, "B": 0.5, "C": 0.2})
     by_symbol = {a["symbol"]: a["action"] for a in actions}
-    assert by_symbol["A"] == "SELL"
-    assert by_symbol["B"] == "ADD"
+    assert by_symbol == {"A": "NOT IN MODEL", "B": "BELOW MODEL", "C": "ABOVE MODEL"}
 
 
-def test_classify_actions_hold_within_band():
+def test_classify_actions_in_line_within_band():
     actions = pfopt.classify_actions({"A": 0.30}, {"A": 0.32})
-    assert actions[0]["action"] == "HOLD"
+    assert actions[0]["action"] == "IN LINE"
 
 
-def test_discrete_allocation_stays_within_budget():
-    hist = _synthetic_prices(["A", "B"], seed=7)
-    current_prices = {s: hist[s][-1] for s in hist}
-    weights = {"A": 0.6, "B": 0.4}
-    alloc, leftover = pfopt.discrete_allocation(weights, current_prices, total_value=10000)
-    spent = sum(alloc[s] * current_prices[s] for s in alloc)
-    assert spent <= 10000
-    assert leftover >= 0
+def test_no_trade_language_anywhere_in_the_labels():
+    import re
+    assert not any(re.search(r"\b(BUY|SELL|ADD|TRIM|HOLD|EXIT)\b", r) for r in pfopt.RELATIONS)
+    assert not hasattr(pfopt, "discrete_allocation")     # no "shares to buy" any more
+
+

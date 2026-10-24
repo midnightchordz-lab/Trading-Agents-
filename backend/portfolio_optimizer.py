@@ -1,8 +1,11 @@
 """Portfolio optimization — additive module, imported by server.py.
 
-Wraps PyPortfolioOpt (https://github.com/pyportfolio/pyportfolioopt, MIT) to turn a
-user's holdings into a suggested allocation and a per-holding action
-(ADD / HOLD / TRIM / SELL). Two modes:
+Wraps PyPortfolioOpt (https://github.com/pyportfolio/pyportfolioopt, MIT) to compute
+a model allocation for the user's own holdings and describe, per holding, how
+the user's weight compares with the model's (ABOVE MODEL / IN LINE /
+BELOW MODEL / NOT IN MODEL). It is a comparison, not an instruction: the app
+never tells anyone to buy, add, trim or sell (we are not a SEBI-registered
+adviser), so no trade labels or share counts are produced. Two modes:
 
   - "hrp": Hierarchical Risk Parity on price history alone. No return forecast,
     generally the more robust default.
@@ -32,15 +35,15 @@ from pypfopt import (
     expected_returns,
     risk_models,
 )
-from pypfopt.discrete_allocation import DiscreteAllocation
 from pypfopt.hierarchical_portfolio import HRPOpt
 
 Objective = Literal["max_sharpe", "min_volatility", "hrp"]
 
-# A suggested weight this far below the current weight, and itself under
-# SELL_THRESHOLD, reads as "close the position" rather than "trim it".
-SELL_THRESHOLD = 0.01
-ACTION_BAND = 0.05  # +/- 5 percentage points is treated as HOLD
+# A model weight under this is "the model leaves it out".
+NOT_IN_MODEL_THRESHOLD = 0.01
+ACTION_BAND = 0.05  # within +/- 5 percentage points of the model counts as IN LINE
+
+RELATIONS = ("ABOVE MODEL", "IN LINE", "BELOW MODEL", "NOT IN MODEL")
 
 
 class Holding:
@@ -172,36 +175,27 @@ def optimize(
     }
 
 
-def discrete_allocation(
-    weights: dict[str, float],
-    latest_prices: dict[str, float],
-    total_value: float,
-) -> tuple[dict[str, int], float]:
-    prices = pd.Series({s: p for s, p in latest_prices.items() if s in weights})
-    da = DiscreteAllocation(weights, prices, total_portfolio_value=total_value)
-    allocation, leftover = da.greedy_portfolio()
-    return allocation, leftover
-
-
 def classify_actions(
     current_weights: dict[str, float],
     suggested_weights: dict[str, float],
 ) -> list[dict]:
-    """Per-symbol action label from the current vs. suggested weight."""
+    """Per symbol, how the user's weight compares with the model's weight.
+    The field keeps its old name, "action", so app builds already installed
+    still render it; the values are descriptive."""
     out = []
     symbols = set(current_weights) | set(suggested_weights)
     for sym in sorted(symbols):
         cur = current_weights.get(sym, 0.0)
         sug = suggested_weights.get(sym, 0.0)
         delta = sug - cur
-        if sug < SELL_THRESHOLD and cur > 0:
-            action = "SELL"
+        if sug < NOT_IN_MODEL_THRESHOLD and cur > 0:
+            action = "NOT IN MODEL"
         elif delta > ACTION_BAND:
-            action = "ADD"
+            action = "BELOW MODEL"      # the user holds less than the model mix
         elif delta < -ACTION_BAND:
-            action = "TRIM"
+            action = "ABOVE MODEL"
         else:
-            action = "HOLD"
+            action = "IN LINE"
         out.append({
             "symbol": sym,
             "current_weight": round(cur, 4),

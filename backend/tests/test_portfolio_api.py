@@ -28,7 +28,7 @@ def _validate_result(data, expect_weight_sum_1=True):
         assert abs(s - 1.0) < 0.01, f"weights sum={s}"
     for a in data["actions"]:
         assert set(a.keys()) >= {"symbol", "current_weight", "suggested_weight", "delta", "action"}
-        assert a["action"] in {"ADD", "HOLD", "TRIM", "SELL"}
+        assert a["action"] in {"ABOVE MODEL", "IN LINE", "BELOW MODEL", "NOT IN MODEL"}
     for k in ("expected_return", "volatility", "sharpe"):
         assert isinstance(data[k], (int, float))
 
@@ -42,13 +42,8 @@ def test_optimize_hrp():
     assert r.status_code == 200, r.text
     data = r.json()
     _validate_result(data)
-    # suggested_shares × current_price ≤ total_value if present
-    if data.get("suggested_shares") and data.get("current_prices") and data.get("total_value") is not None:
-        spent = sum(
-            data["suggested_shares"].get(s, 0) * data["current_prices"].get(s, 0)
-            for s in data["suggested_shares"]
-        )
-        assert spent <= data["total_value"] + 1e-6
+    # A comparison with the model, never a list of shares to buy.
+    assert "suggested_shares" not in data and "leftover_cash" not in data
 
 
 def test_optimize_max_sharpe():

@@ -141,7 +141,8 @@ export type PortfolioAction = {
   current_weight: number;
   suggested_weight: number;
   delta: number;
-  action: "ADD" | "HOLD" | "TRIM" | "SELL";
+  /** How the user's weight compares with the model's (descriptive, never a trade instruction). */
+  action: "ABOVE MODEL" | "IN LINE" | "BELOW MODEL" | "NOT IN MODEL";
 };
 
 export type PortfolioOptimizeResult = {
@@ -153,8 +154,6 @@ export type PortfolioOptimizeResult = {
   current_weights: Record<string, number>;
   suggested_weights: Record<string, number>;
   actions: PortfolioAction[];
-  suggested_shares: Record<string, number>;
-  leftover_cash: number;
   expected_return: number;
   volatility: number;
   sharpe: number;

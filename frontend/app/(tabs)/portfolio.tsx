@@ -13,15 +13,17 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { ScreenHeader } from "@/src/components/ScreenHeader";
-import { colors, fonts, spacing, BORDER, verdictColors } from "@/src/theme";
+import { colors, fonts, spacing, BORDER } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 import { useWatchlist } from "@/src/watchlist";
 import { api, Quote, SearchResult } from "@/src/api";
 import { ImportHoldings, ImportedHolding } from "@/src/components/ImportHoldings";
 import { trackEvent } from "@/src/firebase";
 
-// Portfolio tab: manual holdings + watchlist quick-add, then optimize against
-// PyPortfolioOpt via POST /api/portfolio/optimize. Holdings persist locally;
+// Portfolio tab: manual holdings + watchlist quick-add, then compare the
+// user's weights with a model mix from PyPortfolioOpt (POST
+// /api/portfolio/optimize). The result is described, never prescribed: labels
+// say how a weight compares with the model, not what to buy or sell. Holdings persist locally;
 // nothing here touches the analysis pipeline — the backend endpoint only
 // *reads* cached verdicts when "Use agent views" is on.
 
@@ -194,7 +196,7 @@ export default function PortfolioScreen() {
 
   const runOptimize = async () => {
     if (holdings.length < 2) {
-      Alert.alert("Add more holdings", "Optimization needs at least 2 symbols.");
+      Alert.alert("Add more holdings", "The model comparison needs at least 2 holdings.");
       return;
     }
     setLoading(true);
@@ -227,8 +229,8 @@ export default function PortfolioScreen() {
 
   const actionsSorted = useMemo(() => {
     if (!result?.actions) return [];
-    const order: Record<string, number> = { SELL: 0, TRIM: 1, ADD: 2, HOLD: 3 };
-    return [...result.actions].sort((a: any, b: any) => order[a.action] - order[b.action]);
+    const order: Record<string, number> = { "NOT IN MODEL": 0, "ABOVE MODEL": 1, "BELOW MODEL": 2, "IN LINE": 3 };
+    return [...result.actions].sort((a: any, b: any) => (order[a.action] ?? 9) - (order[b.action] ?? 9));
   }, [result]);
 
   // --- Live P/L ---------------------------------------------------------
@@ -322,7 +324,7 @@ export default function PortfolioScreen() {
 
   return (
     <View style={styles.screen}>
-      <ScreenHeader title="PORTFOLIO" subtitle="Keep, trim or sell — optimized" />
+      <ScreenHeader title="PORTFOLIO" subtitle="Your holdings, P&L and model comparison" />
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}
         refreshControl={
@@ -424,7 +426,7 @@ export default function PortfolioScreen() {
                         </Text>
                         <Text
                           testID={`pl-gain-${r.symbol}`}
-                          style={[styles.plGain, { color: up ? verdictColors.BUY : verdictColors.SELL }]}
+                          style={[styles.plGain, { color: up ? colors.success : colors.error }]}
                         >
                           {up ? "+" : ""}
                           {fmtMoney(r.symbolPrefix, r.gain || 0)}
@@ -461,7 +463,7 @@ export default function PortfolioScreen() {
                     <Text
                       style={[
                         styles.plTotalValue,
-                        { color: (pl.totals.gain || 0) >= 0 ? verdictColors.BUY : verdictColors.SELL },
+                        { color: (pl.totals.gain || 0) >= 0 ? colors.success : colors.error },
                       ]}
                     >
                       {(pl.totals.gain || 0) >= 0 ? "+" : ""}
@@ -499,11 +501,11 @@ export default function PortfolioScreen() {
 
         {/* Controls */}
         {holdings.length > 0 && holdings.length < 2 ? (
-          <Text style={styles.hint}>Add at least one more holding to run the optimizer.</Text>
+          <Text style={styles.hint}>Add at least one more holding to compare with a model mix.</Text>
         ) : null}
         {holdings.length >= 2 ? (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>OPTIMIZE</Text>
+            <Text style={styles.cardTitle}>COMPARE WITH A MODEL MIX</Text>
             <View style={styles.objRow}>
               {OBJECTIVES.map((o) => {
                 const active = objective === o.id;
@@ -524,7 +526,7 @@ export default function PortfolioScreen() {
             </Pressable>
 
             <Pressable onPress={runOptimize} style={styles.runBtn} disabled={loading}>
-              {loading ? <ActivityIndicator color={colors.onSurfaceInverse} /> : <Text style={styles.runBtnText}>RUN OPTIMIZER</Text>}
+              {loading ? <ActivityIndicator color={colors.onSurfaceInverse} /> : <Text style={styles.runBtnText}>COMPARE WITH MODEL</Text>}
             </Pressable>
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
           </View>
@@ -533,7 +535,7 @@ export default function PortfolioScreen() {
         {/* Results */}
         {result ? (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>SUGGESTED ACTIONS</Text>
+            <Text style={styles.cardTitle}>YOUR WEIGHTS VS THE MODEL</Text>
             {result.missing_agent_view_for?.length ? (
               <View style={styles.missingBox}>
                 <Text style={styles.note}>
@@ -559,7 +561,7 @@ export default function PortfolioScreen() {
               </View>
             ) : null}
             {actionsSorted.map((a: any) => {
-              const { bg, fg } = verdictColors(a.action === "ADD" ? "BUY" : a.action === "SELL" ? "SELL" : "HOLD");
+              const { bg, fg } = RELATION_COLORS[a.action] || RELATION_COLORS["IN LINE"];
               return (
                 <View key={a.symbol} style={styles.actionRow}>
                   <View style={[styles.actionBadge, { backgroundColor: bg }]}>
@@ -567,26 +569,37 @@ export default function PortfolioScreen() {
                   </View>
                   <Text style={styles.actionSymbol}>{a.symbol}</Text>
                   <Text style={styles.actionWeights}>
-                    {fmtPct(a.current_weight)} {"→"} {fmtPct(a.suggested_weight)}
+                    {fmtPct(a.current_weight)} yours · {fmtPct(a.suggested_weight)} model
                   </Text>
                 </View>
               );
             })}
             <View style={styles.statsRow}>
-              <Stat label="EXP. RETURN" value={fmtPct(result.expected_return)} />
-              <Stat label="VOLATILITY" value={fmtPct(result.volatility)} />
-              <Stat label="SHARPE" value={result.sharpe.toFixed(2)} />
+              <Stat label="MODEL RETURN (PAST)" value={fmtPct(result.expected_return)} />
+              <Stat label="MODEL VOLATILITY" value={fmtPct(result.volatility)} />
+              <Stat label="MODEL SHARPE" value={result.sharpe.toFixed(2)} />
             </View>
             {result.dropped_symbols?.length ? (
               <Text style={styles.note}>Skipped (insufficient history): {result.dropped_symbols.join(", ")}</Text>
             ) : null}
-            <Text style={styles.note}>Not financial advice — an allocation model, not a guarantee.</Text>
+            <Text style={styles.note}>
+              A mathematical model mix of your own holdings, from past prices. It shows how your weights differ from
+              the model&apos;s — not what to buy or sell. Not investment advice.
+            </Text>
           </View>
         ) : null}
       </ScrollView>
     </View>
   );
 }
+
+// Neutral colours on purpose: buy/sell green and red would read as advice.
+const RELATION_COLORS: Record<string, { bg: string; fg: string }> = {
+  "ABOVE MODEL": { bg: colors.warning, fg: colors.onWarning },
+  "BELOW MODEL": { bg: colors.info, fg: colors.onInfo },
+  "IN LINE": { bg: colors.surfaceTertiary, fg: colors.onSurface },
+  "NOT IN MODEL": { bg: colors.surfaceInverse, fg: colors.onSurfaceInverse },
+};
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
@@ -685,7 +698,7 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     gap: spacing.sm,
   },
-  actionBadge: { paddingHorizontal: spacing.sm, paddingVertical: 4, minWidth: 56, alignItems: "center" },
+  actionBadge: { paddingHorizontal: spacing.sm, paddingVertical: 4, minWidth: 96, alignItems: "center" },
   actionBadgeText: { fontFamily: fonts.monoBold, fontSize: 10 },
   actionSymbol: { flex: 1, fontFamily: fonts.monoBold, fontSize: 13, color: colors.onSurface },
   actionWeights: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurfaceTertiary },
