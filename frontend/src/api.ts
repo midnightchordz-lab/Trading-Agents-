@@ -1,6 +1,7 @@
 // API client for the TradingAgents backend.
 import * as Linking from "expo-linking";
 import { detectRegion } from "@/src/region";
+import { getInstallId } from "@/src/installId";
 import { File as FsFile } from "expo-file-system";
 import { Platform } from "react-native";
 
@@ -465,6 +466,7 @@ function friendlyStatus(status: number): string {
 
 async function j<T>(path: string, opts?: RequestInit): Promise<T> {
   const token = authTokenGetter ? await authTokenGetter() : null;
+  const installId = await getInstallId();
   const res = await fetch(`${API}${path}`, {
     ...opts,
     headers: {
@@ -473,6 +475,7 @@ async function j<T>(path: string, opts?: RequestInit): Promise<T> {
       // produces an unparseable stream.
       ...(opts?.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(installId ? { "X-Install-Id": installId } : {}),
       ...(opts?.headers || {}),
     },
   });

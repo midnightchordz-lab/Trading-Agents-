@@ -28,6 +28,7 @@ from starlette.datastructures import UploadFile
 import trade_review as tr
 import tradebook_parsers as tp
 import tradebook_tabular as ttab
+import free_grants as fg
 import wallet as wal
 from core import db, logger, now_iso
 from deps import CONSENT_VERSION, WALLET_ENFORCEMENT_ENABLED, get_current_user, is_admin, wallet_key_for
@@ -90,7 +91,8 @@ async def claim_run(user: dict, st: dict) -> dict:
 
 
 @api_router.get("/trade-review/pricing")
-async def trade_review_pricing(user: dict = Depends(get_current_user)):
+async def trade_review_pricing(user: dict = Depends(get_current_user), request: Request = None):
+    await fg.claim_deferred(user, request)
     st = await billing_status(user)
     st.pop("wallet_key")
     return st
@@ -113,6 +115,7 @@ async def trade_review(request: Request, user: dict = Depends(get_current_user))
         if not (consent.get("agreed") and consent.get("version") == CONSENT_VERSION):
             raise HTTPException(status_code=403, detail="consent_required")
     # Refuse before reading or parsing anything when the run can't be paid for.
+    await fg.claim_deferred(user, request)
     st = await billing_status(user)
     if st["charged"] and st["free_left"] == 0 and st["balance"] < st["price"]:
         raise _payment_needed(st)

@@ -3695,6 +3695,11 @@ expo-apple-authentication@~57.0.2:
   resolved "https://registry.npmjs.org/expo-apple-authentication/-/expo-apple-authentication-57.0.2.tgz"
   integrity sha512-00KnlyRceRKski+ljZz8q8JhJZ4D3ZScU+Y0RqS6ElJ8GaCWfd7Qh5tMr47yIU/dKDrOnkzkFUM+6vyHS5HI7Q==
 
+expo-application@~57.0.0:
+  version "57.0.3"
+  resolved "https://registry.yarnpkg.com/expo-application/-/expo-application-57.0.3.tgz#92d3f386e5a02b978c377a24e7eb32d1fcee1edb"
+  integrity sha512-t/CxeLio0NjY9/cOak1tQp62/hAUjzJxmhR4rVUR7K5bb9YoEtfl1ZekTn+Iuh+dYOMYzF0l72ODMSmY3CR1NA==
+
 expo-asset@~57.0.16:
   version "57.0.16"
   resolved "https://registry.npmjs.org/expo-asset/-/expo-asset-57.0.16.tgz"

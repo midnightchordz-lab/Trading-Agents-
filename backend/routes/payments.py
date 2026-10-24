@@ -20,6 +20,7 @@ import auth as au
 from limits import limit_pay_callback, limit_pay_config, limit_pay_order, limit_poll
 import iap
 import razorpay_pay as rzp
+import free_grants as fg
 import wallet as wal
 from core import db, logger, now_iso
 from deps import (
@@ -177,11 +178,14 @@ async def pay_health():
 async def wallet_balance(
     device_id: Optional[str] = None,
     region: Optional[str] = None,
+    request: Request = None,
     user: Optional[dict] = Depends(require_user),
 ):
     key = wallet_key_for(user, device_id)
     if not key:
         raise HTTPException(status_code=400, detail="device_id is required")
+    # The wallet screen shows the free runs, so it claims held-back ones too.
+    user = await fg.claim_deferred(user, request)
     balance = await get_wallet_balance(key)
     admin = is_admin(user)
     free_credits = await get_free_credits_remaining(user)

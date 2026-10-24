@@ -11,10 +11,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel
 
+import free_grants as fg
 import wallet as wal
 from core import db, logger, now_iso
 from deps import (
@@ -50,7 +51,10 @@ class AnalyzeRequest(BaseModel):
     chart_reading_id: Optional[str] = None
 
 @api_router.post("/analyze", dependencies=[Depends(limit_analyze)])
-async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_user)):
+async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_user), request: Request = None):
+    # An account made on an old app version gets its held-back free runs the
+    # first time it is seen from a phone with the current app.
+    user = await fg.claim_deferred(user, request)
     symbol = (body.symbol or "").strip().upper()
     if not symbol or not re.match(r'^[A-Z0-9.\-\^=]{1,20}$', symbol):
         raise HTTPException(status_code=400, detail="Invalid ticker symbol")
@@ -98,7 +102,11 @@ async def analyze(body: AnalyzeRequest, user: Optional[dict] = Depends(require_u
     # hard block.
     launch_free_now = wal.is_launch_free_period(LAUNCH_FREE_UNTIL, datetime.now(timezone.utc))
     launch_free_daily_ok = False
-    if launch_free_now:
+    # Launch-free runs follow the same one-allowance-per-phone decision as the
+    # sign-up credits (see free_grants.py), so they need a signed-in account
+    # that wasn't refused a grant. Anonymous callers used to get them keyed on
+    # a random device id, which a script can mint endlessly.
+    if launch_free_now and fg.launch_free_allowed(user):
         launch_key = wallet_key_for(user, body.device_id)
         if not launch_key:
             raise HTTPException(status_code=400, detail="device_id is required")

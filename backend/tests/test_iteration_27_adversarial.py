@@ -82,7 +82,8 @@ def test_reviewer_end_to_end_verify_returns_a_working_token():
     r2 = requests.post(f"{BASE}/auth/otp/verify",
                        json={"identifier": REVIEW_IDENTIFIER,
                              "otp": REVIEW_OTP,
-                             "device_id": device_id}, timeout=10)
+                             "device_id": device_id},
+                       headers={"X-Install-Id": f"android:{uuid.uuid4().hex[:16]}"}, timeout=10)
     assert r2.status_code == 200, r2.text
     token = r2.json().get("token")
     assert token, "no token returned from verify"

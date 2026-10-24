@@ -80,7 +80,10 @@ def fresh_ip():
 def sign_up(email, device_id=None, ip=None, code="123456"):
     """A complete new-account sign-in through the real OTP endpoint."""
     seed_otp(email, code)
-    headers = {"Content-Type": "application/json"}
+    # A fresh phone per sign-up, as the current app sends: these tests are
+    # about the email/device/IP rules, not the one-grant-per-phone rule
+    # (tests/test_free_runs_per_device.py covers that).
+    headers = {"Content-Type": "application/json", "X-Install-Id": f"android:{uuid.uuid4().hex[:16]}"}
     if ip:
         # The ingress sets this; the guard reads the left-most entry.
         headers["X-Forwarded-For"] = ip

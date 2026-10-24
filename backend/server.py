@@ -268,6 +268,13 @@ async def ensure_payment_indexes():
     # Signup abuse guard reads these on every new account.
     await guarded_index("free_credit_grants.device_id",
                         lambda: db.free_credit_grants.create_index("device_id"))
+    # One grant per phone: unique, so two accounts signing up on one phone at
+    # the same moment cannot both record one. Partial, because older rows and
+    # web/old-app sign-ups carry no install hash.
+    await guarded_index("free_credit_grants.install_hash",
+                        lambda: db.free_credit_grants.create_index(
+                            "install_hash", unique=True,
+                            partialFilterExpression={"install_hash": {"$type": "string"}}))
     # Chart screenshot readings expire after 30 minutes (no image is stored).
     await guarded_index("chart_readings.expires_at",
                         lambda: db.chart_readings.create_index("expires_at", expireAfterSeconds=0))

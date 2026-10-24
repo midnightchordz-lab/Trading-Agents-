@@ -23,6 +23,7 @@ from pymongo import ReturnDocument
 import alerts
 import apple_revoke
 import auth as au
+import free_grants as fg
 import limits as lim
 import mailer
 import sms
@@ -286,13 +287,9 @@ async def signup_free_credits(device_id: Optional[str], request: Optional[Reques
 
 async def record_free_credit_grant(user_id: str, device_id: Optional[str], request: Optional[Request]) -> None:
     """Logged only when credits were actually granted, so a withheld grant
-    never consumes the allowance it was already denied."""
-    await db.free_credit_grants.insert_one({
-        "user_id": user_id,
-        "device_id": device_id,
-        "ip": client_ip(request),
-        "created_at": now_iso(),
-    })
+    never consumes the allowance it was already denied. Also records the
+    phone's install hash, which is what one-grant-per-phone counts."""
+    await fg.record_grant(user_id, device_id, request)
 
 
 async def otp_count_since(since: str, extra: Optional[dict] = None) -> int:
@@ -336,8 +333,9 @@ async def find_or_create_user(identifier_type: str, identifier: str,
     if existing:
         return existing
     granted = await signup_free_credits(device_id, request, identifier)
+    granted, free_state = await fg.gate_new_account(granted, request)
     user = {"id": str(uuid.uuid4()), "phone": None, "email": None, "google_sub": None,
-            "apple_sub": None, "free_credits_remaining": granted,
+            "apple_sub": None, **fg.new_account_fields(granted, free_state),
             # Which field the account actually verified at sign-in. Recorded so
             # the app can always show the identity the person signed in WITH,
             # never an address that arrived some other way (a payment receipt).
@@ -629,9 +627,10 @@ async def auth_session(body: GoogleSession, request: Request):
         # and signing back in with the same Google address must not mint a
         # second free grant either.
         granted = await signup_free_credits(body.device_id, request, email)
+        granted, free_state = await fg.gate_new_account(granted, request)
         user = {"id": str(uuid.uuid4()), "phone": None, "email": email, "google_sub": data.get("id"),
                 "apple_sub": None, "name": data.get("name"), "picture": data.get("picture"),
-                "free_credits_remaining": granted, "created_at": now_iso()}
+                **fg.new_account_fields(granted, free_state), "created_at": now_iso()}
         await db.users.insert_one({**user})
         if granted:
             await record_free_credit_grant(user["id"], body.device_id, request)
@@ -687,9 +686,10 @@ async def auth_apple(body: SocialSignIn, request: Request):
         # is nothing to key a tombstone on and the device/IP caps are all we
         # have — signup_free_credits skips the check on a falsy identifier.
         granted = await signup_free_credits(body.device_id, request, claims.get("email"))
+        granted, free_state = await fg.gate_new_account(granted, request)
         user = {"id": str(uuid.uuid4()), "phone": None, "email": claims.get("email"),
                 "google_sub": None, "apple_sub": claims.get("sub"),
-                "free_credits_remaining": granted, "created_at": now_iso()}
+                **fg.new_account_fields(granted, free_state), "created_at": now_iso()}
         await db.users.insert_one({**user})
         if granted:
             await record_free_credit_grant(user["id"], body.device_id, request)
@@ -716,7 +716,11 @@ async def store_apple_refresh_token(user_id: str, code: str) -> None:
 
 
 @api_router.get("/auth/me")
-async def auth_me(user: dict = Depends(get_current_user)):
+async def auth_me(user: dict = Depends(get_current_user), request: Request = None):
+    # The app calls this on every launch, so an account made on an old app
+    # version picks up its held-back free runs here once the phone has the
+    # current app.
+    user = await fg.claim_deferred(user, request)
     consent = user.get("consent") or {}
     return {
         "id": user["id"], "phone": user.get("phone"), "email": user.get("email"),
