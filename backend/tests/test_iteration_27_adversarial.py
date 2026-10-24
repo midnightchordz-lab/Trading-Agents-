@@ -105,7 +105,8 @@ def test_reviewer_end_to_end_verify_returns_a_working_token():
     remaining = wbody.get("free_credits_remaining")
     if remaining is None:
         remaining = wbody.get("free_credits")
-    assert remaining == 10, f"expected 10 free credits, got {remaining} ({wbody})"
+    expected = int(os.environ.get("FREE_CREDITS_ON_SIGNUP", "3"))
+    assert remaining == expected, f"expected {expected} free credits, got {remaining} ({wbody})"
 
 
 def test_a_different_identifier_cannot_sign_in_with_the_fixed_code():

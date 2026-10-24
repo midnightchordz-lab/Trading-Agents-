@@ -230,7 +230,7 @@ async def signup_free_credits(device_id: Optional[str], request: Optional[Reques
     Returns 0 rather than refusing the sign-in. The account is still created
     and fully usable — it just pays like everyone else. Blocking sign-in on a
     shared office or carrier-NAT address would lock out genuine users, which is
-    a far worse outcome than someone getting ten free analyses."""
+    a far worse outcome than someone getting a few free analyses."""
     ip = client_ip(request)
     if identifier:
         # The direct fix for the actual exploit path: delete the account,

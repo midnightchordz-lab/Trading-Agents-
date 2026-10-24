@@ -146,7 +146,7 @@ def has_launch_free_daily_quota(count_today: int) -> bool:
 
 
 # Every new account gets this many analyses before the wallet is needed.
-FREE_CREDITS_ON_SIGNUP = int(os.environ.get("FREE_CREDITS_ON_SIGNUP", "10"))
+FREE_CREDITS_ON_SIGNUP = int(os.environ.get("FREE_CREDITS_ON_SIGNUP", "3"))
 # A brand-new account gets FREE_CREDITS_ON_SIGNUP real LLM analyses, so a
 # disposable email address is worth exactly that much in free compute. These
 # two caps are what stops one person harvesting it repeatedly: a device may

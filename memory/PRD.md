@@ -140,7 +140,7 @@ TradingAgents (TauricResearch) is a multi-agent LLM framework that mirrors a rea
   gate and balance chip hide themselves with no client-side admin logic.
 
 ## Free trial credits (2026-06-18)
-- 10 free analyses per new account. `wallet.FREE_CREDITS_ON_SIGNUP=10`, `wallet.should_use_free_credit()`,
+- 3 free analyses per new account (was 10 until 24 Oct 2026). `wallet.FREE_CREDITS_ON_SIGNUP=3`, `wallet.should_use_free_credit()`,
   `server.get_free_credits_remaining()` (backfills legacy accounts) and `server.consume_free_credit()`
   (atomic `$inc -1` guarded by `free_credits_remaining > 0`, so concurrent runs can't double-spend the last one).
 - Precedence in /analyze: admin bypass -> free cached re-check -> free credit -> wallet charge -> 402.
