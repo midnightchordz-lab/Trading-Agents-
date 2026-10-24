@@ -227,7 +227,7 @@ export default function PortfolioScreen() {
 
   const runOptimize = async () => {
     if (holdings.length < 2) {
-      Alert.alert("Add more holdings", "The model comparison needs at least 2 holdings.");
+      Alert.alert("Add more stocks", "Comparing your split needs at least 2 stocks.");
       return;
     }
     setLoading(true);
@@ -355,7 +355,7 @@ export default function PortfolioScreen() {
 
   return (
     <View style={styles.screen}>
-      <ScreenHeader title="PORTFOLIO" subtitle="Your holdings, P&L and model comparison" />
+      <ScreenHeader title="PORTFOLIO" subtitle="Your stocks, profit and loss, and how your money is split" />
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}
         refreshControl={
