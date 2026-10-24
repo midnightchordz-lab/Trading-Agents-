@@ -13,6 +13,7 @@ offline.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -28,6 +29,16 @@ OUTLOOK_MAX_AGE_DAYS = 45
 
 _OUTLOOK = {"BULLISH": "Bullish", "BUY": "Bullish", "NEUTRAL": "Neutral", "HOLD": "Neutral",
             "BEARISH": "Bearish", "SELL": "Bearish"}
+
+
+def company_name(name: Optional[str]) -> Optional[str]:
+    """"The Tata Power Company Limited" -> "Tata Power Company": the legal
+    suffix and a leading "The" only make a phone-width row wrap."""
+    if not name:
+        return name
+    out = re.sub(r"[\s,]+(limited|ltd\.?|inc\.?|corporation|corp\.?|plc)$", "", name.strip(), flags=re.I)
+    out = re.sub(r"^the\s+", "", out, flags=re.I)
+    return out or name
 
 
 def cap_size(market_cap: Optional[float], currency: Optional[str]) -> Optional[str]:

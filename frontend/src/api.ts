@@ -33,6 +33,8 @@ export type FundSearchResult = {
   symbol: string; // "MF:<scheme code>"
   code: string;
   name: string;
+  short_name: string; // "Kotak Flexi Cap Fund"
+  plan: string; // "Direct · Growth"
   type: string;
   nav: number;
   nav_date: string;

@@ -112,13 +112,29 @@ def asset_kind(category: str) -> str:
     return "other"
 
 
-def parse_navall(text: str) -> dict[str, dict]:
-    """AMFI's NAVAll.txt -> {scheme_code: {code, name, nav, date, category, amc}}.
+def _plan_words(*parts: str) -> str:
+    """"Direct Plan", "Growth" -> "Direct · Growth"."""
+    words = [re.sub(r"\s+plan$", "", p.strip(), flags=re.I) for p in parts if p and p.strip() and p.strip() != "-"]
+    return " · ".join(words)
 
-    The file is ';'-separated rows of
-    Scheme Code;ISIN Payout/Growth;ISIN Reinvestment;Scheme Name;NAV;Date
-    under a category header line and a fund-house line. Rows whose NAV is
-    "N.A." or not a number are skipped."""
+
+def split_name(name: str) -> tuple[str, str]:
+    """"Kotak Flexi Cap Fund - Direct Plan - Growth" -> ("Kotak Flexi Cap Fund",
+    "Direct · Growth"). The short name is what a person calls the fund."""
+    head, _, tail = (name or "").partition(" - ")
+    return head.strip(), _plan_words(*tail.split(" - ")) if tail else ""
+
+
+def parse_navall(text: str) -> dict[str, dict]:
+    """AMFI's NAVAll.txt -> {scheme_code: {code, name, short_name, plan, nav,
+    date, category, amc}}.
+
+    ';'-separated rows under a category header line and a fund-house line, in
+    either of AMFI's two layouts:
+      Scheme Code;ISIN 1;ISIN 2;Scheme Name;NAV;Date
+      Scheme Code;ISIN 1;ISIN 2;Scheme Name;Plan;Option;NAV;Date   (the live file)
+    NAV and date are always the last two columns. Rows whose NAV is "N.A." or
+    not a number are skipped."""
     funds: dict[str, dict] = {}
     category, amc = "", ""
     for raw in (text or "").splitlines():
@@ -136,14 +152,20 @@ def parse_navall(text: str) -> dict[str, dict]:
         if len(parts) < 6 or not parts[0].isdigit():
             continue  # the column-title row, or something malformed
         try:
-            nav = float(parts[4].replace(",", ""))
+            nav = float(parts[-2].replace(",", ""))
         except ValueError:
             continue
         if nav <= 0:
             continue
+        if len(parts) >= 8:
+            short, plan = parts[3], _plan_words(parts[4], parts[5])
+            name = " - ".join(p for p in (parts[3], parts[4], parts[5]) if p and p != "-")
+        else:
+            name = parts[3]
+            short, plan = split_name(name)
         funds[parts[0]] = {
-            "code": parts[0], "name": parts[3], "nav": nav, "date": parts[5],
-            "category": category, "amc": amc,
+            "code": parts[0], "name": name, "short_name": short or name, "plan": plan,
+            "nav": nav, "date": parts[-1], "category": category, "amc": amc,
         }
     return funds
 
@@ -191,6 +213,7 @@ def search(query: str, limit: int = 12) -> list[dict]:
             hits.append((rank, f))
     hits.sort(key=lambda h: h[0])
     return [{"symbol": symbol_for(f["code"]), "code": f["code"], "name": f["name"],
+             "short_name": f.get("short_name") or f["name"], "plan": f.get("plan") or "",
              "type": plain_type(f["category"]), "nav": f["nav"], "nav_date": f["date"]}
             for _, f in hits[:limit]]
 

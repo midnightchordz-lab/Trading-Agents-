@@ -40,7 +40,54 @@ HDFC Mutual Fund
 ADVICE = re.compile(r"\b(buy|sell|hold|add|exit|remove|trim|switch|should|recommend|multibagger|accumulate)\b", re.I)
 
 
+# The live file's layout: Plan and Option get their own columns before NAV.
+NAVALL_LIVE = """Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;Net Asset Value;Date
+
+Open Ended Schemes(Equity Scheme - Flexi Cap Fund)
+
+PPFAS Mutual Fund
+
+122639;INF879O01027;-;Parag Parikh Flexi Cap Fund;Direct Plan;Growth;88.9695;23-Oct-2026
+122640;INF879O01019;-;Parag Parikh Flexi Cap Fund;Regular Plan;Growth;80.9965;23-Oct-2026
+153964;INF879O01AA1;-;Parag Parikh Flexi Cap Fund;Direct Plan;Monthly IDCW Payout;88.9699;23-Oct-2026
+"""
+
+
 # --- AMFI file ------------------------------------------------------------------
+
+def test_the_live_eight_column_layout_parses():
+    funds = mf.parse_navall(NAVALL_LIVE)
+    f = funds["122639"]
+    assert f["nav"] == pytest.approx(88.9695) and f["date"] == "23-Oct-2026"
+    assert f["name"] == "Parag Parikh Flexi Cap Fund - Direct Plan - Growth"
+    assert f["short_name"] == "Parag Parikh Flexi Cap Fund" and f["plan"] == "Direct · Growth"
+    assert funds["153964"]["plan"] == "Direct · Monthly IDCW Payout"
+    assert f["category"] == "Equity Scheme - Flexi Cap Fund"
+
+
+def test_search_works_on_the_live_layout(monkeypatch):
+    monkeypatch.setattr(mf, "all_funds", lambda: mf.parse_navall(NAVALL_LIVE))
+    res = mf.search("parag parikh flexi")
+    assert [r["code"] for r in res][:2] == ["122639", "153964"]   # Direct first, Growth first
+    assert res[0]["short_name"] == "Parag Parikh Flexi Cap Fund" and res[0]["type"] == "Flexi-cap fund"
+
+
+def test_six_column_names_are_split_too():
+    f = mf.parse_navall(NAVALL)["120586"]
+    assert f["short_name"] == "ICICI Prudential Bluechip Fund" and f["plan"] == "Direct · Growth"
+
+
+@pytest.mark.parametrize("raw,clean", [
+    ("The Tata Power Company Limited", "Tata Power Company"),
+    ("Tata Consultancy Services Limited", "Tata Consultancy Services"),
+    ("Infosys Ltd.", "Infosys"),
+    ("Apple Inc.", "Apple"),
+    ("Reliance Industries", "Reliance Industries"),
+    (None, None),
+])
+def test_company_names_lose_legal_suffixes(raw, clean):
+    assert preport.company_name(raw) == clean
+
 
 def test_the_nav_file_parses_with_categories_and_skips_unpriced_schemes():
     funds = mf.parse_navall(NAVALL)

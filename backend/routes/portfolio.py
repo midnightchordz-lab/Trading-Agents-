@@ -280,7 +280,7 @@ def _stock_item_sync(symbol: str) -> dict:
     out: dict = {"kind": "stock"}
     try:
         q = fetch_quote_sync(symbol)
-        out.update(price=q.get("price"), currency=q.get("currency"), name=q.get("name"))
+        out.update(price=q.get("price"), currency=q.get("currency"), name=preport.company_name(q.get("name")))
     except Exception as e:
         logger.info(f"portfolio report: quote for {symbol} failed: {e}")
         out.update(price=None)
@@ -301,7 +301,11 @@ def _fund_item_sync(code: str) -> dict:
     kind = mf.asset_kind(f["category"])
     return {
         "kind": "fund", "price": f["nav"], "price_date": f["date"], "currency": "INR",
-        "name": f["name"], "type": mf.plain_type(f["category"]), "asset_kind": kind,
+        # The short name ("Kotak Flexi Cap Fund") on the row, the plan and
+        # option with the type, so a phone-width row doesn't wrap mid-name.
+        "name": f.get("short_name") or f["name"],
+        "type": " · ".join(p for p in (mf.plain_type(f["category"]), f.get("plan")) if p),
+        "asset_kind": kind,
         "year_return": mf.year_return(code) if kind in ("equity", "hybrid", "debt") else None,
     }
 

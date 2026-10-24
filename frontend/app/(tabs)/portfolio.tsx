@@ -195,7 +195,7 @@ export default function PortfolioScreen() {
   const fundListOpen = mode === "fund" && fundQuery.trim().length >= 2 && !isFund(form.symbol);
 
   const pickFund = (r: FundSearchResult) => {
-    setForm((f) => ({ ...f, symbol: r.symbol, name: r.name }));
+    setForm((f) => ({ ...f, symbol: r.symbol, name: r.short_name || r.name }));
     setFundQuery(r.name);
     setFundResults([]);
   };
