@@ -96,5 +96,5 @@ def test_should_use_free_credit():
     assert w.should_use_free_credit("garbage") is False
 
 
-def test_free_credits_on_signup_is_ten():
-    assert w.FREE_CREDITS_ON_SIGNUP == 10
+def test_free_credits_on_signup_is_three():
+    assert w.FREE_CREDITS_ON_SIGNUP == 3

@@ -1,13 +1,13 @@
 """Backend verification for FREE_TRIAL_CREDITS spec.
 
 Covers:
- * New account gets 10 free credits, /wallet/balance reports enforcement_enabled false
+ * New account gets FREE_CREDITS_ON_SIGNUP (3) free credits, /wallet/balance reports enforcement_enabled false
  * Free credit spent before money (used_free_credit=true, balance unchanged)
  * Credits decrement across successive fresh analyses (different symbols)
  * Cached re-check does NOT burn a credit (served_from_cache free, credits unchanged)
  * Paywall after credits run out (402)
  * Paid path still works after credits exhausted
- * Legacy account backfill (missing field -> 10 on first balance read)
+ * Legacy account backfill (missing field -> FREE_CREDITS_ON_SIGNUP on first balance read)
  * No double-spend of the last credit under concurrency
  * Admin unaffected — admin_bypass, credits unchanged
 """
@@ -110,7 +110,7 @@ class TestNewAccountFreeCredits:
             r = requests.get(f"{BASE_URL}/api/wallet/balance", headers=headers, timeout=10)
             assert r.status_code == 200, r.text
             body = r.json()
-            assert body["free_credits_remaining"] == 10, body
+            assert body["free_credits_remaining"] == wal.FREE_CREDITS_ON_SIGNUP, body
             # Balance is 0 but enforcement is OFF because credits exist
             assert body["balance"] == 0.0
             assert body["enforcement_enabled"] is False, body
@@ -138,14 +138,14 @@ class TestFreeCreditSpending:
             # then used_free_credit should be false and credits unchanged.
             if b1.get("served_from_cache"):
                 assert b1["billed"] is False
-                assert _get_credits(uid) == 10, "cache-hit must not burn credit"
+                assert _get_credits(uid) == wal.FREE_CREDITS_ON_SIGNUP, "cache-hit must not burn credit"
                 # Do a different symbol we don't expect to be cached in identical state
             else:
                 assert b1["billed"] is False, b1
                 assert b1["used_free_credit"] is True, b1
-                assert b1["free_credits_remaining"] == 9, b1
+                assert b1["free_credits_remaining"] == wal.FREE_CREDITS_ON_SIGNUP - 1, b1
                 assert _get_balance(uid) == 0.0
-                assert _get_credits(uid) == 9
+                assert _get_credits(uid) == wal.FREE_CREDITS_ON_SIGNUP - 1
 
             # Second, DIFFERENT symbol -> another decrement
             r2 = requests.post(f"{BASE_URL}/api/analyze", headers=headers,
@@ -207,7 +207,7 @@ class TestCachedRecheckDoesNotBurnCredit:
         _set_balance(uid, 0.0)
         try:
             before = _get_credits(uid)
-            assert before == 10
+            assert before == wal.FREE_CREDITS_ON_SIGNUP
 
             r = requests.post(f"{BASE_URL}/api/analyze", headers=headers,
                               json={"symbol": "AAPL", "language": "en"}, timeout=30)
@@ -217,7 +217,7 @@ class TestCachedRecheckDoesNotBurnCredit:
             assert body.get("billed") is False, body
             # This is the critical assertion: no credit consumed
             after = _get_credits(uid)
-            assert after == 10, f"cached re-check consumed a credit: {before} -> {after}"
+            assert after == wal.FREE_CREDITS_ON_SIGNUP, f"cached re-check consumed a credit: {before} -> {after}"
 
             # The response for a cached hit does NOT necessarily include
             # used_free_credit/free_credits_remaining (it returns the cached
@@ -307,12 +307,12 @@ class TestLegacyAccountBackfill:
             r = requests.get(f"{BASE_URL}/api/wallet/balance", headers=headers, timeout=10)
             assert r.status_code == 200, r.text
             body = r.json()
-            assert body["free_credits_remaining"] == 10
+            assert body["free_credits_remaining"] == wal.FREE_CREDITS_ON_SIGNUP
 
             # PERSISTED in Mongo
             post = _db.users.find_one({"id": uid})
             assert "free_credits_remaining" in post, post
-            assert post["free_credits_remaining"] == 10
+            assert post["free_credits_remaining"] == wal.FREE_CREDITS_ON_SIGNUP
         finally:
             _cleanup_user(uid)
 
@@ -431,7 +431,7 @@ class TestAdminUnaffected:
         # Admins still have the free_credits_remaining field on signup —
         # confirm it's not decremented by /analyze
         before = _get_credits(uid)
-        assert before == 10
+        assert before == wal.FREE_CREDITS_ON_SIGNUP
         try:
             r = requests.post(f"{BASE_URL}/api/analyze", headers=headers,
                               json={"symbol": "GOOGL", "language": "en"}, timeout=30)
