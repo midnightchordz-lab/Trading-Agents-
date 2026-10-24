@@ -45,3 +45,25 @@ free runs). Offline suites: 159 passed.
    invalid-but-regex-valid ticker that breaks the pipeline), confirm the
    analysis ends `status: "error"` with `refunded: true` and the wallet is back
    to ₹100. A normal successful run must still cost ₹20. Restore everything.
+
+## Follow-up: a dead AI desk now counts as a failure (branch feature/llm-failure-refund)
+Emergent's live test showed `safe_agent` turns every LLM error into fallback
+text, so with the AI service down the run still "completed" (a report of
+"Analysis unavailable." and a default verdict) and was charged — the refund
+never triggered.
+
+`pipeline.py` now counts agent calls and failures per run (a ContextVar set in
+`run_analysis`; empty answers count as failures). Right after the Portfolio
+Manager call — before the round-table and timeframe calls — the run raises
+`DeskUnavailable` if the final-verdict call failed or half or more of all
+calls failed. The analysis ends `status: "error"` with "The AI desk couldn't be
+reached…", and `_run_and_refund` returns the charge. A single agent hiccup in an
+otherwise healthy run still completes.
+
+Tests: `backend/tests/test_desk_unavailable.py` (6) runs the real pipeline
+offline with the LLM faked as down / PM-only failing / one blip / empty answers,
+plus an end-to-end refund. Offline suites: 176 passed.
+
+Verify (Emergent): with a TEST account and an invalid EMERGENT_LLM_KEY in a
+local shell for one run, the analysis must now end "error", `refunded: true`,
+and the wallet must be unchanged. Restore the key without printing it.

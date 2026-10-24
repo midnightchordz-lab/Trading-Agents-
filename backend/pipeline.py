@@ -9,6 +9,7 @@ import asyncio
 import json
 import re
 import uuid
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -126,7 +127,28 @@ TIMEFRAME_SYS = (
 TOTAL_STEPS = 13
 
 
+# Per-run count of agent calls and how many failed. safe_agent keeps a run
+# going when one agent errors (a single hiccup shouldn't sink a whole
+# analysis), but if the AI service itself is down every agent "succeeds" with
+# its fallback text and the user would pay for a report of fallbacks. The
+# count lets run_analysis tell the two apart (see desk_unavailable).
+_RUN_HEALTH: ContextVar[Optional[dict]] = ContextVar("run_health", default=None)
+
+
+class DeskUnavailable(Exception):
+    """Too many agent calls failed for the analysis to mean anything."""
+
+
+def desk_unavailable(health: dict, verdict_failed: bool) -> bool:
+    """True when the final-verdict call failed, or half or more of all agent
+    calls so far failed."""
+    return verdict_failed or (health["calls"] > 0 and health["failed"] * 2 >= health["calls"])
+
+
 async def safe_agent(system_message: str, user_text: str, fallback: str = "Analysis unavailable.") -> str:
+    health = _RUN_HEALTH.get()
+    if health is not None:
+        health["calls"] += 1
     try:
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
@@ -135,9 +157,13 @@ async def safe_agent(system_message: str, user_text: str, fallback: str = "Analy
         ).with_model(MODEL_PROVIDER, MODEL_NAME)
         resp = await asyncio.wait_for(chat.send_message(UserMessage(text=user_text)), timeout=120)
         text = (resp or "").strip()
+        if not text and health is not None:
+            health["failed"] += 1
         return text or fallback
     except Exception as e:
         logger.warning(f"agent call failed: {e}")
+        if health is not None:
+            health["failed"] += 1
         return fallback
 
 
@@ -469,6 +495,8 @@ async def append_message(analysis_id: str, message: dict, step: int):
 # The multi-agent pipeline
 # ----------------------------------------------------------------------------
 async def run_analysis(analysis_id: str, symbol: str, language: str = "en", chart_reading: Optional[dict] = None):
+    health = {"calls": 0, "failed": 0}
+    health_token = _RUN_HEALTH.set(health)
     try:
         quote = None
         try:
@@ -596,11 +624,17 @@ async def run_analysis(analysis_id: str, symbol: str, language: str = "en", char
             f"{analyst_summary}\n\nDEBATE:\n{debate_text}\n\nRESEARCH MANAGER:\n{rm_content}"
             f"\n\nTRADER:\n{tr_content}\n\nRISK MANAGER:\n{rk_content}"
         )
+        failed_before_pm = health["failed"]
         pm_raw = await safe_agent(
             PM_SYS + lang_directive,
             f"{ctx}\n\nFULL DESK TRANSCRIPT:\n{full_transcript}\n\nSet the FINAL outlook for {symbol}. Output ONLY the JSON object.",
             fallback="{}",
         )
+        # Stop here, before the round-table and timeframe calls, if the desk
+        # was effectively down: the run ends as an error, and the caller
+        # refunds what it cost (routes/analysis._run_and_refund).
+        if desk_unavailable(health, verdict_failed=health["failed"] > failed_before_pm):
+            raise DeskUnavailable(f"{health['failed']} of {health['calls']} agent calls failed")
         verdict = parse_verdict(pm_raw)
         step += 1
         sentiment = {"BUY": "bullish", "SELL": "bearish", "HOLD": "neutral"}.get(verdict["decision"], "neutral")
@@ -650,12 +684,21 @@ async def run_analysis(analysis_id: str, symbol: str, language: str = "en", char
             {"$set": {"status": "completed", "verdict": verdict, "debate": debate, "timeframes": timeframes, "grounding": grounding, "current_step": TOTAL_STEPS, "updated_at": now_iso()}},
         )
         logger.info(f"analysis {analysis_id} for {symbol} completed: {verdict['decision']}")
+    except DeskUnavailable as e:
+        logger.error(f"analysis {analysis_id} for {symbol}: AI desk unavailable ({e})")
+        await db.analyses.update_one(
+            {"id": analysis_id},
+            {"$set": {"status": "error", "error": "The AI desk couldn't be reached, so this analysis wasn't completed.",
+                      "updated_at": now_iso()}},
+        )
     except Exception as e:
         logger.exception("analysis pipeline failed")
         await db.analyses.update_one(
             {"id": analysis_id},
             {"$set": {"status": "error", "error": str(e), "updated_at": now_iso()}},
         )
+    finally:
+        _RUN_HEALTH.reset(health_token)
 
 
 # ----------------------------------------------------------------------------
