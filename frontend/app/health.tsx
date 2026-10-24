@@ -64,16 +64,21 @@ export default function HealthScreen() {
   const [report, setReport] = useState<HealthReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fundCount, setFundCount] = useState(0);
 
   useEffect(() => {
     (async () => {
       // The helper is typed for scalars but JSON-encodes anything; the Portfolio
       // tab stores the holdings array the same way.
-      setHoldings(
+      const all =
         ((await storage.getItem(KEY_HOLDINGS, null)) as unknown as
           | Holding[]
-          | null) || [],
-      );
+          | null) || [];
+      // Mutual funds ("MF:<code>") have no daily price history from Yahoo, so
+      // the health check covers stocks only for now and says so.
+      const stocks = all.filter((h) => !h.symbol.startsWith("MF:"));
+      setHoldings(stocks);
+      setFundCount(all.length - stocks.length);
       setCash(Number(await storage.getItem(KEY_CASH, "0")) || 0);
       setTargets(
         ((await storage.getItem(KEY_TARGETS, null)) as unknown as Partial<
@@ -144,8 +149,9 @@ export default function HealthScreen() {
         {!holdings.length ? (
           <View style={styles.card}>
             <Text style={styles.body}>
-              Add your holdings on the Portfolio tab first — the health check
-              reads them from there.
+              {fundCount
+                ? "The health check covers stocks only for now. Add at least one stock on the Portfolio tab."
+                : "Add your holdings on the Portfolio tab first — the health check reads them from there."}
             </Text>
           </View>
         ) : (
@@ -155,6 +161,9 @@ export default function HealthScreen() {
               {holdings.length > 1 ? "s" : ""}
               {cash ? " and cash" : ""} against the past year of prices. Free ·
               no AI · takes a few seconds.
+              {fundCount
+                ? ` Your ${fundCount} mutual fund${fundCount > 1 ? "s are" : " is"} not included yet.`
+                : ""}
             </Text>
             <Pressable
               onPress={() => setEditingTargets((v) => !v)}

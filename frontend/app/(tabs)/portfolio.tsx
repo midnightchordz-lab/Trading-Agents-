@@ -16,7 +16,7 @@ import { ScreenHeader } from "@/src/components/ScreenHeader";
 import { colors, fonts, spacing, BORDER } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 import { useWatchlist } from "@/src/watchlist";
-import { api, Quote, SearchResult } from "@/src/api";
+import { api, FundSearchResult, PortfolioReport, SearchResult } from "@/src/api";
 import { ImportHoldings, ImportedHolding } from "@/src/components/ImportHoldings";
 import { trackEvent } from "@/src/firebase";
 
@@ -27,7 +27,11 @@ import { trackEvent } from "@/src/firebase";
 // nothing here touches the analysis pipeline — the backend endpoint only
 // *reads* cached verdicts when "Use agent views" is on.
 
-type Holding = { symbol: string; quantity: string; avgPrice: string };
+// A mutual fund is stored as symbol "MF:<AMFI scheme code>" with its name;
+// quantity is units and avgPrice the average NAV paid.
+type Holding = { symbol: string; quantity: string; avgPrice: string; name?: string };
+
+const isFund = (symbol: string) => symbol.startsWith("MF:");
 type Objective = "hrp" | "max_sharpe" | "min_volatility";
 
 const KEY_HOLDINGS = "portfolio:holdings";
@@ -76,17 +80,30 @@ function summarize(actions: any[]): string {
   return `Compared with the sample mix, you have ${parts.join(", and ")}.`;
 }
 
-function fmtMoney(symbol: string, n: number) {
-  return `${n < 0 ? "-" : ""}${symbol}${Math.abs(n).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
 const CURRENCY_SYMBOLS: Record<string, string> = { USD: "$", INR: "\u20b9", GBP: "\u00a3", EUR: "\u20ac" };
 
-function currencySymbol(code?: string) {
+function currencySymbol(code?: string | null) {
   return CURRENCY_SYMBOLS[(code || "").toUpperCase()] || (code ? `${code} ` : "");
+}
+
+// ₹3,74,000 for rupees (Indian grouping), $1,234 otherwise; paise/cents only
+// on small amounts where they matter.
+function money(currency: string | null | undefined, n: number) {
+  const small = Math.abs(n) < 1000;
+  const body = Math.abs(n).toLocaleString((currency || "").toUpperCase() === "INR" ? "en-IN" : "en-US", {
+    minimumFractionDigits: small ? 2 : 0,
+    maximumFractionDigits: small ? 2 : 0,
+  });
+  return `${n < 0 ? "-" : ""}${currencySymbol(currency)}${body}`;
+}
+
+function signedPct(n: number) {
+  return `${n >= 0 ? "+" : ""}${(n * 100).toFixed(1)}%`;
+}
+
+function shortDate(iso: string) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 }
 
 export default function PortfolioScreen() {
@@ -98,16 +115,21 @@ export default function PortfolioScreen() {
   const [objective, setObjective] = useState<Objective>("hrp");
   const [useAgentViews, setUseAgentViews] = useState(false);
   const [form, setForm] = useState<Holding>({ symbol: "", quantity: "", avgPrice: "" });
+  const [mode, setMode] = useState<"stock" | "fund">("stock");
+  const [fundQuery, setFundQuery] = useState("");
+  const [fundResults, setFundResults] = useState<FundSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [analyzingMissing, setAnalyzingMissing] = useState<string | null>(null); // symbol currently being analyzed
-  // Live prices for the P/L panel. Kept separate from `result` so a failed or
-  // never-run optimization still shows the user what their positions are worth.
-  const [quotes, setQuotes] = useState<Record<string, Quote>>({});
-  const [quotesLoading, setQuotesLoading] = useState(false);
+  // The portfolio report (POST /api/portfolio/report): every stock and fund
+  // priced, with its type and a short "what we see" line. Kept separate from
+  // `result` so it shows whether or not the comparison has been run.
+  const [report, setReport] = useState<PortfolioReport | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   // Symbol search-as-you-type (mirrors the Analyze tab's search), so the user
   // doesn't need to already know the exact ticker.
@@ -143,6 +165,49 @@ export default function PortfolioScreen() {
     setSearchResults([]);
   };
 
+  // Fund search by name, from AMFI's list of every scheme.
+  useEffect(() => {
+    const q = fundQuery.trim();
+    // Nothing to fetch: the list is hidden by `fundListOpen` below instead of
+    // being cleared here, so this effect never sets state synchronously.
+    if (mode !== "fund" || q.length < 2 || isFund(form.symbol)) return;
+    let cancelled = false;
+    const t = setTimeout(() => {
+      setSearching(true);
+      api
+        .fundSearch(q)
+        .then((r) => {
+          if (!cancelled) setFundResults(r.results.slice(0, 8));
+        })
+        .catch(() => {
+          if (!cancelled) setFundResults([]);
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [fundQuery, mode, form.symbol]);
+
+  const fundListOpen = mode === "fund" && fundQuery.trim().length >= 2 && !isFund(form.symbol);
+
+  const pickFund = (r: FundSearchResult) => {
+    setForm((f) => ({ ...f, symbol: r.symbol, name: r.name }));
+    setFundQuery(r.name);
+    setFundResults([]);
+  };
+
+  const switchMode = (next: "stock" | "fund") => {
+    setMode(next);
+    setForm({ symbol: "", quantity: "", avgPrice: "" });
+    setFundQuery("");
+    setSearchResults([]);
+    setFundResults([]);
+  };
+
   useEffect(() => {
     (async () => {
       const saved = await storage.getItem<Holding[]>(KEY_HOLDINGS, []);
@@ -160,17 +225,30 @@ export default function PortfolioScreen() {
   const addHolding = () => {
     const symbol = form.symbol.trim().toUpperCase();
     const quantity = Number(form.quantity);
-    const avgPrice = Number(form.avgPrice);
-    if (!symbol || !quantity || !avgPrice) {
-      Alert.alert("Missing details", "Symbol, quantity and average price are required.");
+    // For a fund the form asks for the amount invested (what statements show)
+    // and stores the average NAV paid, so the maths is the same as a stock's.
+    const avgPrice = mode === "fund" ? Number(form.avgPrice) / quantity : Number(form.avgPrice);
+    if (mode === "fund" && !isFund(symbol)) {
+      Alert.alert("Pick a fund", "Search for the fund by name and pick it from the list.");
+      return;
+    }
+    if (!symbol || !quantity || !avgPrice || !isFinite(avgPrice)) {
+      Alert.alert(
+        "Missing details",
+        mode === "fund" ? "Fund, units and amount invested are required." : "Symbol, quantity and average price are required."
+      );
       return;
     }
     if (holdings.some((h) => h.symbol === symbol)) {
-      Alert.alert("Already added", `${symbol} is already in the portfolio.`);
+      Alert.alert("Already added", `${form.name || symbol} is already in the portfolio.`);
       return;
     }
-    persist([...holdings, { symbol, quantity: String(quantity), avgPrice: String(avgPrice) }]);
+    persist([
+      ...holdings,
+      { symbol, quantity: String(quantity), avgPrice: String(avgPrice), ...(form.name ? { name: form.name } : {}) },
+    ]);
     setForm({ symbol: "", quantity: "", avgPrice: "" });
+    setFundQuery("");
     setSearchResults([]);
   };
 
@@ -224,9 +302,12 @@ export default function PortfolioScreen() {
   };
 
   const quickAddable = watchlist.filter((w) => !holdings.some((h) => h.symbol === w.symbol));
+  // The comparison works from daily stock prices, so funds sit it out.
+  const stockHoldings = holdings.filter((h) => !isFund(h.symbol));
+  const fundCount = holdings.length - stockHoldings.length;
 
   const runOptimize = async () => {
-    if (holdings.length < 2) {
+    if (stockHoldings.length < 2) {
       Alert.alert("Add more stocks", "Comparing your split needs at least 2 stocks.");
       return;
     }
@@ -235,7 +316,7 @@ export default function PortfolioScreen() {
     setResult(null);
     try {
       const body = {
-        holdings: holdings.map((h) => ({
+        holdings: stockHoldings.map((h) => ({
           symbol: h.symbol,
           quantity: Number(h.quantity),
           avg_price: Number(h.avgPrice),
@@ -264,94 +345,58 @@ export default function PortfolioScreen() {
     return [...result.actions].sort((a: any, b: any) => (order[a.action] ?? 9) - (order[b.action] ?? 9));
   }, [result]);
 
-  // --- Live P/L ---------------------------------------------------------
-  const symbols = useMemo(() => holdings.map((h) => h.symbol).join(","), [holdings]);
+  // --- Portfolio report -------------------------------------------------
+  const holdingsKey = useMemo(
+    () => JSON.stringify(holdings.map((h) => [h.symbol, h.quantity, h.avgPrice])),
+    [holdings]
+  );
 
-  const refreshQuotes = useCallback(async () => {
-    const list = symbols ? symbols.split(",") : [];
+  const refreshReport = useCallback(async () => {
+    const list: Holding[] = JSON.parse(holdingsKey).map(([symbol, quantity, avgPrice]: string[]) => ({
+      symbol,
+      quantity,
+      avgPrice,
+    }));
     if (list.length === 0) {
-      setQuotes({});
+      setReport(null);
       return;
     }
-    setQuotesLoading(true);
-    const results = await Promise.all(
-      list.map((s) =>
-        api
-          .quote(s)
-          .then((q) => [s, q] as const)
-          .catch(() => [s, null] as const)
-      )
-    );
-    // A symbol whose quote failed keeps whatever it had rather than flashing
-    // to "—": a single upstream hiccup shouldn't blank the whole panel.
-    setQuotes((prev) => {
-      const next = { ...prev };
-      for (const [s, q] of results) if (q) next[s] = q;
-      return next;
-    });
-    setQuotesLoading(false);
-  }, [symbols]);
+    setReportLoading(true);
+    try {
+      const res = await api.portfolioReport({
+        holdings: list.map((h) => ({ symbol: h.symbol, quantity: Number(h.quantity), avg_price: Number(h.avgPrice) })),
+        cash: 0,
+      });
+      setReport(res);
+      setReportError(null);
+    } catch (e: any) {
+      // Keep the last good report on screen rather than blanking it.
+      setReportError(e?.message || "Couldn't refresh prices.");
+    } finally {
+      setReportLoading(false);
+    }
+  }, [holdingsKey]);
 
   useEffect(() => {
-    refreshQuotes();
-  }, [refreshQuotes]);
+    refreshReport();
+  }, [refreshReport]);
 
   useFocusEffect(
     useCallback(() => {
-      refreshQuotes();
-    }, [refreshQuotes])
+      refreshReport();
+    }, [refreshReport])
   );
 
-  const pl = useMemo(() => {
-    const rows = holdings.map((h) => {
-      const qty = Number(h.quantity) || 0;
-      const avg = Number(h.avgPrice) || 0;
-      const q = quotes[h.symbol];
-      const price = q?.price ?? null;
-      const cost = qty * avg;
-      const value = price != null ? qty * price : null;
-      const gain = value != null ? value - cost : null;
-      return {
-        symbol: h.symbol,
-        qty,
-        avg,
-        price,
-        cost,
-        value,
-        gain,
-        gainPct: gain != null && cost > 0 ? gain / cost : null,
-        dayPct: q?.changePercent ?? null,
-        currency: q?.currency,
-        symbolPrefix: currencySymbol(q?.currency),
-      };
+  const reportRows = useMemo(() => {
+    const bySymbol = Object.fromEntries((report?.rows || []).map((r) => [r.symbol, r]));
+    const order = (report?.rows || []).map((r) => r.symbol);
+    const sorted = [...holdings].sort((a, b) => {
+      const ia = order.indexOf(a.symbol);
+      const ib = order.indexOf(b.symbol);
+      return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
     });
-    const priced = rows.filter((r) => r.value != null);
-    // Holdings can sit in different currencies (an NSE stock and a US one), and
-    // adding those numbers together would be a lie. The total is only shown
-    // when every priced holding shares one currency.
-    const currencies = new Set(priced.map((r) => (r.currency || "").toUpperCase()));
-    const single = currencies.size === 1 ? [...currencies][0] : null;
-    const cashNum = Number(cash) || 0;
-    const cost = priced.reduce((s, r) => s + r.cost, 0);
-    const value = priced.reduce((s, r) => s + (r.value || 0), 0);
-    return {
-      rows,
-      totals:
-        single && priced.length > 0
-          ? {
-              prefix: currencySymbol(single),
-              cost,
-              value,
-              cash: cashNum,
-              gain: value - cost,
-              gainPct: cost > 0 ? (value - cost) / cost : null,
-              mixed: false,
-            }
-          : priced.length > 0
-            ? { mixed: true as const }
-            : null,
-    };
-  }, [holdings, quotes, cash]);
+    return sorted.map((h) => ({ h, r: bySymbol[h.symbol] }));
+  }, [holdings, report]);
 
   return (
     <View style={styles.screen}>
@@ -359,12 +404,28 @@ export default function PortfolioScreen() {
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}
         refreshControl={
-          <RefreshControl refreshing={quotesLoading} onRefresh={refreshQuotes} tintColor={colors.onSurface} />
+          <RefreshControl refreshing={reportLoading} onRefresh={refreshReport} tintColor={colors.onSurface} />
         }
       >
         {/* Add holding */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>ADD HOLDING</Text>
+          <View style={styles.modeRow}>
+            {(["stock", "fund"] as const).map((m) => (
+              <Pressable
+                key={m}
+                testID={`add-mode-${m}`}
+                onPress={() => switchMode(m)}
+                style={[styles.modeChip, mode === m && styles.modeChipOn]}
+              >
+                <Text style={[styles.modeChipText, mode === m && styles.modeChipTextOn]}>
+                  {m === "stock" ? "STOCK" : "MUTUAL FUND"}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          {mode === "stock" ? (
+            <>
           <View style={styles.formRow}>
             <View style={{ flex: 1.4 }}>
               <TextInput
@@ -412,6 +473,60 @@ export default function PortfolioScreen() {
               <Text style={styles.addBtnText}>ADD</Text>
             </Pressable>
           </View>
+            </>
+          ) : (
+            <>
+              <TextInput
+                testID="fund-search"
+                placeholder="SEARCH FUND NAME (e.g. PARAG PARIKH FLEXI)"
+                value={fundQuery}
+                onChangeText={(t) => {
+                  setFundQuery(t);
+                  if (isFund(form.symbol)) setForm((f) => ({ ...f, symbol: "", name: undefined }));
+                }}
+                style={styles.input}
+                placeholderTextColor={colors.onSurfaceTertiary}
+              />
+              {fundListOpen && fundResults.length > 0 ? (
+                <View style={styles.fundDropdown}>
+                  {fundResults.map((r) => (
+                    <Pressable key={r.symbol} onPress={() => pickFund(r)} style={styles.searchRow}>
+                      <Text style={styles.fundName} numberOfLines={2}>
+                        {r.name}
+                      </Text>
+                      <Text style={styles.searchName} numberOfLines={1}>
+                        {r.type} · NAV ₹{r.nav} ({r.nav_date})
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : searching && fundListOpen ? (
+                <ActivityIndicator color={colors.onSurface} style={{ padding: spacing.sm }} />
+              ) : null}
+              <View style={[styles.formRow, { marginTop: spacing.sm }]}>
+                <TextInput
+                  placeholder="UNITS"
+                  value={form.quantity}
+                  onChangeText={(t) => setForm((f) => ({ ...f, quantity: t.replace(/[^0-9.]/g, "") }))}
+                  keyboardType="decimal-pad"
+                  style={[styles.input, { flex: 1 }]}
+                  placeholderTextColor={colors.onSurfaceTertiary}
+                />
+                <TextInput
+                  placeholder="AMOUNT INVESTED ₹"
+                  value={form.avgPrice}
+                  onChangeText={(t) => setForm((f) => ({ ...f, avgPrice: t.replace(/[^0-9.]/g, "") }))}
+                  keyboardType="decimal-pad"
+                  style={[styles.input, { flex: 1.4 }]}
+                  placeholderTextColor={colors.onSurfaceTertiary}
+                />
+                <Pressable testID="add-fund" onPress={addHolding} style={styles.addBtn}>
+                  <Text style={styles.addBtnText}>ADD</Text>
+                </Pressable>
+              </View>
+              <Text style={styles.hint}>Units and amount invested are on your fund statement or app.</Text>
+            </>
+          )}
           {quickAddable.length > 0 ? (
             <View style={styles.quickAddRow}>
               <Text style={styles.quickAddLabel}>FROM WATCHLIST:</Text>
@@ -431,82 +546,89 @@ export default function PortfolioScreen() {
           />
         </View>
 
-        {/* Current holdings */}
+        {/* Portfolio report: every stock and fund, priced, with what we see */}
         {holdings.length > 0 ? (
-          <View testID="live-pl-card" style={styles.card}>
+          <View testID="portfolio-report" style={styles.card}>
             <View style={styles.plHeaderRow}>
-              <Text style={styles.cardTitle}>HOLDINGS ({holdings.length})</Text>
-              {quotesLoading ? <ActivityIndicator size="small" color={colors.onSurfaceTertiary} /> : null}
+              <Text style={styles.cardTitle}>YOUR PORTFOLIO ({holdings.length})</Text>
+              {reportLoading ? <ActivityIndicator size="small" color={colors.onSurfaceTertiary} /> : null}
             </View>
-            {pl.rows.map((r) => {
-              const up = (r.gain ?? 0) >= 0;
+            {report?.totals ? (
+              <View testID="report-summary" style={styles.summaryBox}>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.plTotalLabel}>INVESTED</Text>
+                  <Text style={styles.plTotalValue}>{money(report.totals.currency, report.totals.invested)}</Text>
+                </View>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.plTotalLabel}>WORTH NOW</Text>
+                  <Text style={styles.plTotalValue}>{money(report.totals.currency, report.totals.value)}</Text>
+                </View>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.plTotalLabel}>RETURN</Text>
+                  <Text
+                    style={[
+                      styles.plTotalValue,
+                      { color: report.totals.gain >= 0 ? colors.success : colors.error },
+                    ]}
+                  >
+                    {report.totals.gain_pct != null ? `${signedPct(report.totals.gain_pct)} · ` : ""}
+                    {report.totals.gain >= 0 ? "+" : ""}
+                    {money(report.totals.currency, report.totals.gain)}
+                  </Text>
+                </View>
+                <Text style={styles.summaryCount}>
+                  {report.summary.up} up · {report.summary.down} down
+                </Text>
+              </View>
+            ) : report?.mixed_currencies ? (
+              <Text testID="pl-mixed-note" style={styles.hint}>
+                Holdings are priced in more than one currency, so a single total would be meaningless.
+              </Text>
+            ) : null}
+            {reportError ? <Text style={styles.hint}>{reportError}</Text> : null}
+            {reportRows.map(({ h, r }) => {
+              const up = (r?.gain ?? 0) >= 0;
               return (
-                <View key={r.symbol} style={styles.holdingRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.holdingSymbol}>{r.symbol}</Text>
-                    <Text style={styles.holdingDetail}>
-                      {r.qty} @ {r.avg}
-                      {r.price != null ? ` · NOW ${r.symbolPrefix}${r.price}` : " · PRICE UNAVAILABLE"}
+                <View key={h.symbol} testID={`report-row-${h.symbol}`} style={styles.reportRow}>
+                  <View style={styles.reportHead}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.reportName} numberOfLines={2}>
+                        {r?.name || h.name || shortName(h.symbol)}
+                      </Text>
+                      <Text style={styles.holdingDetail}>
+                        {r?.type || (isFund(h.symbol) ? "Mutual fund" : shortName(h.symbol))}
+                      </Text>
+                    </View>
+                    {r?.gain_pct != null ? (
+                      <Text style={[styles.reportPct, { color: up ? colors.success : colors.error }]}>
+                        {signedPct(r.gain_pct)}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Text style={styles.reportMoney}>
+                    {r
+                      ? `${money(r.currency || "INR", r.invested)} → ${r.value != null ? money(r.currency, r.value) : "—"}`
+                      : `${h.quantity} @ ${h.avgPrice}`}
+                  </Text>
+                  {r?.notes?.length || r?.outlook ? (
+                    <Text style={styles.reportNotes}>
+                      {[
+                        ...(r?.notes || []),
+                        ...(r?.outlook ? [`AI desk: ${r.outlook.label} (${shortDate(r.outlook.date)})`] : []),
+                      ].join(" · ")}
                     </Text>
-                  </View>
-                  <View style={styles.plNumbers}>
-                    {r.value != null ? (
-                      <>
-                        <Text testID={`pl-value-${r.symbol}`} style={styles.plValue}>
-                          {fmtMoney(r.symbolPrefix, r.value)}
-                        </Text>
-                        <Text
-                          testID={`pl-gain-${r.symbol}`}
-                          style={[styles.plGain, { color: up ? colors.success : colors.error }]}
-                        >
-                          {up ? "+" : ""}
-                          {fmtMoney(r.symbolPrefix, r.gain || 0)}
-                          {r.gainPct != null ? ` (${up ? "+" : ""}${fmtPct(r.gainPct)})` : ""}
-                        </Text>
-                      </>
-                    ) : (
-                      <Text style={styles.plGain}>—</Text>
-                    )}
-                  </View>
-                  <Pressable onPress={() => removeHolding(r.symbol)} hitSlop={8}>
+                  ) : null}
+                  <Pressable onPress={() => removeHolding(h.symbol)} hitSlop={8} style={styles.reportRemove}>
                     <Text style={styles.removeText}>REMOVE</Text>
                   </Pressable>
                 </View>
               );
             })}
-            {pl.totals ? (
-              pl.totals.mixed ? (
-                <Text testID="pl-mixed-note" style={styles.hint}>
-                  Holdings are priced in more than one currency, so a single total would be meaningless.
-                </Text>
-              ) : (
-                <View testID="pl-total" style={styles.plTotalBox}>
-                  <View style={styles.plTotalRow}>
-                    <Text style={styles.plTotalLabel}>INVESTED</Text>
-                    <Text style={styles.plTotalValue}>{fmtMoney(pl.totals.prefix!, pl.totals.cost!)}</Text>
-                  </View>
-                  <View style={styles.plTotalRow}>
-                    <Text style={styles.plTotalLabel}>MARKET VALUE</Text>
-                    <Text style={styles.plTotalValue}>{fmtMoney(pl.totals.prefix!, pl.totals.value!)}</Text>
-                  </View>
-                  <View style={styles.plTotalRow}>
-                    <Text style={styles.plTotalLabel}>TOTAL P/L</Text>
-                    <Text
-                      style={[
-                        styles.plTotalValue,
-                        { color: (pl.totals.gain || 0) >= 0 ? colors.success : colors.error },
-                      ]}
-                    >
-                      {(pl.totals.gain || 0) >= 0 ? "+" : ""}
-                      {fmtMoney(pl.totals.prefix!, pl.totals.gain!)}
-                      {pl.totals.gainPct != null
-                        ? ` (${(pl.totals.gain || 0) >= 0 ? "+" : ""}${fmtPct(pl.totals.gainPct)})`
-                        : ""}
-                    </Text>
-                  </View>
-                </View>
-              )
-            ) : null}
+            <Text style={styles.reportFoot}>
+              Company size (large / mid / small-cap) is approximate, from market value. Fund prices are the latest
+              NAV from AMFI. &quot;AI desk&quot; is our analysts&apos; latest outlook on that stock — what the numbers
+              show, not advice to buy or sell.
+            </Text>
             <View style={styles.cashRow}>
               <Text style={styles.holdingDetail}>UNINVESTED CASH</Text>
               <TextInput
@@ -531,10 +653,13 @@ export default function PortfolioScreen() {
         ) : null}
 
         {/* Controls */}
-        {holdings.length > 0 && holdings.length < 2 ? (
+        {stockHoldings.length > 0 && stockHoldings.length < 2 ? (
           <Text style={styles.hint}>Add at least one more stock to compare your split with a sample mix.</Text>
         ) : null}
-        {holdings.length >= 2 ? (
+        {fundCount > 0 && stockHoldings.length >= 2 ? (
+          <Text style={styles.hint}>Mutual funds aren&apos;t part of the split comparison yet — it uses your stocks.</Text>
+        ) : null}
+        {stockHoldings.length >= 2 ? (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>HOW IS YOUR MONEY SPLIT?</Text>
             <Text style={styles.objBlurb}>
@@ -726,6 +851,24 @@ const styles = StyleSheet.create({
   runBtn: { backgroundColor: colors.surfaceInverse, margin: spacing.md, paddingVertical: spacing.md, alignItems: "center" },
   runBtnText: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1, color: colors.onSurfaceInverse },
   errorText: { fontFamily: fonts.mono, fontSize: 11, color: colors.error, padding: spacing.md, paddingTop: 0 },
+  modeRow: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.sm },
+  modeChip: { flex: 1, paddingVertical: spacing.sm, alignItems: "center", borderWidth: BORDER, borderColor: colors.borderStrong },
+  modeChipOn: { backgroundColor: colors.surfaceInverse },
+  modeChipText: { fontFamily: fonts.monoBold, fontSize: 11, letterSpacing: 1, color: colors.onSurface },
+  modeChipTextOn: { color: colors.onSurfaceInverse },
+  fundDropdown: { borderWidth: 1, borderColor: colors.border, marginTop: spacing.xs },
+  fundName: { fontFamily: fonts.monoBold, fontSize: 12, color: colors.onSurface },
+  summaryBox: { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border, gap: spacing.xs },
+  summaryRow: { flexDirection: "row", justifyContent: "space-between" },
+  summaryCount: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurfaceTertiary },
+  reportRow: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border, gap: 2 },
+  reportHead: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
+  reportName: { fontFamily: fonts.monoBold, fontSize: 13, color: colors.onSurface },
+  reportPct: { fontFamily: fonts.monoBold, fontSize: 14 },
+  reportMoney: { fontFamily: fonts.mono, fontSize: 12, color: colors.onSurface },
+  reportNotes: { fontFamily: fonts.mono, fontSize: 11, lineHeight: 16, color: colors.onSurfaceTertiary },
+  reportRemove: { alignSelf: "flex-end" },
+  reportFoot: { fontFamily: fonts.mono, fontSize: 10, lineHeight: 15, color: colors.onSurfaceTertiary, padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
   actionRow: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,

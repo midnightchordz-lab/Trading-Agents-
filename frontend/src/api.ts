@@ -29,6 +29,41 @@ const RETURN_URL = (() => {
   }
 })();
 
+export type FundSearchResult = {
+  symbol: string; // "MF:<scheme code>"
+  code: string;
+  name: string;
+  type: string;
+  nav: number;
+  nav_date: string;
+};
+
+export type PortfolioReportRow = {
+  symbol: string;
+  kind: "stock" | "fund";
+  name: string;
+  type: string;
+  quantity: number;
+  avg_price: number;
+  price: number | null;
+  price_date?: string | null;
+  currency: string | null;
+  invested: number;
+  value: number | null;
+  gain: number | null;
+  gain_pct: number | null;
+  share: number | null;
+  outlook: { label: "Bullish" | "Neutral" | "Bearish"; date: string } | null;
+  notes: string[];
+};
+
+export type PortfolioReport = {
+  rows: PortfolioReportRow[];
+  totals: { currency: string; invested: number; value: number; gain: number; gain_pct: number | null; cash: number } | null;
+  mixed_currencies: boolean;
+  summary: { up: number; down: number; count: number; funds: number };
+};
+
 export type SearchResult = {
   symbol: string;
   name: string;
@@ -508,6 +543,9 @@ export const api = {
   news: (symbol: string) => j<{ results: NewsItem[] }>(`/news/${encodeURIComponent(symbol)}`),
   ohlc: (symbol: string, range: string) =>
     j<OhlcData>(`/ohlc/${encodeURIComponent(symbol)}?range=${encodeURIComponent(range)}`),
+  portfolioReport: (body: { holdings: { symbol: string; quantity: number; avg_price: number }[]; cash: number }) =>
+    j<PortfolioReport>(`/portfolio/report`, { method: "POST", body: JSON.stringify(body) }),
+  fundSearch: (q: string) => j<{ results: FundSearchResult[] }>(`/mf/search?q=${encodeURIComponent(q)}`),
   portfolioOptimize: (body: {
     holdings: PortfolioHoldingInput[];
     objective: "hrp" | "max_sharpe" | "min_volatility";

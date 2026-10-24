@@ -4,17 +4,22 @@ Never runs the agent pipeline and never mutates an analysis; it is a pure
 calculation over what has already been produced.
 """
 import asyncio
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.datastructures import UploadFile
 from pydantic import BaseModel, Field
 
+import fundamentals as fund
+import mutual_funds as mf
 import portfolio_import as pimport
 import portfolio_optimizer as pfopt
-from limits import limit_portfolio, limit_portfolio_import, limit_portfolio_import_global
+import portfolio_report as preport
+from limits import limit_market, limit_portfolio, limit_portfolio_import, limit_portfolio_import_global
 from core import db, logger
-from market_data import TICKER_RE, _yf_get, fetch_quote_sync, search_sync
+from market_data import (TICKER_RE, _yf_get, fetch_daily_bars_sync, fetch_fundamentals_sync,
+                         fetch_quote_sync, fetch_sector_sync, search_sync)
 
 api_router = APIRouter(prefix="/api")
 
@@ -239,3 +244,118 @@ async def portfolio_import_file(request: Request):
     resolved = await asyncio.gather(*(resolve(e) for e in rows))
     counts = {k: sum(1 for r in resolved if r["status"] == k) for k in ("ok", "check", "not_found", "invalid")}
     return {"rows": resolved, "counts": counts}
+
+
+# --- Portfolio report: one row per stock or fund ------------------------------
+# Same 50-holding cap as /portfolio/optimize, for the same reason: every row
+# fans out to upstream calls (Yahoo for stocks, AMFI/mfapi for funds).
+_fund_cache: dict = {}
+_FUNDAMENTALS_TTL = 12 * 3600
+
+
+def _fundamentals_cached(symbol: str) -> Optional[dict]:
+    hit = _fund_cache.get(symbol)
+    if hit and time.time() - hit[0] < _FUNDAMENTALS_TTL:
+        return hit[1]
+    try:
+        parsed = fund.parse_fundamentals(fetch_fundamentals_sync(symbol))
+    except Exception as e:
+        logger.info(f"portfolio report: fundamentals for {symbol} unavailable: {e}")
+        parsed = None
+    _fund_cache[symbol] = (time.time(), parsed)
+    return parsed
+
+
+def _year_change(symbol: str) -> Optional[float]:
+    """A benchmark's change over the past year, from daily closes."""
+    try:
+        bars = fetch_daily_bars_sync(symbol)
+    except Exception:
+        return None
+    closes = [b["close"] for b in bars if b.get("close")]
+    return closes[-1] / closes[0] - 1 if len(closes) > 200 else None
+
+
+def _stock_item_sync(symbol: str) -> dict:
+    out: dict = {"kind": "stock"}
+    try:
+        q = fetch_quote_sync(symbol)
+        out.update(price=q.get("price"), currency=q.get("currency"), name=q.get("name"))
+    except Exception as e:
+        logger.info(f"portfolio report: quote for {symbol} failed: {e}")
+        out.update(price=None)
+    f = _fundamentals_cached(symbol) or {}
+    try:
+        sector = fetch_sector_sync(symbol)
+    except Exception:
+        sector = None
+    out["type"] = preport.stock_type(f.get("market_cap"), out.get("currency"), sector)
+    out["profit_margin"] = f.get("profit_margin")
+    return out
+
+
+def _fund_item_sync(code: str) -> dict:
+    f = mf.get(code)
+    if not f:
+        return {"kind": "fund", "price": None, "name": f"Fund {code}", "type": "Mutual fund"}
+    kind = mf.asset_kind(f["category"])
+    return {
+        "kind": "fund", "price": f["nav"], "price_date": f["date"], "currency": "INR",
+        "name": f["name"], "type": mf.plain_type(f["category"]), "asset_kind": kind,
+        "year_return": mf.year_return(code) if kind in ("equity", "hybrid", "debt") else None,
+    }
+
+
+class ReportRequest(BaseModel):
+    holdings: list[PortfolioHolding] = Field(max_length=50)
+    cash: float = Field(default=0.0, allow_inf_nan=False)
+
+
+@api_router.post("/portfolio/report", dependencies=[Depends(limit_portfolio)])
+async def portfolio_report(body: ReportRequest):
+    if not body.holdings:
+        raise HTTPException(status_code=400, detail="No holdings supplied")
+    symbols = [h.symbol.strip().upper() for h in body.holdings]
+    if len(set(symbols)) != len(symbols):
+        raise HTTPException(status_code=400, detail="Duplicate symbols in holdings")
+    for s, h in zip(symbols, body.holdings):
+        if not (mf.is_fund(s) or TICKER_RE.match(s)):
+            raise HTTPException(status_code=400, detail="Invalid symbol in holdings")
+        if h.quantity <= 0 or h.avg_price <= 0:
+            raise HTTPException(status_code=400, detail="Quantity and average price must be above zero")
+
+    any_fund = any(mf.is_fund(s) for s in symbols)
+    fetches = [asyncio.to_thread(_fund_item_sync, mf.code_from(s)) if mf.is_fund(s)
+               else asyncio.to_thread(_stock_item_sync, s) for s in symbols]
+    if any_fund:
+        fetches.append(asyncio.to_thread(_year_change, "^NSEI"))
+    results = await asyncio.gather(*fetches, return_exceptions=True)
+    bench = results.pop() if any_fund else None
+    bench = bench if isinstance(bench, float) else None
+
+    items = []
+    for s, h, res in zip(symbols, body.holdings, results):
+        if isinstance(res, Exception):
+            logger.warning(f"portfolio report: {s} failed: {res}")
+            res = {"kind": "fund" if mf.is_fund(s) else "stock", "price": None}
+        item = {**res, "symbol": s, "quantity": h.quantity, "avg_price": h.avg_price,
+                "bench_year": bench, "bench_name": "Nifty 50"}
+        if res["kind"] == "stock":
+            doc = await db.analyses.find_one(
+                {"symbol": s, "status": "completed", "verdict": {"$ne": None}, "chart_reading": None},
+                {"_id": 0, "verdict": 1, "updated_at": 1}, sort=[("updated_at", -1)])
+            item["outlook"] = preport.outlook_from((doc or {}).get("verdict"), (doc or {}).get("updated_at"))
+        items.append(item)
+    return preport.build(items, body.cash)
+
+
+@api_router.get("/mf/search", dependencies=[Depends(limit_market)])
+async def mf_search(q: str = ""):
+    q = q.strip()[:60]
+    if len(q) < 2:
+        return {"results": []}
+    try:
+        return {"results": await asyncio.to_thread(mf.search, q)}
+    except Exception as e:
+        logger.warning(f"mutual fund search failed: {e}")
+        raise HTTPException(status_code=502, detail="Fund list is unavailable right now — try again shortly.")
