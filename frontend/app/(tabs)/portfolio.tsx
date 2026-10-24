@@ -355,7 +355,7 @@ export default function PortfolioScreen() {
 
   return (
     <View style={styles.screen}>
-      <ScreenHeader title="PORTFOLIO" subtitle="Your stocks, profit and loss, and how your money is split" />
+      <ScreenHeader title="PORTFOLIO" subtitle="Your stocks, profit & loss and how it's split" />
       <ScrollView
         contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xxl }}
         refreshControl={
