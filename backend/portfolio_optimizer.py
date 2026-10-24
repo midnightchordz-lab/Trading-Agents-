@@ -41,7 +41,11 @@ Objective = Literal["max_sharpe", "min_volatility", "hrp"]
 
 # A model weight under this is "the model leaves it out".
 NOT_IN_MODEL_THRESHOLD = 0.01
-ACTION_BAND = 0.05  # within +/- 5 percentage points of the model counts as IN LINE
+# "IN LINE" means within 2 percentage points of the model, or within a quarter
+# of the model's own weight when that is larger. A fixed 5-point band called
+# 10.3% vs 6.4% "in line", which reads as wrong to anyone looking at the numbers.
+ACTION_BAND = 0.02
+ACTION_BAND_RELATIVE = 0.25
 
 RELATIONS = ("ABOVE MODEL", "IN LINE", "BELOW MODEL", "NOT IN MODEL")
 
@@ -188,11 +192,12 @@ def classify_actions(
         cur = current_weights.get(sym, 0.0)
         sug = suggested_weights.get(sym, 0.0)
         delta = sug - cur
+        band = max(ACTION_BAND, ACTION_BAND_RELATIVE * sug)
         if sug < NOT_IN_MODEL_THRESHOLD and cur > 0:
             action = "NOT IN MODEL"
-        elif delta > ACTION_BAND:
+        elif delta > band:
             action = "BELOW MODEL"      # the user holds less than the model mix
-        elif delta < -ACTION_BAND:
+        elif delta < -band:
             action = "ABOVE MODEL"
         else:
             action = "IN LINE"

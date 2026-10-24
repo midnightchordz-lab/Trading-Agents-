@@ -249,11 +249,11 @@ function Report({ r }: { r: HealthReport }) {
   return (
     <>
       <View testID="health-score" style={styles.card}>
-        <Text style={styles.cardTitle}>DIVERSIFICATION</Text>
+        <Text style={styles.cardTitle}>HOW SPREAD OUT IS YOUR MONEY?</Text>
         <View style={styles.scoreRow}>
           <Text style={[styles.score, { color: tone }]}>{d.score}</Text>
           <View style={{ flex: 1 }}>
-            <Text style={styles.scoreLabel}>{d.label.toUpperCase()}</Text>
+            <Text style={styles.scoreLabel}>{(SCORE_WORDS[d.label] || d.label).toUpperCase()}</Text>
             <Text style={styles.small}>
               {money(r.base_currency, r.invested_value)} invested
               {r.cash ? ` + ${money(r.base_currency, r.cash)} cash` : ""}
@@ -262,30 +262,30 @@ function Report({ r }: { r: HealthReport }) {
           </View>
         </View>
         <Bar
-          label="Number of real bets"
+          label="How many separate bets"
           value={d.parts.breadth}
-          note={`behaves like ~${r.concentration.effective_holdings.toFixed(0)} equal holdings`}
+          note={`acts like about ${r.concentration.effective_holdings.toFixed(0)} equal stocks`}
         />
         <Bar
-          label="Move independently"
+          label="Do they rise and fall separately?"
           value={d.parts.independence}
           note={
             r.avg_correlation != null
-              ? `avg correlation ${r.avg_correlation.toFixed(2)}`
+              ? linkWord(r.avg_correlation)
               : "not enough history"
           }
         />
         <Bar
-          label="Spread across sectors"
+          label="Spread across industries"
           value={d.parts.sectors}
           note={
             r.sectors[0]
-              ? `largest: ${r.sectors[0].sector} ${pct(r.sectors[0].weight)}`
+              ? `biggest: ${r.sectors[0].sector} ${pct(r.sectors[0].weight)}`
               : ""
           }
         />
         <Bar
-          label="Asset classes"
+          label="Types of investment"
           value={d.parts.asset_classes}
           note={r.asset_mix
             .filter((a) => a.bucket !== "cash")
@@ -296,7 +296,7 @@ function Report({ r }: { r: HealthReport }) {
 
       {r.observations.length ? (
         <View testID="health-observations" style={styles.card}>
-          <Text style={styles.cardTitle}>WHAT WE SEE</Text>
+          <Text style={styles.cardTitle}>WHAT STANDS OUT</Text>
           {r.observations.map((o, i) => (
             <Text key={i} style={styles.obs}>
               • {o}
@@ -309,8 +309,8 @@ function Report({ r }: { r: HealthReport }) {
         <View testID="health-market" style={styles.card}>
           <Text style={styles.cardTitle}>MARKET VS YOUR PICKS</Text>
           <Text style={styles.small}>
-            How much of your portfolio's daily movement was just the{" "}
-            {r.benchmark.name}.
+            How much of your portfolio&apos;s daily ups and downs simply followed the{" "}
+            {r.benchmark.name}, and how much came from the stocks you picked.
           </Text>
           <View style={styles.split}>
             <View
@@ -339,23 +339,24 @@ function Report({ r }: { r: HealthReport }) {
             </Text>
           </View>
           <View style={styles.statsRow}>
-            <Stat label="BETA" value={r.market.beta.toFixed(2)} />
-            <Stat label="R²" value={r.market.r_squared.toFixed(2)} />
-            <Stat label="CORRELATION" value={r.market.correlation.toFixed(2)} />
+            <Stat
+              label={`WHEN THE ${r.benchmark.name.toUpperCase()} MOVES 1%, YOU MOVE`}
+              value={`${Math.abs(r.market.beta).toFixed(1)}%`}
+            />
           </View>
         </View>
       ) : null}
 
       {r.risk_return ? (
         <View testID="health-sharpe" style={styles.card}>
-          <Text style={styles.cardTitle}>RETURN PER UNIT OF RISK</Text>
+          <Text style={styles.cardTitle}>GAINS VS THE BUMPS · PAST YEAR</Text>
           <View style={styles.tableHead}>
             <Text style={[styles.th, { flex: 1.3 }]}> </Text>
             <Text style={styles.th}>YOU</Text>
             <Text style={styles.th}>{r.benchmark.name.toUpperCase()}</Text>
           </View>
           <Row
-            label="Yearly return"
+            label="Gain in the year"
             a={pct(r.risk_return.annual_return, 1)}
             b={
               r.benchmark_risk_return
@@ -364,7 +365,7 @@ function Report({ r }: { r: HealthReport }) {
             }
           />
           <Row
-            label="Volatility"
+            label="Typical yearly swing"
             a={pct(r.risk_return.volatility, 1)}
             b={
               r.benchmark_risk_return
@@ -373,12 +374,12 @@ function Report({ r }: { r: HealthReport }) {
             }
           />
           <Row
-            label="Sharpe ratio"
+            label="Gain for the bumps (higher is better)"
             a={r.risk_return.sharpe?.toFixed(2) ?? "—"}
             b={r.benchmark_risk_return?.sharpe?.toFixed(2) ?? "—"}
           />
           <Row
-            label="Worst fall"
+            label="Biggest drop from a high"
             a={pct(r.risk_return.max_drawdown, 1)}
             b={
               r.benchmark_risk_return
@@ -387,8 +388,10 @@ function Report({ r }: { r: HealthReport }) {
             }
           />
           <Text style={styles.small}>
-            Your current holdings, held for the past year at today's weights.
-            Sharpe uses a {pct(r.risk_free_rate, 1)} risk-free rate.
+            Your stocks as they are today, as if you had held them for the past
+            year. &quot;Gain for the bumps&quot; (the Sharpe ratio) shows how much you earned
+            for the ups and downs you sat through, after what a safe deposit
+            paying {pct(r.risk_free_rate, 1)} would have earned.
           </Text>
         </View>
       ) : null}
@@ -397,20 +400,20 @@ function Report({ r }: { r: HealthReport }) {
 
       {r.clusters.length ? (
         <View testID="health-clusters" style={styles.card}>
-          <Text style={styles.cardTitle}>MOVE TOGETHER</Text>
+          <Text style={styles.cardTitle}>STOCKS THAT MOVE AS ONE</Text>
           {r.clusters.map((c, i) => (
             <View key={i} style={styles.listRow}>
               <Text style={[styles.rowMain, { flex: 1 }]}>
-                {c.symbols.join(" · ")}
+                {c.symbols.map(shortName).join(" · ")}
               </Text>
               <Text style={styles.rowSide}>
-                {pct(c.weight)} · ρ {c.avg_correlation.toFixed(2)}
+                {pct(c.weight)} of your money
               </Text>
             </View>
           ))}
           <Text style={styles.small}>
-            Holdings whose prices moved closely together over the past year
-            (correlation 0.7 or more) — in practice, one bet.
+            These rose and fell almost together over the past year, so in
+            practice they act like one bet.
           </Text>
         </View>
       ) : null}
@@ -443,7 +446,7 @@ function Report({ r }: { r: HealthReport }) {
 
       {r.sectors.length ? (
         <View testID="health-sectors" style={styles.card}>
-          <Text style={styles.cardTitle}>SECTORS</Text>
+          <Text style={styles.cardTitle}>INDUSTRIES</Text>
           {r.sectors.slice(0, 8).map((s) => (
             <Bar
               key={s.sector}
@@ -457,21 +460,22 @@ function Report({ r }: { r: HealthReport }) {
 
       {r.liquidity.some((l) => l.flag) ? (
         <View testID="health-liquidity" style={styles.card}>
-          <Text style={styles.cardTitle}>LIQUIDITY</Text>
+          <Text style={styles.cardTitle}>EASY TO SELL?</Text>
           {r.liquidity
             .filter((l) => l.flag)
             .map((l) => (
               <View key={l.symbol} style={styles.listRow}>
-                <Text style={[styles.rowMain, { flex: 1 }]}>{l.symbol}</Text>
+                <Text style={[styles.rowMain, { flex: 1 }]}>{shortName(l.symbol)}</Text>
                 <Text style={styles.rowSide}>
-                  {money(r.base_currency, l.avg_daily_value)}/day · you{" "}
-                  {pct(l.position_share_of_day, 1)}
+                  {money(r.base_currency, l.avg_daily_value)} traded a day · yours{" "}
+                  {pct(l.position_share_of_day, 1)} of that
                 </Text>
               </View>
             ))}
           <Text style={styles.small}>
-            Average daily traded value over the last 20 sessions, and your
-            position as a share of it.
+            How much of each stock changes hands on a normal day, and how big
+            your holding is next to that. Thinly traded stocks can be slow or
+            costly to sell.
           </Text>
         </View>
       ) : null}
@@ -485,7 +489,7 @@ function Report({ r }: { r: HealthReport }) {
         </Text>
       ) : null}
       <Text style={styles.note}>
-        Based on the past year's prices. These are observations about your
+        Based on the past year&apos;s prices. These are observations about your
         portfolio, not advice to buy, sell or change anything.
       </Text>
     </>
@@ -510,11 +514,13 @@ function FrontierCard({ f }: { f: NonNullable<HealthReport["frontier"]> }) {
   return (
     <View testID="health-frontier" style={styles.card}>
       <Text style={styles.cardTitle}>
-        EFFICIENT FRONTIER · YOUR OWN HOLDINGS
+        COULD THE SAME STOCKS HAVE DONE BETTER?
       </Text>
       <Text style={styles.small}>
-        The line is the best past-year return reachable at each level of risk by
-        mixing only the stocks you already own. The dot is your mix.
+        The line shows the best gain a different split of the stocks you already
+        own could have made last year, for each level of ups and downs. The dot
+        is your split: the further below the line, the more a different split
+        would have earned for the same bumps.
       </Text>
       <View style={{ alignItems: "center", paddingVertical: spacing.sm }}>
         <Svg width={W} height={H}>
@@ -556,7 +562,7 @@ function FrontierCard({ f }: { f: NonNullable<HealthReport["frontier"]> }) {
             fill={colors.onSurfaceTertiary}
             textAnchor="middle"
           >
-            RISK (VOLATILITY) →
+            MORE UPS AND DOWNS →
           </SvgText>
           <SvgText
             x={10}
@@ -566,28 +572,47 @@ function FrontierCard({ f }: { f: NonNullable<HealthReport["frontier"]> }) {
             textAnchor="middle"
             transform={`rotate(-90 10 ${H / 2})`}
           >
-            RETURN →
+            MORE GAIN →
           </SvgText>
         </Svg>
       </View>
       <View style={styles.statsRow}>
-        <Stat label="YOUR RISK" value={pct(f.you.volatility, 1)} />
-        <Stat label="YOUR RETURN" value={pct(f.you.return, 1)} />
+        <Stat label="YOUR YEARLY SWING" value={`±${pct(f.you.volatility, 1)}`} />
+        <Stat label="YOUR GAIN" value={pct(f.you.return, 1)} />
         <Stat
-          label="GAP AT SAME RISK"
+          label="MISSED GAIN, SAME BUMPS"
           value={
             f.return_gap_at_same_risk != null
-              ? `${(f.return_gap_at_same_risk * 100).toFixed(1)} pts`
+              ? `${(f.return_gap_at_same_risk * 100).toFixed(1)}%`
               : "—"
           }
         />
       </View>
       <Text style={styles.small}>
-        Hindsight: the frontier is drawn from what already happened and changes
-        every year. It is not a forecast or a target mix.
+        Hindsight: this is drawn from what already happened and changes every
+        year. It is not a forecast or a split to copy.
       </Text>
     </View>
   );
+}
+
+// RELIANCE.NS -> RELIANCE: the exchange suffix means nothing to most people.
+function shortName(symbol: string) {
+  return symbol.replace(/\.(NS|BO)$/, "");
+}
+
+const SCORE_WORDS: Record<string, string> = {
+  Concentrated: "Mostly in a few stocks",
+  "Moderately spread": "Fairly spread out",
+  "Well spread": "Well spread out",
+};
+
+// The average correlation between holdings, in words.
+function linkWord(c: number) {
+  if (c >= 0.7) return "mostly move together";
+  if (c >= 0.4) return "often move together";
+  if (c >= 0.2) return "somewhat linked";
+  return "mostly move on their own";
 }
 
 function Bar({

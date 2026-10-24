@@ -36,13 +36,44 @@ const KEY_CASH = "portfolio:cash";
 const MAX_HOLDINGS = 50;
 
 const OBJECTIVES: { id: Objective; label: string; blurb: string }[] = [
-  { id: "hrp", label: "HRP", blurb: "Hierarchical Risk Parity — no return forecast, more robust." },
-  { id: "max_sharpe", label: "MAX SHARPE", blurb: "Best risk-adjusted return given the covariance." },
-  { id: "min_volatility", label: "MIN VOL", blurb: "Lowest-volatility mix given the covariance." },
+  { id: "hrp", label: "BALANCED", blurb: "Spreads the ups and downs evenly across your stocks. Makes no guess about future returns." },
+  { id: "max_sharpe", label: "BEST FOR RISK", blurb: "The split that earned the most for its ups and downs over the past year." },
+  { id: "min_volatility", label: "STEADIEST", blurb: "The split that went up and down the least over the past year." },
 ];
 
 function fmtPct(n: number) {
   return `${(n * 100).toFixed(1)}%`;
+}
+
+// 0.178 -> "18": how many of every 100 invested, a number anyone can picture.
+function per100(n: number) {
+  return `${Math.round(n * 100)}`;
+}
+
+// RELIANCE.NS -> RELIANCE: the exchange suffix means nothing to most people.
+function shortName(symbol: string) {
+  return symbol.replace(/\.(NS|BO)$/, "");
+}
+
+// Plain labels for the backend's relation values (which stay unchanged for
+// older app builds and the no-advice tests).
+const RELATION_LABELS: Record<string, string> = {
+  "ABOVE MODEL": "MORE THAN MIX",
+  "BELOW MODEL": "LESS THAN MIX",
+  "IN LINE": "ABOUT THE SAME",
+  "NOT IN MODEL": "NOT IN MIX",
+};
+
+// One sentence for the top of the results: the biggest gaps either way.
+function summarize(actions: any[]): string {
+  const gap = (a: any) => a.current_weight - a.suggested_weight;
+  const more = actions.filter((a) => a.action === "ABOVE MODEL" || a.action === "NOT IN MODEL").sort((a, b) => gap(b) - gap(a));
+  const less = actions.filter((a) => a.action === "BELOW MODEL").sort((a, b) => gap(a) - gap(b));
+  if (!more.length && !less.length) return "Your split is close to the sample mix for every stock.";
+  const parts = [];
+  if (more.length) parts.push(`more money in ${more.slice(0, 2).map((a) => shortName(a.symbol)).join(" and ")}`);
+  if (less.length) parts.push(`less in ${less.slice(0, 2).map((a) => shortName(a.symbol)).join(" and ")}`);
+  return `Compared with the sample mix, you have ${parts.join(", and ")}.`;
 }
 
 function fmtMoney(symbol: string, n: number) {
@@ -493,7 +524,7 @@ export default function PortfolioScreen() {
           <Pressable testID="open-health" onPress={() => router.push("/health")} style={styles.healthBtn}>
             <View style={{ flex: 1 }}>
               <Text style={styles.healthTitle}>HEALTH CHECK</Text>
-              <Text style={styles.healthSub}>Diversification, market vs your picks, Sharpe, efficient frontier · free</Text>
+              <Text style={styles.healthSub}>How spread out your money is, how it did against the market, and how bumpy the ride was · free</Text>
             </View>
             <Text style={styles.healthTitle}>{"→"}</Text>
           </Pressable>
@@ -501,11 +532,15 @@ export default function PortfolioScreen() {
 
         {/* Controls */}
         {holdings.length > 0 && holdings.length < 2 ? (
-          <Text style={styles.hint}>Add at least one more holding to compare with a model mix.</Text>
+          <Text style={styles.hint}>Add at least one more stock to compare your split with a sample mix.</Text>
         ) : null}
         {holdings.length >= 2 ? (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>COMPARE WITH A MODEL MIX</Text>
+            <Text style={styles.cardTitle}>HOW IS YOUR MONEY SPLIT?</Text>
+            <Text style={styles.objBlurb}>
+              We work out a sample split of the same stocks from their past prices, then show where yours is different.
+              Pick the kind of sample:
+            </Text>
             <View style={styles.objRow}>
               {OBJECTIVES.map((o) => {
                 const active = objective === o.id;
@@ -522,11 +557,11 @@ export default function PortfolioScreen() {
               <View style={[styles.checkbox, useAgentViews && styles.checkboxOn]}>
                 {useAgentViews ? <Text style={styles.checkMark}>✓</Text> : null}
               </View>
-              <Text style={styles.toggleText}>Use agent views (Black-Litterman) where available</Text>
+              <Text style={styles.toggleText}>Also use our AI desk&apos;s latest read on these stocks, where there is one</Text>
             </Pressable>
 
             <Pressable onPress={runOptimize} style={styles.runBtn} disabled={loading}>
-              {loading ? <ActivityIndicator color={colors.onSurfaceInverse} /> : <Text style={styles.runBtnText}>COMPARE WITH MODEL</Text>}
+              {loading ? <ActivityIndicator color={colors.onSurfaceInverse} /> : <Text style={styles.runBtnText}>COMPARE MY SPLIT</Text>}
             </Pressable>
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
           </View>
@@ -535,12 +570,13 @@ export default function PortfolioScreen() {
         {/* Results */}
         {result ? (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>YOUR WEIGHTS VS THE MODEL</Text>
+            <Text style={styles.cardTitle}>YOUR SPLIT VS THE SAMPLE MIX</Text>
+            <Text style={styles.summary}>{summarize(result.actions || [])}</Text>
             {result.missing_agent_view_for?.length ? (
               <View style={styles.missingBox}>
                 <Text style={styles.note}>
-                  No cached analysis for {result.missing_agent_view_for.join(", ")} — their weight is based on price
-                  history only.
+                  The AI desk hasn&apos;t looked at {result.missing_agent_view_for.map(shortName).join(", ")} yet, so for
+                  those the sample uses past prices only.
                 </Text>
                 <Pressable
                   onPress={analyzeMissing}
@@ -554,7 +590,7 @@ export default function PortfolioScreen() {
                     </>
                   ) : (
                     <Text style={styles.analyzeMissingText}>
-                      ANALYZE MISSING ({result.missing_agent_view_for.length}) & RE-RUN
+                      ANALYSE THESE ({result.missing_agent_view_for.length}) & COMPARE AGAIN
                     </Text>
                   )}
                 </Pressable>
@@ -564,27 +600,28 @@ export default function PortfolioScreen() {
               const { bg, fg } = RELATION_COLORS[a.action] || RELATION_COLORS["IN LINE"];
               return (
                 <View key={a.symbol} style={styles.actionRow}>
-                  <View style={[styles.actionBadge, { backgroundColor: bg }]}>
-                    <Text style={[styles.actionBadgeText, { color: fg }]}>{a.action}</Text>
+                  <View style={styles.actionHead}>
+                    <Text style={styles.actionSymbol}>{shortName(a.symbol)}</Text>
+                    <View style={[styles.actionBadge, { backgroundColor: bg }]}>
+                      <Text style={[styles.actionBadgeText, { color: fg }]}>{RELATION_LABELS[a.action] || a.action}</Text>
+                    </View>
                   </View>
-                  <Text style={styles.actionSymbol}>{a.symbol}</Text>
                   <Text style={styles.actionWeights}>
-                    {fmtPct(a.current_weight)} yours · {fmtPct(a.suggested_weight)} model
+                    You: {per100(a.current_weight)} of every 100 invested · Sample mix: {per100(a.suggested_weight)}
                   </Text>
                 </View>
               );
             })}
             <View style={styles.statsRow}>
-              <Stat label="MODEL RETURN (PAST)" value={fmtPct(result.expected_return)} />
-              <Stat label="MODEL VOLATILITY" value={fmtPct(result.volatility)} />
-              <Stat label="MODEL SHARPE" value={result.sharpe.toFixed(2)} />
+              <Stat label="SAMPLE MIX: PAST YEARLY GAIN" value={fmtPct(result.expected_return)} />
+              <Stat label="SAMPLE MIX: TYPICAL YEARLY SWING" value={`±${fmtPct(result.volatility)}`} />
             </View>
             {result.dropped_symbols?.length ? (
-              <Text style={styles.note}>Skipped (insufficient history): {result.dropped_symbols.join(", ")}</Text>
+              <Text style={styles.note}>Left out (not enough price history): {result.dropped_symbols.map(shortName).join(", ")}</Text>
             ) : null}
             <Text style={styles.note}>
-              A mathematical model mix of your own holdings, from past prices. It shows how your weights differ from
-              the model&apos;s — not what to buy or sell. Not investment advice.
+              The sample mix is maths on past prices of the stocks you already own. It shows how your split differs
+              from it — not what to buy or sell, and not investment advice.
             </Text>
           </View>
         ) : null}
@@ -690,18 +727,18 @@ const styles = StyleSheet.create({
   runBtnText: { fontFamily: fonts.monoBold, fontSize: 12, letterSpacing: 1, color: colors.onSurfaceInverse },
   errorText: { fontFamily: fonts.mono, fontSize: 11, color: colors.error, padding: spacing.md, paddingTop: 0 },
   actionRow: {
-    flexDirection: "row",
-    alignItems: "center",
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderTopWidth: 1,
     borderTopColor: colors.border,
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
+  actionHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  summary: { fontFamily: fonts.mono, fontSize: 13, lineHeight: 19, color: colors.onSurface, padding: spacing.md },
   actionBadge: { paddingHorizontal: spacing.sm, paddingVertical: 4, minWidth: 96, alignItems: "center" },
   actionBadgeText: { fontFamily: fonts.monoBold, fontSize: 10 },
   actionSymbol: { flex: 1, fontFamily: fonts.monoBold, fontSize: 13, color: colors.onSurface },
-  actionWeights: { fontFamily: fonts.mono, fontSize: 11, color: colors.onSurfaceTertiary },
+  actionWeights: { fontFamily: fonts.mono, fontSize: 12, color: colors.onSurfaceTertiary },
   statsRow: { flexDirection: "row", borderTopWidth: 1, borderTopColor: colors.border },
   stat: { flex: 1, padding: spacing.sm, borderEndWidth: 1, borderEndColor: colors.border },
   statLabel: { fontFamily: fonts.monoBold, fontSize: 9, color: colors.onSurfaceTertiary },

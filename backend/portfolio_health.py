@@ -325,52 +325,64 @@ def _pct(x: float, digits: int = 0) -> str:
     return f"{x * 100:.{digits}f}%"
 
 
+def _per100(weight: float) -> str:
+    """0.178 -> "18": how many of every 100 invested, a number anyone can picture."""
+    return f"{weight * 100:.0f}"
+
+
+def _name(symbol: str) -> str:
+    """RELIANCE.NS -> RELIANCE: the exchange suffix means nothing to most people."""
+    return symbol.rsplit(".", 1)[0] if symbol.endswith((".NS", ".BO")) else symbol
+
+
 def observations(report: dict) -> list[str]:
     """What the numbers say, in sentences. Descriptive only — no "should",
     no buy/sell/add/trim (tests hold this)."""
     out = []
     c = report["concentration"]
     if c["holdings"] >= 2 and c["top"]:
-        out.append(f"You hold {c['holdings']} positions, but by size they behave like about "
-                   f"{c['effective_holdings']:.0f} equal ones. {c['top'][0]['symbol']} alone is "
-                   f"{_pct(c['top'][0]['weight'])} of the invested amount.")
+        out.append(f"You own {c['holdings']} stocks, but because some are much bigger than others, your money "
+                   f"acts like it is in about {c['effective_holdings']:.0f}. {_name(c['top'][0]['symbol'])} alone is "
+                   f"{_per100(c['top'][0]['weight'])} of every 100 you have invested.")
     for g in report.get("clusters", [])[:2]:
-        out.append(f"{', '.join(g['symbols'][:4])}{' and others' if len(g['symbols']) > 4 else ''} moved together "
-                   f"over the past year (correlation {g['avg_correlation']:.2f}) and make up {_pct(g['weight'])} — "
-                   "in practice, close to one bet.")
+        out.append(f"{', '.join(_name(x) for x in g['symbols'][:4])}{' and others' if len(g['symbols']) > 4 else ''} "
+                   f"went up and down almost together over the past year, so they act like one bet. Together they "
+                   f"are {_per100(g['weight'])} of every 100 you have invested.")
     s = report.get("sectors") or []
     if s and s[0]["weight"] >= 0.4 and s[0]["sector"] != "Unknown":
-        out.append(f"{_pct(s[0]['weight'])} of the invested amount is in one sector: {s[0]['sector']}.")
+        out.append(f"{_per100(s[0]['weight'])} of every 100 you have invested is in one industry: {s[0]['sector']}.")
     m, bench = report.get("market"), report.get("benchmark", {}).get("name")
     if m and bench:
-        out.append(f"About {_pct(m['r_squared'])} of your portfolio's daily ups and downs matched the {bench}. "
-                   f"Beta {m['beta']:.2f}: on a day the {bench} moved 1%, your portfolio moved about "
-                   f"{abs(m['beta']):.1f}% on average.")
+        out.append(f"About {_pct(m['r_squared'], 0)} of your portfolio's daily ups and downs simply followed the "
+                   f"{bench}. On a day the {bench} moved 1%, your portfolio moved about {abs(m['beta']):.1f}%.")
         if m["r_squared"] >= 0.8:
             out.append(f"Most of your result has come from the market itself rather than from which stocks you picked — "
                        f"an index fund on the {bench} would have behaved much the same.")
     you, b = report.get("risk_return"), report.get("benchmark_risk_return")
     if you and you.get("sharpe") is not None:
-        line = f"Return per unit of risk (Sharpe ratio) over the past year: {you['sharpe']:.2f}"
         if b and b.get("sharpe") is not None and bench:
-            line += f", against {b['sharpe']:.2f} for the {bench}"
-        out.append(line + ".")
+            better = you["sharpe"] > b["sharpe"]
+            out.append(f"For the ups and downs you lived through, your portfolio earned {'more' if better else 'less'} "
+                       f"than the {bench} over the past year (a score of {you['sharpe']:.2f} against "
+                       f"{b['sharpe']:.2f}; higher is better).")
+        else:
+            out.append(f"Gain for the ups and downs over the past year scored {you['sharpe']:.2f} (higher is better).")
     f = report.get("frontier")
     if f and f.get("return_gap_at_same_risk") is not None and f["return_gap_at_same_risk"] >= 0.02:
-        out.append(f"Looking back, other mixes of these same holdings reached the same risk with about "
-                   f"{_pct(f['return_gap_at_same_risk'])} more yearly return. That is hindsight, not a forecast.")
+        out.append(f"Looking back, a different split of the same stocks would have had the same ups and downs but "
+                   f"earned about {_pct(f['return_gap_at_same_risk'])} more in the year. That is hindsight, not a forecast.")
     elif f and f.get("return_gap_at_same_risk") is not None:
-        out.append("Your mix sat close to the efficient frontier of your own holdings over the past year.")
+        out.append("Looking back, your split of these stocks was close to the best possible for the ups and downs it had.")
     for d in [r for r in report.get("drift", []) if r["flag"]][:3]:
         word = "above" if d["drift"] > 0 else "below"
         out.append(f"{d['label']} is {_pct(d['actual'])} of the portfolio — {abs(d['drift']) * 100:.0f} points "
                    f"{word} your {_pct(d['target'])} target.")
     for q in [x for x in report.get("liquidity", []) if x["flag"]][:3]:
         if q["position_share_of_day"] >= POSITION_SHARE_OF_DAY:
-            out.append(f"Your {q['symbol']} position is about {_pct(q['position_share_of_day'])} of a normal day's "
+            out.append(f"Your {_name(q['symbol'])} holding is about {_pct(q['position_share_of_day'])} of a normal day's "
                        "trading in it — exiting all at once could move the price.")
         else:
-            out.append(f"{q['symbol']} is thinly traded, so prices can jump and orders can fill slowly.")
+            out.append(f"Not many {_name(q['symbol'])} shares trade each day, so its price can jump and orders can fill slowly.")
     return out
 
 

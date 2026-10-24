@@ -76,6 +76,13 @@ def test_classify_actions_in_line_within_band():
     assert actions[0]["action"] == "IN LINE"
 
 
+def test_a_big_gap_on_a_small_weight_is_not_in_line():
+    # 10.3% held vs 6.4% in the model is 60% more, not "in line".
+    actions = pfopt.classify_actions({"A": 0.103, "B": 0.155}, {"A": 0.064, "B": 0.131})
+    by_symbol = {a["symbol"]: a["action"] for a in actions}
+    assert by_symbol == {"A": "ABOVE MODEL", "B": "IN LINE"}
+
+
 def test_no_trade_language_anywhere_in_the_labels():
     import re
     assert not any(re.search(r"\b(BUY|SELL|ADD|TRIM|HOLD|EXIT)\b", r) for r in pfopt.RELATIONS)
